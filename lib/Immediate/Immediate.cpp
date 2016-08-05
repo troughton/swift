@@ -318,10 +318,17 @@ int swift::RunImmediately(CompilerInstance &CI, const ProcessCmdLine &CmdLine,
 
   // Setup interpreted process arguments.
   using ArgOverride = void (*)(const char **, int);
+#if defined(_MSC_VER) || defined(__MINGW32__)
+  auto emplaceProcessArgs
+          = (ArgOverride)GetProcAddress(reinterpret_cast<HMODULE>(stdlib), "_swift_stdlib_overrideUnsafeArgvArgc");
+  if (emplaceProcessArgs == nullptr)
+    return -1;
+#else
   auto emplaceProcessArgs
           = (ArgOverride)dlsym(stdlib, "_swift_stdlib_overrideUnsafeArgvArgc");
   if (dlerror())
     return -1;
+#endif
 
   SmallVector<const char *, 32> argBuf;
   for (size_t i = 0; i < CmdLine.size(); ++i) {

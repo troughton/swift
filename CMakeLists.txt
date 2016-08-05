@@ -631,7 +631,8 @@ elseif("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "CYGWIN")
 elseif("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "WINDOWS")
   configure_sdk_unix(WINDOWS "Windows" "windows" "msvc" "x86_64" "x86_64-pc-windows-msvc" "/")
 
-#  set(CMAKE_EXECUTABLE_FORMAT "ELF")
+#  set(CMAKE_EXECUTABLE_FORMAT "COFF")
+  set(SWIFT_SDK_MINGW_OBJECT_FORMAT "COFF")
 
   set(SWIFT_HOST_VARIANT "windows" CACHE STRING
       "Deployment OS for Swift host tools (the compiler) [windows].")
@@ -641,7 +642,8 @@ elseif("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "WINDOWS")
 elseif("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "MINGW")
   configure_sdk_unix(MINGW "Mingw" "mingw" "mingw" "x86_64" "x86_64-pc-windows-gnu" "/")
 
-#  set(CMAKE_EXECUTABLE_FORMAT "ELF")
+#  set(CMAKE_EXECUTABLE_FORMAT "COFF")
+  set(SWIFT_SDK_MINGW_OBJECT_FORMAT "COFF")
 
   set(SWIFT_HOST_VARIANT "mingw" CACHE STRING
       "Deployment OS for Swift host tools (the compiler) [mingw].")

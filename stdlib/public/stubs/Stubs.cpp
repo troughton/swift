@@ -285,7 +285,7 @@ ssize_t swift::swift_stdlib_readLine_stdin(unsigned char **LinePtr) {
     if (Capacity - Pos <= 1) {
       // Capacity changes to 128, 128*2, 128*4, 128*8, ...
       Capacity = Capacity ? Capacity * 2 : 128;
-      char *NextReadBuf =
+      unsigned char *NextReadBuf =
         static_cast<unsigned char *>(realloc(ReadBuf, Capacity));
       if (NextReadBuf == nullptr) {
         if (ReadBuf)

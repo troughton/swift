@@ -15,7 +15,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#if !defined(_WIN32)
+#if !defined(_MSC_VER)
 #include "swift/Runtime/Mutex.h"
 
 #include "swift/Runtime/Debug.h"

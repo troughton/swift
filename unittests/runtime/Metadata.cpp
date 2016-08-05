@@ -15,7 +15,9 @@
 #include "gtest/gtest.h"
 #include <iterator>
 #include <functional>
+#if !defined(__MINGW32__)
 #include <sys/mman.h>
+#endif
 #include <vector>
 #include <pthread.h>
 

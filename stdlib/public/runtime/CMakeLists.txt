@@ -78,16 +78,21 @@ foreach(sdk ${SWIFT_CONFIGURED_SDKS})
   endif()
 endforeach()
 
-add_swift_library(section_magic_begin OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
-    swift_sections.S
-    C_COMPILE_FLAGS ${swift_runtime_compile_flags} "-DSWIFT_BEGIN"
-    TARGET_SDKS "${ELFISH_SDKS}"
-    INSTALL_IN_COMPONENT never_install)
-add_swift_library(section_magic_end OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
-    swift_sections.S
-    C_COMPILE_FLAGS ${swift_runtime_compile_flags} "-DSWIFT_END"
-    TARGET_SDKS "${ELFISH_SDKS}"
-    INSTALL_IN_COMPONENT never_install)
+# Windows including MinGW does not need the begin, end sections.
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
+elseif ("${CMAKE_SYSTEM_NAME}" STREQUAL "CYGWIN")
+else()
+  add_swift_library(section_magic_begin OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
+      swift_sections.S
+      C_COMPILE_FLAGS ${swift_runtime_compile_flags} "-DSWIFT_BEGIN"
+      TARGET_SDKS "${ELFISH_SDKS}"
+      INSTALL_IN_COMPONENT never_install)
+  add_swift_library(section_magic_end OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
+      swift_sections.S
+      C_COMPILE_FLAGS ${swift_runtime_compile_flags} "-DSWIFT_END"
+      TARGET_SDKS "${ELFISH_SDKS}"
+      INSTALL_IN_COMPONENT never_install)
+endif()
 
 set(object_target_list)
 foreach(sdk ${ELFISH_SDKS})

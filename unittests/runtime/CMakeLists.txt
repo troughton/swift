@@ -24,6 +24,10 @@ if(("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "${SWIFT_PRIMARY_VARIANT_SDK}") AND
     list(APPEND PLATFORM_TARGET_LINK_LIBRARIES
       "-lpsapi"
       )
+  elseif("${MINGW}" STREQUAL "1")
+    list(APPEND PLATFORM_TARGET_LINK_LIBRARIES
+      "-lwinpthread"
+      )
   endif()
 
   add_swift_unittest(SwiftRuntimeTests

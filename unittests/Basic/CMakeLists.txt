@@ -28,7 +28,15 @@ add_swift_unittest(SwiftBasicTests
 
 add_dependencies(SwiftBasicTests "${gyb_dependency_targets}")
 
+set(PLATFORM_TARGET_LINK_LIBRARIES)
+if("${MINGW}" STREQUAL "1")
+  list(APPEND PLATFORM_TARGET_LINK_LIBRARIES
+    "-lwinpthread"
+    )
+endif()
+
 target_link_libraries(SwiftBasicTests
   swiftBasic
   clangBasic
+  ${PLATFORM_TARGET_LINK_LIBRARIES}
   )
