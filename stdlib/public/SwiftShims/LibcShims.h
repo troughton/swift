@@ -32,9 +32,9 @@ namespace swift { extern "C" {
 #if defined(__linux__) && defined (__arm__) && !defined(__android__)
 typedef           int __swift_ssize_t;
 #elif defined(_MSC_VER) || defined(__MINGW32__)
-#if defined(_M_ARM) || defined(_M_IX86)
+#if defined(_M_ARM) || defined(_M_IX86) ||  defined(__i386__)
 typedef           int __swift_ssize_t;
-#elif defined(_M_X64)
+#elif defined(_M_X64) || defined(__x86_64__)
 typedef long long int __swift_ssize_t;
 #else
 #error unsupported machine type
