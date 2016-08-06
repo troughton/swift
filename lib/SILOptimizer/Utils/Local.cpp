@@ -22,6 +22,7 @@
 #include "swift/SIL/TypeLowering.h"
 #include "swift/SIL/DebugUtils.h"
 #include "swift/SIL/InstructionUtils.h"
+#include "swift/Basic/Fallthrough.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -1624,8 +1625,6 @@ optimizeBridgedSwiftToObjCCast(SILInstruction *Inst,
   assert(Conf && "_ObjectiveCBridgeable conformance should exist");
   (void) Conf;
 
-  bool isCurrentModuleBridgeToObjectiveC = false;
-
   // Generate code to invoke _bridgeToObjectiveC
   SILBuilderWithScope Builder(Inst);
 
@@ -1647,16 +1646,13 @@ optimizeBridgedSwiftToObjCCast(SILInstruction *Inst,
     M.getSwiftModule()->lookupMember(Results, Source.getNominalOrBoundGenericNominal(),
                       M.getASTContext().Id_bridgeToObjectiveC, Identifier());
     ResultsRef = Results;
-    isCurrentModuleBridgeToObjectiveC = true;
   }
   if (ResultsRef.size() != 1)
     return nullptr;
 
   auto MemberDeclRef = SILDeclRef(Results.front());
-  auto Linkage = (isCurrentModuleBridgeToObjectiveC)
-                     ? ForDefinition_t::ForDefinition
-                     : ForDefinition_t::NotForDefinition;
-  auto *BridgedFunc = M.getOrCreateFunction(Loc, MemberDeclRef, Linkage);
+  auto *BridgedFunc = M.getOrCreateFunction(Loc, MemberDeclRef,
+                                            ForDefinition_t::NotForDefinition);
   assert(BridgedFunc &&
          "Implementation of _bridgeToObjectiveC could not be found");
 
@@ -2602,8 +2598,14 @@ bool swift::calleesAreStaticallyKnowable(SILModule &M, SILDeclRef Decl) {
 
   // Only consider 'private' members, unless we are in whole-module compilation.
   switch (AFD->getEffectiveAccess()) {
-  case Accessibility::Public:
+  case Accessibility::Open:
     return false;
+  case Accessibility::Public:
+    if (auto ctor = dyn_cast<ConstructorDecl>(AFD)) {
+      if (ctor->isRequired())
+	return false;
+    }
+    SWIFT_FALLTHROUGH;
   case Accessibility::Internal:
     return M.isWholeModule();
   case Accessibility::FilePrivate:

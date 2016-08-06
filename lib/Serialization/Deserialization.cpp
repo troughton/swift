@@ -1100,13 +1100,12 @@ Decl *ModuleFile::resolveCrossReference(Module *M, uint32_t pathLen) {
     // has to go through this path, but it's an option we toggle for
     // testing.
     if (values.empty() && !retrying &&
-        getContext().LangOpts.StripNSPrefix &&
         (M->getName().str() == "ObjectiveC" ||
          M->getName().str() == "Foundation")) {
       if (name.str().startswith("NS")) {
         if (name.str().size() > 2 && name.str() != "NSCocoaError") {
           auto known = getKnownFoundationEntity(name.str());
-          if (!known || !nameConflictsWithStandardLibrary(*known)) {
+          if (!known) {
             name = getContext().getIdentifier(name.str().substr(2));
             retrying = true;
             goto retry;
@@ -1662,6 +1661,7 @@ getActualAccessibility(uint8_t raw) {
   CASE(FilePrivate)
   CASE(Internal)
   CASE(Public)
+  CASE(Open)
 #undef CASE
   }
   return None;
@@ -3493,13 +3493,12 @@ Type ModuleFile::getType(TypeID TID) {
     TypeID inputID;
     TypeID resultID;
     uint8_t rawRepresentation;
-    bool autoClosure, noescape, explicitlyEscaping, throws;
+    bool autoClosure, noescape, throws;
 
     decls_block::FunctionTypeLayout::readRecord(scratch, inputID, resultID,
                                                 rawRepresentation,
                                                 autoClosure,
                                                 noescape,
-                                                explicitlyEscaping,
                                                 throws);
     auto representation = getActualFunctionTypeRepresentation(rawRepresentation);
     if (!representation.hasValue()) {
@@ -3509,7 +3508,7 @@ Type ModuleFile::getType(TypeID TID) {
     
     auto Info = FunctionType::ExtInfo(*representation,
                                autoClosure, noescape,
-                               explicitlyEscaping, throws);
+                               throws);
     
     typeOrOffset = FunctionType::get(getType(inputID), getType(resultID),
                                      Info);

@@ -2,6 +2,109 @@ Note: This is in reverse chronological order, so newer entries are added to the 
 
 Swift 3.0
 ---------
+* [SE-0115](https://github.com/apple/swift-evolution/blob/master/proposals/0115-literal-syntax-protocols.md)
+
+  To clarify the role of `*LiteralConvertible` protocols, they have 
+  been renamed to `ExpressibleBy*Literal`.  No requirements of these 
+  protocols have changed.
+
+* [SE-0107](https://github.com/apple/swift-evolution/blob/master/proposals/0107-unsaferawpointer.md)
+
+  An `Unsafe[Mutable]RawPointer` type has been introduced. It replaces
+  `Unsafe[Mutable]Pointer<Void>`. Conversion from `UnsafePointer<T>`
+  to `UnsafePointer<U>` has been disallowed. `Unsafe[Mutable]RawPointer`
+  provides an API for untyped memory access, and an API for binding memory
+  to a type. Binding memory allows for safe conversion between pointer types.
+  See `bindMemory(to:capacity:)`, `assumingMemoryBound(to:)`, and
+  `withMemoryRebound(to:capacity:)`.
+
+* [SE-0096](https://github.com/apple/swift-evolution/blob/master/proposals/0096-dynamictype.md):
+
+  The `dynamicType` keyword has been removed from Swift.  In its place a new
+  primitive function `type(of:)` has been added to the language.  Existing code
+  that uses the `.dynamicType` member to retrieve the type of an expression 
+  should migrate to this new primitive.  Code that is using `.dynamicType` in 
+  conjunction with `sizeof` should migrate to the `MemoryLayout` structure provided by
+  [SE-0101](https://github.com/apple/swift-evolution/blob/master/proposals/0101-standardizing-sizeof-naming.md).
+
+* [SE-0113](https://github.com/apple/swift-evolution/blob/master/proposals/0113-rounding-functions-on-floatingpoint.md)
+
+  The following two methods were added to `FloatingPoint`:
+
+  ```swift
+  func rounded(_ rule: FloatingPointRoundingRule) -> Self
+  mutating func round( _ rule: FloatingPointRoundingRule)
+  ```
+
+  These bind the IEEE 754 roundToIntegral operations. They provide the
+  functionality of the C / C++ `round()`, `ceil()`, `floor()`, and `trunc()`
+  functions and other rounding operations as well.
+
+  As a follow-on to the work of SE-0113 and SE-0067, the following
+  mathematical operations in the `Darwin.C` and `glibc` modules now operate
+  on any type conforming to `FloatingPoint`: `fabs`, `sqrt`, `fma`,
+  `remainder`, `fmod`, `ceil`, `floor`, `round`, and `trunc`.
+
+  See also the changes associated with SE-0067.
+
+* [SE-0067](https://github.com/apple/swift-evolution/blob/master/proposals/0067-floating-point-protocols.md)
+
+  The `FloatingPoint` protocol has been expanded to include most IEEE 754
+  required operations. A number of useful properties have been added to the
+  protocol as well, representing quantities like the largest finite value or
+  the smallest positive normal value (these correspond to the macros such as
+  FLT_MAX defined in C).
+
+  While almost all of the changes are additive, there are four changes that
+  will impact existing code:
+
+  - The `%` operator is no longer available for `FloatingPoint` types. It
+  was difficult to use correctly, and its semantics did not actually match
+  those of the corresponding integer operation, making it something of an
+  attractive nuisance. The new method `formTruncatingRemainder(dividingBy:)`
+  provides the old semantics if they are needed.
+
+  - The static property `.NaN` has been renamed `.nan`.
+
+  - The static property `.quietNaN` was redundant and has been removed. Use
+  `.nan` instead.
+
+  - The predicate `isSignaling` has been renamed `isSignalingNaN`.
+
+  See also the changes associated with SE-0113.
+
+* [SE-0111](https://github.com/apple/swift-evolution/blob/master/proposals/0111-remove-arg-label-type-significance.md):
+
+  Argument labels have been removed from Swift function types. Instead, they are
+  part of the name of a function, subscript, or initializer. Calls to a function
+  or initializer, or uses of a subscript, still require argument labels, as they
+  always have:
+
+  ```swift
+    func doSomething(x: Int, y: Int) { }
+    doSomething(x: 0, y: 0)     // argument labels are required
+  ```
+
+  However, unapplied references to functions or initializers no longer carry
+  argument labels. For example:
+
+  ```swift
+  let f = doSomething(x:y:)     // inferred type is now (Int, Int) -> Void
+  ```
+
+  Additionally, explicitly-written function types can no longer carry argument
+  labels, although one can still provide parameter name for documentation
+  purposes using the '_' in the argument label position:
+
+  ```swift
+  typealias CompletionHandler =
+     (token: Token, error: Error?) -> Void   // error: function types cannot have argument labels
+
+  typealias CompletionHandler =
+     (_ token: Token, _ error: Error?) -> Void   // error: okay: names are for documentation purposes
+  ```
+
+* [SE-0025](https://github.com/apple/swift-evolution/blob/master/proposals/0025-scoped-access-level.md): A declaration marked as `private` can now only be accessed within the lexical scope it is declared in (essentially the enclosing curly braces `{}`). A `private` declaration at the top level of a file can be accessed anywhere in that file, as in Swift 2. The access level formerly known as `private` is now called `fileprivate`.
 
 * [SE-0131](https://github.com/apple/swift-evolution/blob/master/proposals/0131-anyhashable.md):
   The standard library provides a new type `AnyHashable` for use in heterogenous

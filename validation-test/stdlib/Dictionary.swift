@@ -12,9 +12,6 @@
 // RUN: %line-directive %t/main.swift -- %target-run %t/Dictionary
 // REQUIRES: executable_test
 
-// rdar://27547957
-// XFAIL: swift_test_mode_optimize
-
 #if os(OSX) || os(iOS) || os(tvOS) || os(watchOS)
 import Darwin
 #else
@@ -75,9 +72,9 @@ DictionaryTestSuite.test("AssociatedTypes") {
 DictionaryTestSuite.test("sizeof") {
   var dict = [1: "meow", 2: "meow"]
 #if arch(i386) || arch(arm)
-  expectEqual(4, sizeofValue(dict))
+  expectEqual(4, MemoryLayout._ofInstance(dict).size)
 #else
-  expectEqual(8, sizeofValue(dict))
+  expectEqual(8, MemoryLayout._ofInstance(dict).size)
 #endif
 }
 
@@ -3174,7 +3171,7 @@ DictionaryTestSuite.test("DictionaryDowncastConditionalEntryPoint") {
   }
 
   // Unsuccessful downcast
-  d["hello"] = 17
+  d["hello" as NSString] = 17 as NSNumber
   if let dCC
        = _dictionaryDownCastConditional(d) as Dictionary<TestObjCKeyTy, TestObjCValueTy>? {
     assert(false)
@@ -3203,7 +3200,7 @@ DictionaryTestSuite.test("DictionaryDowncastConditional") {
   }
 
   // Unsuccessful downcast
-  d["hello"] = 17
+  d["hello" as NSString] = 17 as NSNumber
   if let dCC = d as? Dictionary<TestObjCKeyTy, TestObjCValueTy> {
     assert(false)
   }
@@ -3366,7 +3363,7 @@ DictionaryTestSuite.test("DictionaryBridgeFromObjectiveCConditionalEntryPoint") 
   }
 
   // Unsuccessful downcasts
-  d["hello"] = 17
+  d["hello" as NSString] = 17 as NSNumber
   if let dCV
        = _dictionaryBridgeFromObjectiveCConditional(d) as Dictionary<TestObjCKeyTy, TestBridgedValueTy>?{
     assert(false)
@@ -3433,7 +3430,7 @@ DictionaryTestSuite.test("DictionaryBridgeFromObjectiveCConditional") {
   }
 
   // Unsuccessful downcasts
-  d["hello"] = 17
+  d["hello" as NSString] = 17 as NSNumber
   if let dCV = d as? Dictionary<TestObjCKeyTy, TestBridgedValueTy> {
     assert(false)
   }
@@ -3870,13 +3867,13 @@ DictionaryTestSuite.test("dropsBridgedCache") {
   var dict = [0:10]
   do {
     var bridged: NSDictionary = dict as NSDictionary
-    expectEqual(10, bridged[0] as! Int)
+    expectEqual(10, bridged[0 as NSNumber] as! Int)
   }
 
   dict[0] = 11
   do {
     var bridged: NSDictionary = dict as NSDictionary
-    expectEqual(11, bridged[0] as! Int)
+    expectEqual(11, bridged[0 as NSNumber] as! Int)
   }
 }
 

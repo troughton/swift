@@ -538,12 +538,17 @@ resolveImmutableBase(Expr *expr, ConstraintSystem &CS) {
   if (auto *UDE = dyn_cast<UnresolvedDotExpr>(expr)) {
     // If we found a decl for the UDE, check it.
     auto loc = CS.getConstraintLocator(UDE, ConstraintLocator::Member);
-    auto *member = dyn_cast_or_null<VarDecl>(findResolvedMemberRef(loc, CS));
-
-    // If the member isn't settable, then it is the problem: return it.
-    if (member) {
-      if (!member->isSettable(nullptr) ||
-          !member->isSetterAccessibleFrom(CS.DC))
+    
+    // If we can resolve a member, we can determine whether it is settable in
+    // this context.
+    if (auto *member = findResolvedMemberRef(loc, CS)) {
+      auto *memberVD = dyn_cast<VarDecl>(member);
+      
+      // If the member isn't a vardecl (e.g. its a funcdecl), or it isn't
+      // settable, then it is the problem: return it.
+      if (!memberVD ||
+          !member->isSettable(nullptr) ||
+          !memberVD->isSetterAccessibleFrom(CS.DC))
         return { expr, member };
     }
 
@@ -637,6 +642,22 @@ static void diagnoseSubElementFailure(Expr *destExpr,
     else
       message = "subscript is immutable";
 
+    TC.diagnose(loc, diagID, message)
+      .highlight(immInfo.first->getSourceRange());
+    return;
+  }
+  
+  // If we're trying to set an unapplied method, say that.
+  if (auto *VD = dyn_cast_or_null<ValueDecl>(immInfo.second)) {
+    std::string message = "'";
+    message += VD->getName().str().str();
+    message += "'";
+    
+    if (auto *AFD = dyn_cast<AbstractFunctionDecl>(VD))
+      message += AFD->getImplicitSelfDecl() ? " is a method" : " is a function";
+    else
+      message += " is not settable";
+    
     TC.diagnose(loc, diagID, message)
       .highlight(immInfo.first->getSourceRange());
     return;
@@ -1912,7 +1933,17 @@ public:
   bool diagnoseCalleeResultContextualConversionError();
 
 private:
-    
+  /// Check the specified closure to see if it is a multi-statement closure with
+  /// an uninferred type.  If so, diagnose the problem with an error and return
+  /// true.
+  bool diagnoseAmbiguousMultiStatementClosure(ClosureExpr *closure);
+
+  /// Emit an error message about an unbound generic parameter existing, and
+  /// emit notes referring to the target of a diagnostic, e.g., the function
+  /// or parameter being used.
+  void diagnoseUnboundArchetype(ArchetypeType *archetype,
+                                ConstraintLocator *targetLocator);
+
   /// Produce a diagnostic for a general member-lookup failure (irrespective of
   /// the exact expression kind).
   bool diagnoseGeneralMemberFailure(Constraint *constraint);
@@ -2211,7 +2242,21 @@ bool FailureDiagnosis::diagnoseGeneralMemberFailure(Constraint *constraint) {
     }
   }
 
-  if (baseObjTy->is<TupleType>()) {
+  // If this is a tuple, then the index needs to be valid.
+  if (auto tuple = baseObjTy->getAs<TupleType>()) {
+    StringRef nameStr = memberName.getBaseName().str();
+    int fieldIdx = -1;
+    // Resolve a number reference into the tuple type.
+    unsigned Value = 0;
+    if (!nameStr.getAsInteger(10, Value) && Value < tuple->getNumElements()) {
+      fieldIdx = Value;
+    } else {
+      fieldIdx = tuple->getNamedElementId(memberName.getBaseName());
+    }
+
+    if (fieldIdx != -1)
+      return false;    // Lookup is valid.
+
     diagnose(anchor->getLoc(), diag::could_not_find_tuple_member,
              baseObjTy, memberName)
       .highlight(anchor->getSourceRange()).highlight(memberRange);
@@ -2253,14 +2298,14 @@ bool FailureDiagnosis::diagnoseGeneralMemberFailure(Constraint *constraint) {
           return true;
         }
         
-        // Suggest inserting '.dynamicType' to construct another object of the
-        // same dynamic type.
-        SourceLoc fixItLoc
-          = ctorRef->getNameLoc().getBaseNameLoc().getAdvancedLoc(-1);
+        // Suggest inserting a call to 'type(of:)' to construct another object
+        // of the same dynamic type.
+        SourceRange fixItRng = ctorRef->getNameLoc().getSourceRange();
         
-        // Place the '.dynamicType' right before the init.
+        // Surround the caller in `type(of:)`.
         diagnose(anchor->getLoc(), diag::init_not_instance_member)
-          .fixItInsert(fixItLoc, ".dynamicType");
+          .fixItInsert(fixItRng.Start, "type(of: ")
+          .fixItInsertAfter(fixItRng.End, ")");
         return true;
       }
     }
@@ -2848,7 +2893,7 @@ namespace {
     llvm::DenseMap<Pattern*, Type> PatternTypes;
     llvm::DenseMap<ParamDecl*, Type> ParamDeclTypes;
     llvm::DenseMap<CollectionExpr*, Expr*> CollectionSemanticExprs;
-    llvm::DenseSet<Decl*> InvalidDecls;
+    llvm::DenseSet<ValueDecl*> PossiblyInvalidDecls;
     ExprTypeSaverAndEraser(const ExprTypeSaverAndEraser&) = delete;
     void operator=(const ExprTypeSaverAndEraser&) = delete;
   public:
@@ -2885,19 +2930,18 @@ namespace {
               !(expr->getType() && expr->getType()->is<ErrorType>()))
             return { false, expr };
 
-          // If a ClosureExpr's parameter list has types on the decls, and the
-          // types and remove them so that they'll get regenerated from the
+          // If a ClosureExpr's parameter list has types on the decls, then
+          // remove them so that they'll get regenerated from the
           // associated TypeLocs or resynthesized as fresh typevars.
           if (auto *CE = dyn_cast<ClosureExpr>(expr))
             for (auto P : *CE->getParameters())
               if (P->hasType()) {
                 TS->ParamDeclTypes[P] = P->getType();
                 P->overwriteType(Type());
+                TS->PossiblyInvalidDecls.insert(P);
                 
-                if (P->isInvalid()) {
+                if (P->isInvalid())
                   P->setInvalid(false);
-                  TS->InvalidDecls.insert(P);
-                }
               }
           
           // If we have a CollectionExpr with a type checked SemanticExpr,
@@ -2959,15 +3003,15 @@ namespace {
       for (auto CSE : CollectionSemanticExprs)
         CSE.first->setSemanticExpr(CSE.second);
       
-      if (!InvalidDecls.empty())
-        for (auto D : InvalidDecls)
-          D->setInvalid();
+      if (!PossiblyInvalidDecls.empty())
+        for (auto D : PossiblyInvalidDecls)
+          D->setInvalid(D->getType()->is<ErrorType>());
       
       // Done, don't do redundant work on destruction.
       ExprTypes.clear();
       TypeLocTypes.clear();
       PatternTypes.clear();
-      InvalidDecls.clear();
+      PossiblyInvalidDecls.clear();
     }
     
     // On destruction, if a type got wiped out, reset it from null to its
@@ -2999,9 +3043,9 @@ namespace {
         if (!paramDeclElt.first->hasType())
           paramDeclElt.first->setType(paramDeclElt.second);
 
-      if (!InvalidDecls.empty())
-        for (auto D : InvalidDecls)
-          D->setInvalid();
+      if (!PossiblyInvalidDecls.empty())
+        for (auto D : PossiblyInvalidDecls)
+          D->setInvalid(D->getType()->is<ErrorType>());
     }
   };
 }
@@ -3549,6 +3593,62 @@ addTypeCoerceFixit(InFlightDiagnostic &diag, ConstraintSystem *CS,
   return false;
 }
 
+/// Try to diagnose common errors involving implicitly non-escaping parameters
+/// of function type, giving more specific and simpler diagnostics, attaching
+/// notes on the parameter, and offering fixits to insert @escaping. Returns
+/// true if it detects and issues an error, false if it does nothing.
+static bool tryDiagnoseNonEscapingParameterToEscaping(Expr *expr, Type srcType,
+                                                      Type dstType,
+                                                      ConstraintSystem *CS) {
+  assert(expr && CS);
+  // Need to be referencing a parameter of function type
+  auto declRef = dyn_cast<DeclRefExpr>(expr);
+  if (!declRef || !isa<ParamDecl>(declRef->getDecl()) ||
+      !declRef->getType()->is<FunctionType>())
+    return false;
+
+  // Must be from non-escaping function to escaping function
+  auto srcFT = srcType->getAs<FunctionType>();
+  auto destFT = dstType->getAs<FunctionType>();
+  if (!srcFT || !destFT || !srcFT->isNoEscape() || destFT->isNoEscape())
+    return false;
+
+  // Function types must be equivalent modulo @escaping, @convention, etc.
+  if (!destFT->isEqual(srcFT->withExtInfo(destFT->getExtInfo())))
+    return false;
+
+  // Pick a specific diagnostic for the specific use
+  auto paramDecl = cast<ParamDecl>(declRef->getDecl());
+  switch (CS->getContextualTypePurpose()) {
+  case CTP_CallArgument:
+    CS->TC.diagnose(declRef->getLoc(), diag::passing_noescape_to_escaping,
+                    paramDecl->getName());
+    break;
+  case CTP_AssignSource:
+    CS->TC.diagnose(declRef->getLoc(), diag::assigning_noescape_to_escaping,
+                    paramDecl->getName());
+    break;
+
+  default:
+    CS->TC.diagnose(declRef->getLoc(), diag::general_noescape_to_escaping,
+                    paramDecl->getName());
+    break;
+  }
+
+  // Give a note and fixit
+  InFlightDiagnostic note = CS->TC.diagnose(
+      paramDecl->getLoc(), srcFT->isAutoClosure() ? diag::noescape_autoclosure
+                                                  : diag::noescape_parameter,
+      paramDecl->getName());
+
+  if (!srcFT->isAutoClosure()) {
+    note.fixItInsert(paramDecl->getTypeLoc().getSourceRange().Start,
+                     "@escaping ");
+  } // TODO: add in a fixit for autoclosure
+
+  return true;
+}
+
 bool FailureDiagnosis::diagnoseContextualConversionError() {
   // If the constraint system has a contextual type, then we can test to see if
   // this is the problem that prevents us from solving the system.
@@ -3633,7 +3733,7 @@ bool FailureDiagnosis::diagnoseContextualConversionError() {
     diagIDProtocol = diag::cannot_convert_to_return_type_protocol;
     nilDiag = diag::cannot_convert_to_return_type_nil;
     break;
-  case CTP_ThrowStmt:
+  case CTP_ThrowStmt: {
     if (isa<NilLiteralExpr>(expr->getValueProvidingExpr())) {
       diagnose(expr->getLoc(), diag::cannot_throw_nil);
       return true;
@@ -3642,14 +3742,42 @@ bool FailureDiagnosis::diagnoseContextualConversionError() {
     if (isUnresolvedOrTypeVarType(exprType) ||
         exprType->isEqual(contextualType))
       return false;
-      
+
+    // If we tried to throw the error code of an error type, suggest object
+    // construction.
+    auto &TC = CS->getTypeChecker();
+    if (auto errorCodeProtocol =
+            TC.Context.getProtocol(KnownProtocolKind::ErrorCodeProtocol)) {
+      ProtocolConformance *conformance = nullptr;
+      if (TC.conformsToProtocol(expr->getType(), errorCodeProtocol, CS->DC,
+                                ConformanceCheckFlags::InExpression,
+                                &conformance) &&
+          conformance) {
+        Type errorCodeType = expr->getType();
+        Type errorType =
+          ProtocolConformance::getTypeWitnessByName(errorCodeType, conformance,
+                                                    TC.Context.Id_ErrorType,
+                                                    &TC)->getCanonicalType();
+        if (errorType) {
+          auto diag = diagnose(expr->getLoc(), diag::cannot_throw_error_code,
+                               errorCodeType, errorType);
+          if (auto unresolvedDot = dyn_cast<UnresolvedDotExpr>(expr)) {
+            diag.fixItInsert(unresolvedDot->getDotLoc(), "(");
+            diag.fixItInsertAfter(unresolvedDot->getEndLoc(), ")");
+          }
+          return true;
+        }
+      }
+    }
+
     // The conversion destination of throw is always ErrorType (at the moment)
     // if this ever expands, this should be a specific form like () is for
     // return.
     diagnose(expr->getLoc(), diag::cannot_convert_thrown_type, exprType)
       .highlight(expr->getSourceRange());
     return true;
-      
+  }
+
   case CTP_EnumCaseRawValue:
     diagID = diag::cannot_convert_raw_initializer_value;
     diagIDProtocol = diag::cannot_convert_raw_initializer_value;
@@ -3782,6 +3910,11 @@ bool FailureDiagnosis::diagnoseContextualConversionError() {
       }
     }
   }
+
+  // Try for better/more specific diagnostics for non-escaping to @escaping
+  if (tryDiagnoseNonEscapingParameterToEscaping(expr, exprType, contextualType,
+                                                CS))
+    return true;
 
   // When complaining about conversion to a protocol type, complain about
   // conformance instead of "conversion".
@@ -4357,6 +4490,10 @@ static bool diagnoseSingleCandidateFailures(CalleeCandidateInfo &CCI,
                   missingParamIdx+1);
     else
       TC.diagnose(loc, diag::missing_argument_named, name);
+    
+    if (candidate.getDecl())
+      TC.diagnose(candidate.getDecl(), diag::decl_declared_here,
+                  candidate.getDecl()->getFullName());
     return true;
   }
 
@@ -4776,6 +4913,25 @@ bool FailureDiagnosis::diagnoseNilLiteralComparison(
   return true;
 }
 
+static bool shouldAddMutating(ASTContext &Ctx, const Expr *Fn,
+                              const Expr* Arg) {
+  auto *TypeExp = dyn_cast<TypeExpr>(Fn);
+  auto *ParenExp = dyn_cast<ParenExpr>(Arg);
+  if (!TypeExp || !ParenExp)
+    return false;
+  auto InitType = TypeExp->getInstanceType();
+  auto ArgType = ParenExp->getSubExpr()->getType();
+  if (InitType.isNull() || ArgType.isNull())
+    return false;
+  if (auto *InitNom = InitType->getAnyNominal()) {
+    if (auto *ArgNom = ArgType->getAnyNominal()) {
+      return InitNom == Ctx.getUnsafeMutablePointerDecl() &&
+        ArgNom == Ctx.getUnsafePointerDecl();
+    }
+  }
+  return false;
+}
+
 bool FailureDiagnosis::visitApplyExpr(ApplyExpr *callExpr) {
   // Type check the function subexpression to resolve a type for it if possible.
   auto fnExpr = typeCheckChildIndependently(callExpr->getFn());
@@ -5089,6 +5245,12 @@ bool FailureDiagnosis::visitApplyExpr(ApplyExpr *callExpr) {
   } else {
     diagnose(fnExpr->getLoc(), diag::cannot_call_with_params,
              overloadName, argString, isInitializer);
+  }
+
+
+  if (shouldAddMutating(CS->DC->getASTContext(), fnExpr, argExpr)) {
+    diagnose(fnExpr->getLoc(), diag::pointer_init_add_mutating).fixItInsert(
+      dyn_cast<ParenExpr>(argExpr)->getSubExpr()->getStartLoc(), "mutating: ");
   }
   
   // Did the user intend on invoking a different overload?
@@ -6102,14 +6264,109 @@ static void noteArchetypeSource(const TypeLoc &loc, ArchetypeType *archetype,
 }
 
 
+/// Check the specified closure to see if it is a multi-statement closure with
+/// an uninferred type.  If so, diagnose the problem with an error and return
+/// true.
+bool FailureDiagnosis::
+diagnoseAmbiguousMultiStatementClosure(ClosureExpr *closure) {
+  if (closure->hasSingleExpressionBody() ||
+      closure->hasExplicitResultType())
+    return false;
+
+  auto closureType = closure->getType()->getAs<AnyFunctionType>();
+  if (!closureType ||
+      !(closureType->getResult()->hasUnresolvedType() ||
+        closureType->getResult()->hasTypeVariable()))
+    return false;
+
+  // Okay, we have a multi-statement closure expr that has no inferred result,
+  // type, in the context of a larger expression.  The user probably expected
+  // the compiler to infer the result type of the closure from the body of the
+  // closure, which Swift doesn't do for multi-statement closures.  Try to be
+  // helpful by digging into the body of the closure, looking for a return
+  // statement, and inferring the result type from it.  If we can figure that
+  // out, we can produce a fixit hint.
+  class ReturnStmtFinder : public ASTWalker {
+    SmallVectorImpl<ReturnStmt*> &returnStmts;
+  public:
+    ReturnStmtFinder(SmallVectorImpl<ReturnStmt*> &returnStmts)
+      : returnStmts(returnStmts) {}
+
+    // Walk through statements, so we find returns hiding in if/else blocks etc.
+    std::pair<bool, Stmt *> walkToStmtPre(Stmt *S) override {
+      // Keep track of any return statements we find.
+      if (auto RS = dyn_cast<ReturnStmt>(S))
+        returnStmts.push_back(RS);
+      return { true, S };
+    }
+    
+    // Don't walk into anything else, since they cannot contain statements
+    // that can return from the current closure.
+    std::pair<bool, Expr *> walkToExprPre(Expr *E) override {
+      return { false, E };
+    }
+    std::pair<bool, Pattern*> walkToPatternPre(Pattern *P) override {
+      return { false, P };
+    }
+    bool walkToDeclPre(Decl *D) override { return false; }
+    bool walkToTypeLocPre(TypeLoc &TL) override { return false; }
+    bool walkToTypeReprPre(TypeRepr *T) override { return false; }
+    bool walkToParameterListPre(ParameterList *PL) override { return false; }
+  };
+  
+  SmallVector<ReturnStmt*, 4> Returns;
+  closure->getBody()->walk(ReturnStmtFinder(Returns));
+  
+  // If we found a return statement inside of the closure expression, then go
+  // ahead and type check the body to see if we can determine a type.
+  for (auto RS : Returns) {
+    llvm::SaveAndRestore<DeclContext*> SavedDC(CS->DC, closure);
+    
+    // Otherwise, we're ok to type check the subexpr.
+    auto returnedExpr =
+      typeCheckChildIndependently(RS->getResult(),
+                                  TCC_AllowUnresolvedTypeVariables);
+    
+    // If we found a type, presuppose it was the intended result and insert a
+    // fixit hint.
+    if (returnedExpr && returnedExpr->getType() &&
+        !isUnresolvedOrTypeVarType(returnedExpr->getType())) {
+      
+      std::string resultType = returnedExpr->getType()->getString();
+      
+      // If there is a location for an 'in' token, then the argument list was
+      // specified somehow but no return type was.  Insert a "-> ReturnType "
+      // before the in token.
+      if (closure->getInLoc().isValid()) {
+        diagnose(closure->getLoc(), diag::cannot_infer_closure_result_type)
+          .fixItInsert(closure->getInLoc(), "-> " + resultType + " ");
+        return true;
+      }
+      
+      // Otherwise, the closure must take zero arguments.  We know this
+      // because the if one or more argument is specified, a multi-statement
+      // closure *must* name them, or explicitly ignore them with "_ in".
+      //
+      // As such, we insert " () -> ReturnType in " right after the '{' that
+      // starts the closure body.
+      auto insertString = " () -> " + resultType + " " + "in ";
+      diagnose(closure->getLoc(), diag::cannot_infer_closure_result_type)
+        .fixItInsertAfter(closure->getBody()->getLBraceLoc(), insertString);
+      return true;
+    }
+  }
+  
+  diagnose(closure->getLoc(), diag::cannot_infer_closure_result_type);
+  return true;
+}
+
+
 /// Emit an error message about an unbound generic parameter existing, and
 /// emit notes referring to the target of a diagnostic, e.g., the function
 /// or parameter being used.
-static void diagnoseUnboundArchetype(Expr *overallExpr,
-                                     ArchetypeType *archetype,
-                                     ConstraintLocator *targetLocator,
-                                     ConstraintSystem &cs) {
-  auto &tc = cs.getTypeChecker();
+void FailureDiagnosis::diagnoseUnboundArchetype(ArchetypeType *archetype,
+                                            ConstraintLocator *targetLocator) {
+  auto &tc = CS->getTypeChecker();
   auto anchor = targetLocator->getAnchor();
 
   // The archetype may come from the explicit type in a cast expression.
@@ -6126,11 +6383,25 @@ static void diagnoseUnboundArchetype(Expr *overallExpr,
                   ND->getDeclaredType());
     return;
   }
+
+  // A very common cause of this diagnostic is a situation where a closure expr
+  // has no inferred type, due to being a multiline closure.  Check to see if
+  // this is the case and (if so), speculatively diagnose that as the problem.
+  bool didDiagnose = false;
+  expr->forEachChildExpr([&](Expr *subExpr) -> Expr*{
+    auto closure = dyn_cast<ClosureExpr>(subExpr);
+    if (!didDiagnose && closure)
+      didDiagnose = diagnoseAmbiguousMultiStatementClosure(closure);
+    
+    return subExpr;
+  });
+
+  if (didDiagnose) return;
+
   
   // Otherwise, emit an error message on the expr we have, and emit a note
   // about where the archetype came from.
-  tc.diagnose(overallExpr->getLoc(), diag::unbound_generic_parameter,
-              archetype);
+  tc.diagnose(expr->getLoc(), diag::unbound_generic_parameter, archetype);
   
   // If we have an anchor, drill into it to emit a
   // "note: archetype declared here".
@@ -6202,7 +6473,7 @@ void FailureDiagnosis::diagnoseAmbiguity(Expr *E) {
     // Only diagnose archetypes that don't have a parent, i.e., ones
     // that correspond to generic parameters.
     if (archetype && !archetype->getParent()) {
-      diagnoseUnboundArchetype(expr, archetype, tv->getImpl().getLocator(),*CS);
+      diagnoseUnboundArchetype(archetype, tv->getImpl().getLocator());
       return;
     }
     continue;
@@ -6211,16 +6482,11 @@ void FailureDiagnosis::diagnoseAmbiguity(Expr *E) {
   // Unresolved/Anonymous ClosureExprs are common enough that we should give
   // them tailored diagnostics.
   if (auto CE = dyn_cast<ClosureExpr>(E->getValueProvidingExpr())) {
-    auto CFTy = CE->getType()->getAs<AnyFunctionType>();
-    
     // If this is a multi-statement closure with no explicit result type, emit
     // a note to clue the developer in.
-    if (!CE->hasExplicitResultType() && CFTy &&
-        isUnresolvedOrTypeVarType(CFTy->getResult())) {
-      diagnose(CE->getLoc(), diag::cannot_infer_closure_result_type);
+    if (diagnoseAmbiguousMultiStatementClosure(CE))
       return;
-    }
-    
+
     diagnose(E->getLoc(), diag::cannot_infer_closure_type)
       .highlight(E->getSourceRange());
     return;
@@ -6261,6 +6527,21 @@ void FailureDiagnosis::diagnoseAmbiguity(Expr *E) {
       .highlight(E->getSourceRange());
     return;
   }
+
+  // A very common cause of this diagnostic is a situation where a closure expr
+  // has no inferred type, due to being a multiline closure.  Check to see if
+  // this is the case and (if so), speculatively diagnose that as the problem.
+  bool didDiagnose = false;
+  E->forEachChildExpr([&](Expr *subExpr) -> Expr*{
+    auto closure = dyn_cast<ClosureExpr>(subExpr);
+    if (!didDiagnose && closure)
+      didDiagnose = diagnoseAmbiguousMultiStatementClosure(closure);
+    
+    return subExpr;
+  });
+  
+  if (didDiagnose) return;
+  
 
   
   // Attempt to re-type-check the entire expression, allowing ambiguity, but

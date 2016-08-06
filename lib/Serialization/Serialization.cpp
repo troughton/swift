@@ -897,23 +897,6 @@ void Serializer::writePattern(const Pattern *pattern) {
                                  isa->isImplicit());
     break;
   }
-  case PatternKind::NominalType: {
-    auto nom = cast<NominalTypePattern>(pattern);
-
-    unsigned abbrCode = DeclTypeAbbrCodes[NominalTypePatternLayout::Code];
-    auto castTy = nom->getCastTypeLoc().getType();
-    NominalTypePatternLayout::emitRecord(Out, ScratchRecord, abbrCode,
-                                         addTypeRef(castTy),
-                                         nom->getElements().size(),
-                                         nom->isImplicit());
-    abbrCode = DeclTypeAbbrCodes[NominalTypePatternEltLayout::Code];
-    for (auto &elt : nom->getElements()) {
-      NominalTypePatternEltLayout::emitRecord(Out, ScratchRecord, abbrCode,
-                                              addDeclRef(elt.getProperty()));
-      writePattern(elt.getSubPattern());
-    }
-    break;
-  }
   case PatternKind::EnumElement:
   case PatternKind::OptionalSome:
   case PatternKind::Bool:
@@ -1563,6 +1546,7 @@ static uint8_t getRawStableAccessibility(Accessibility access) {
   CASE(FilePrivate)
   CASE(Internal)
   CASE(Public)
+  CASE(Open)
 #undef CASE
   }
 }
@@ -2984,7 +2968,6 @@ void Serializer::writeType(Type ty) {
            getRawStableFunctionTypeRepresentation(fnTy->getRepresentation()),
            fnTy->isAutoClosure(),
            fnTy->isNoEscape(),
-           fnTy->isExplicitlyEscaping(),
            fnTy->throws());
     break;
   }
@@ -3795,7 +3778,7 @@ static void writeDeclCommentTable(
         // we want to take the testability state into account
         // and emit documentation if and only if they are visible to clients
         // (which means public ordinarily, but public+internal when testing enabled).
-        if (VD->getEffectiveAccess() != Accessibility::Public)
+        if (VD->getEffectiveAccess() < Accessibility::Public)
           return true;
       }
 

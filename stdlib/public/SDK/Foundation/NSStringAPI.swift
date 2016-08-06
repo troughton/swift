@@ -34,33 +34,6 @@ func _toNSRange(_ r: Range<String.Index>) -> NSRange {
     length: r.upperBound._utf16Index - r.lowerBound._utf16Index)
 }
 
-func _countFormatSpecifiers(_ a: String) -> Int {
-  // The implementation takes advantage of the fact that internal
-  // representation of String is UTF-16.  Because we only care about the ASCII
-  // percent character, we don't need to decode UTF-16.
-
-  let percentUTF16  = UTF16.CodeUnit(("%" as UnicodeScalar).value)
-  let notPercentUTF16: UTF16.CodeUnit = 0
-  var lastChar = notPercentUTF16 // anything other than % would work here
-  var count = 0
-
-  for c in a.utf16 {
-    if lastChar == percentUTF16 {
-      if c == percentUTF16 {
-        // a "%" following this one should not be taken as literal
-        lastChar = notPercentUTF16
-      }
-      else {
-        count += 1
-        lastChar = c
-      }
-    } else {
-      lastChar = c
-    }
-  }
-  return count
-}
-
 // We only need this for UnsafeMutablePointer, but there's not currently a way
 // to write that constraint.
 extension Optional {
@@ -495,13 +468,13 @@ extension String {
 
   /// Enumerates all the lines in a string.
   public func enumerateLines(
-    invoking body: (line: String, stop: inout Bool) -> ()
+    invoking body: @escaping (_ line: String, _ stop: inout Bool) -> ()
   ) {
     _ns.enumerateLines {
       (line: String, stop: UnsafeMutablePointer<ObjCBool>)
     in
       var stop_ = false
-      body(line: line, stop: &stop_)
+      body(line, &stop_)
       if stop_ {
         stop.pointee = true
       }
@@ -560,17 +533,17 @@ extension String {
   public func enumerateSubstrings(
     in range: Range<Index>,
     options opts: EnumerationOptions = [],
-    _ body: (
-      substring: String?, substringRange: Range<Index>,
-      enclosingRange: Range<Index>, inout Bool
+    _ body: @escaping (
+      _ substring: String?, _ substringRange: Range<Index>,
+      _ enclosingRange: Range<Index>, inout Bool
     ) -> ()
   ) {
     _ns.enumerateSubstrings(in: _toNSRange(range), options: opts) {
       var stop_ = false
 
-      body(substring: $0,
-        substringRange: self._range($1),
-        enclosingRange: self._range($2),
+      body($0,
+        self._range($1),
+        self._range($2),
         &stop_)
 
       if stop_ {
@@ -978,10 +951,6 @@ extension String {
   /// format string as a template into which the remaining argument
   /// values are substituted according to given locale information.
   public init(format: String, locale: Locale?, arguments: [CVarArg]) {
-    _precondition(
-      _countFormatSpecifiers(format) <= arguments.count,
-      "Too many format specifiers (%<letter>) provided for the argument list"
-    )
     self = withVaList(arguments) {
       NSString(format: format, locale: locale, arguments: $0) as String
     }
@@ -1778,8 +1747,8 @@ extension String {
     _ range: Range<Index>,
     options opts: EnumerationOptions = [],
     _ body: (
-      substring: String?, substringRange: Range<Index>,
-      enclosingRange: Range<Index>, inout Bool
+      _ substring: String?, _ substringRange: Range<Index>,
+      _ enclosingRange: Range<Index>, inout Bool
     ) -> ()
   ) {
     fatalError("unavailable function can't be called")

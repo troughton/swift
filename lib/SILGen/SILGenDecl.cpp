@@ -918,10 +918,6 @@ struct InitializationForPattern
   InitializationPtr visitExprPattern(ExprPattern *P) {
     return InitializationPtr(new ExprPatternInitialization(P, patternFailDest));
   }
-  InitializationPtr visitNominalTypePattern(NominalTypePattern *P) {
-    P->dump();
-    llvm_unreachable("pattern not supported in let/else yet");
-  }
 };
 
 } // end anonymous namespace
@@ -1455,8 +1451,8 @@ public:
       isFragile = IsFragile;
     if (auto nominal = Conformance->getInterfaceType()->getAnyNominal())
       if (nominal->hasFixedLayout() &&
-          proto->getEffectiveAccess() == Accessibility::Public &&
-          nominal->getEffectiveAccess() == Accessibility::Public)
+          proto->getEffectiveAccess() >= Accessibility::Public &&
+          nominal->getEffectiveAccess() >= Accessibility::Public)
         isFragile = IsFragile;
 
     // Check if we already have a declaration or definition for this witness

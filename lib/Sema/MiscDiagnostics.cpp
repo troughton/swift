@@ -25,6 +25,7 @@
 #include "swift/Parse/Lexer.h"
 #include "swift/Parse/Parser.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/SaveAndRestore.h"
 using namespace swift;
 
@@ -98,6 +99,8 @@ static void diagSelfAssignment(TypeChecker &TC, const Expr *E) {
 ///   - 'self.init' and 'super.init' cannot be wrapped in a larger expression
 ///     or statement.
 ///   - Warn about promotions to optional in specific syntactic forms.
+///   - Error about collection literals that default to Any collections in
+///     invalid positions.
 ///
 static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
                                          const DeclContext *DC,
@@ -237,10 +240,13 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
       while (auto Conv = dyn_cast<ImplicitConversionExpr>(Base))
         Base = Conv->getSubExpr();
 
+      if (auto collection = dyn_cast<CollectionExpr>(E))
+        if (collection->isTypeDefaulted())
+          checkTypeDefaultedCollectionExpr(collection);
+
       // Record call arguments.
-      if (auto Call = dyn_cast<CallExpr>(Base)) {
+      if (auto Call = dyn_cast<CallExpr>(Base))
         CallArgs.insert(Call->getArg());
-      }
 
       if (auto *DRE = dyn_cast<DeclRefExpr>(Base)) {
         // Verify metatype uses.
@@ -380,6 +386,29 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
       return E;
     }
 
+    /// We have a collection literal with a defaulted type, e.g. of [Any].  Emit
+    /// an error if it was inferred to this type in an invalid context, which is
+    /// one in which the parent expression is not itself a collection literal.
+    void checkTypeDefaultedCollectionExpr(CollectionExpr *c) {
+      if (auto *ParentExpr = Parent.getAsExpr())
+        if (isa<CollectionExpr>(ParentExpr))
+          return;
+
+      // If the parent is a non-expression, or is not itself a literal, then
+      // produce an error with a fixit to add the type as an explicit
+      // annotation.
+      if (c->getNumElements() == 0)
+        TC.diagnose(c->getLoc(), diag::collection_literal_empty)
+          .highlight(c->getSourceRange());
+      else {
+        TC.diagnose(c->getLoc(), diag::collection_literal_heterogenous,
+                    c->getType())
+          .highlight(c->getSourceRange())
+          .fixItInsertAfter(c->getEndLoc(), " as " + c->getType()->getString());
+      }
+    }
+
+
     /// Scout out the specified destination of an AssignExpr to recursively
     /// identify DiscardAssignmentExpr in legal places.  We can only allow them
     /// in simple pattern-like expressions, so we reject anything complex here.
@@ -464,7 +493,17 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
 
       TC.diagnose(DRE->getStartLoc(), diag::invalid_noescape_use,
                   DRE->getDecl()->getName(), isa<ParamDecl>(DRE->getDecl()));
-      if (AFT->isAutoClosure())
+
+      // If we're a parameter, emit a helpful fixit to add @escaping
+      auto paramDecl = dyn_cast<ParamDecl>(DRE->getDecl());
+      auto isAutoClosure = AFT->isAutoClosure();
+      if (paramDecl && !isAutoClosure) {
+        TC.diagnose(paramDecl->getStartLoc(), diag::noescape_parameter,
+                    paramDecl->getName())
+            .fixItInsert(paramDecl->getTypeLoc().getSourceRange().Start,
+                         "@escaping ");
+      } else if (isAutoClosure)
+        // TODO: add in a fixit for autoclosure
         TC.diagnose(DRE->getDecl()->getLoc(), diag::noescape_autoclosure,
                     DRE->getDecl()->getName());
     }
@@ -477,17 +516,9 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
         return;
 
       // Allow references to types as a part of:
-      // - member references T.foo, T.Type, T.self, etc. (but *not* T.type)
+      // - member references T.foo, T.Type, T.self, etc.
       // - constructor calls T()
       if (auto *ParentExpr = Parent.getAsExpr()) {
-        // Reject use of "T.dynamicType", it should be written as "T.self".
-        if (auto metaExpr = dyn_cast<DynamicTypeExpr>(ParentExpr)) {
-          // Add a fixit to replace '.dynamicType' with '.self'.
-          TC.diagnose(E->getStartLoc(), diag::type_of_metatype)
-            .fixItReplace(metaExpr->getMetatypeLoc(), "self");
-          return;
-        }
-
         // This is the white-list of accepted syntactic forms.
         if (isa<ErrorExpr>(ParentExpr) ||
             isa<DotSelfExpr>(ParentExpr) ||               // T.self
@@ -1809,6 +1840,9 @@ private:
                         const ApplyExpr *call = nullptr);
   bool diagnoseIncDecRemoval(const ValueDecl *D, SourceRange R,
                              const AvailableAttr *Attr);
+  bool diagnoseMemoryLayoutMigration(const ValueDecl *D, SourceRange R,
+                                     const AvailableAttr *Attr,
+                                     const ApplyExpr *call);
 
   /// Walks up from a potential callee to the enclosing ApplyExpr.
   const ApplyExpr *getEnclosingApplyExpr() const {
@@ -1947,9 +1981,12 @@ bool AvailabilityWalker::diagAvailability(const ValueDecl *D, SourceRange R,
   if (!D)
     return false;
 
-  if (auto *attr = AvailableAttr::isUnavailable(D))
+  if (auto *attr = AvailableAttr::isUnavailable(D)) {
     if (diagnoseIncDecRemoval(D, R, attr))
       return true;
+    if (call && diagnoseMemoryLayoutMigration(D, R, attr, call))
+      return true;
+  }
 
   if (TC.diagnoseExplicitUnavailability(D, R, DC, call))
     return true;
@@ -2049,7 +2086,81 @@ bool AvailabilityWalker::diagnoseIncDecRemoval(const ValueDecl *D,
   return false;
 }
 
+/// If this is a call to an unavailable sizeof family functions, diagnose it
+/// with a fixit hint and return true. If not, or if we fail, return false.
+bool AvailabilityWalker::diagnoseMemoryLayoutMigration(const ValueDecl *D,
+                                               SourceRange R,
+                                               const AvailableAttr *Attr,
+                                               const ApplyExpr *call) {
 
+  if (!D->getModuleContext()->isStdlibModule())
+    return false;
+
+  std::pair<StringRef, bool> KindValue
+    = llvm::StringSwitch<std::pair<StringRef, bool>>(D->getNameStr())
+      .Case("sizeof", {"size", false})
+      .Case("alignof", {"alignment", false})
+      .Case("strideof", {"stride", false})
+      .Case("sizeofValue", {"size", true})
+      .Case("alignofValue", {"alignment", true})
+      .Case("strideofValue", {"stride", true})
+      .Default({});
+
+  if (KindValue.first.empty())
+    return false;
+
+  auto Kind = KindValue.first;
+  auto isValue = KindValue.second;
+
+  auto args = dyn_cast<ParenExpr>(call->getArg());
+  if (!args)
+    return false;
+
+  auto subject = args->getSubExpr();
+  if (!isValue) {
+    // sizeof(x.dynamicType) is equivalent to sizeofValue(x)
+    if (auto DTE = dyn_cast<DynamicTypeExpr>(subject)) {
+      subject = DTE->getBase();
+      isValue = true;
+    }
+  }
+
+  EncodedDiagnosticMessage EncodedMessage(Attr->Message);
+  auto diag = TC.diagnose(R.Start, diag::availability_decl_unavailable_msg,
+                          D->getFullName(), EncodedMessage.Message);
+  diag.highlight(R);
+
+  StringRef Prefix = "MemoryLayout<";
+  StringRef Suffix = ">.";
+  if (isValue) {
+    auto valueType = subject->getType()->getRValueType();
+    if (!valueType || valueType->is<ErrorType>()) {
+        // If we dont have good argument, We cannot emit fix-it.
+        return true;
+    }
+
+    // NOTE: We are destructively replacing the source text here.
+    // For instance, `sizeof(x.doSomethig())` => `MemoryLayout<T>.size` where
+    // T is return type of `doSomething()`. If that function have any
+    // side effects, it will break the source.
+    diag.fixItReplace(call->getSourceRange(),
+      (Prefix + valueType->getString() + Suffix + Kind).str());
+  } else {
+    SourceRange PrefixRange(call->getStartLoc(), args->getLParenLoc());
+    SourceRange SuffixRange(args->getRParenLoc());
+
+    // We must truncate `.self`.
+    // E.g. sizeof(T.self) => MemoryLayout<T>.size
+    if (auto *DSE = dyn_cast<DotSelfExpr>(subject))
+      SuffixRange.Start = DSE->getDotLoc();
+
+    diag
+      .fixItReplace(PrefixRange, Prefix)
+      .fixItReplace(SuffixRange, (Suffix + Kind).str());
+  }
+
+  return true;
+}
 
 /// Diagnose uses of unavailable declarations.
 static void diagAvailability(TypeChecker &TC, const Expr *E,
@@ -3456,6 +3567,7 @@ void swift::fixItAccessibility(InFlightDiagnostic &diag, ValueDecl *VD,
   case Accessibility::FilePrivate:  fixItString = "fileprivate ";  break;
   case Accessibility::Internal:     fixItString = "internal ";     break;
   case Accessibility::Public:       fixItString = "public ";       break;
+  case Accessibility::Open:         fixItString = "open ";         break;
   }
 
   DeclAttributes &attrs = VD->getAttrs();

@@ -2140,6 +2140,10 @@ class CollectionExpr : public Expr {
 
   Expr *SemanticExpr = nullptr;
 
+  /// True if the type of this collection expr was inferred by the collection
+  /// fallback type, like [Any].
+  bool IsTypeDefaulted = false;
+
 protected:
   CollectionExpr(ExprKind Kind, SourceLoc LBracketLoc,
                  MutableArrayRef<Expr*> Elements,
@@ -2156,6 +2160,9 @@ public:
   Expr *getElement(unsigned i) const { return Elements[i]; }
   void setElement(unsigned i, Expr *E) { Elements[i] = E; }
   unsigned getNumElements() const { return Elements.size(); }
+
+  bool isTypeDefaulted() const { return IsTypeDefaulted; }
+  void setIsTypeDefaulted(bool value = true) { IsTypeDefaulted = value; }
 
   SourceLoc getLBracketLoc() const { return LBracketLoc; }
   SourceLoc getRBracketLoc() const { return RBracketLoc; }
@@ -3517,30 +3524,36 @@ public:
   }
 };
 
-/// DynamicTypeExpr - "base.dynamicType" - Produces a metatype value.
+/// DynamicTypeExpr - "type(of: base)" - Produces a metatype value.
 ///
-/// The metatype value can comes from evaluating an expression and then
-/// getting its metatype.
+/// The metatype value comes from evaluating an expression then retrieving the
+/// metatype of the result.
 class DynamicTypeExpr : public Expr {
+  SourceLoc KeywordLoc;
+  SourceLoc LParenLoc;
   Expr *Base;
-  SourceLoc MetatypeLoc;
+  SourceLoc RParenLoc;
 
 public:
-  explicit DynamicTypeExpr(Expr *Base, SourceLoc MetatypeLoc, Type Ty)
+  explicit DynamicTypeExpr(SourceLoc KeywordLoc, SourceLoc LParenLoc,
+                           Expr *Base, SourceLoc RParenLoc, Type Ty)
     : Expr(ExprKind::DynamicType, /*Implicit=*/false, Ty),
-      Base(Base), MetatypeLoc(MetatypeLoc) { }
+      KeywordLoc(KeywordLoc), LParenLoc(LParenLoc), Base(Base),
+      RParenLoc(RParenLoc) { }
 
   Expr *getBase() const { return Base; }
   void setBase(Expr *base) { Base = base; }
 
-  SourceLoc getLoc() const { return MetatypeLoc; }
-  SourceLoc getMetatypeLoc() const { return MetatypeLoc; }
-
+  SourceLoc getLoc() const { return KeywordLoc; }
+  SourceRange getSourceRange() const {
+    return SourceRange(KeywordLoc, RParenLoc);
+  }
+  
   SourceLoc getStartLoc() const {
-    return getBase()->getStartLoc();
+    return KeywordLoc;
   }
   SourceLoc getEndLoc() const {
-    return (MetatypeLoc.isValid() ? MetatypeLoc : getBase()->getEndLoc());
+    return RParenLoc;
   }
 
   static bool classof(const Expr *E) {

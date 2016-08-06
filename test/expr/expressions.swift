@@ -13,7 +13,7 @@ var func1 : () -> ()    // No input, no output.
 var func2 : (Int) -> Int
 var func3 : () -> () -> ()                   // Takes nothing, returns a fn.
 var func3a : () -> (() -> ())                // same as func3
-var func6 : (fn : (Int,Int) -> Int) -> ()    // Takes a fn, returns nothing.
+var func6 : (_ fn : (Int,Int) -> Int) -> ()    // Takes a fn, returns nothing.
 var func7 : () -> (Int,Int,Int)              // Takes nothing, returns tuple.
 
 // Top-Level expressions.  These are 'main' content.
@@ -153,7 +153,7 @@ func test3(_ arg1: Int, arg2: Int) -> Int {
   return 4
 }
 
-func test4() -> ((arg1: Int, arg2: Int) -> Int) {
+func test4() -> ((_ arg1: Int, _ arg2: Int) -> Int) {
   return test3
 }
 
@@ -177,7 +177,7 @@ func w4(_: Int) -> Int { return 4 }
 func b1() {}
 
 func foo1(_ a: Int, b: Int) -> Int {}
-func foo2(_ a: Int) -> (b: Int) -> Int {}
+func foo2(_ a: Int) -> (_ b: Int) -> Int {}
 func foo3(_ a: Int = 2, b: Int = 3) {}
 
 prefix operator ^^
@@ -552,7 +552,7 @@ func conversionTest(_ a: inout Double, b: inout Int) {
   var e3 = Empty(Float(d))
 }
 
-struct Rule {
+struct Rule { // expected-note {{'init(target:dependencies:)' declared here}}
   var target: String
   var dependencies: String
 }
@@ -814,8 +814,8 @@ _ = _.foo // expected-error {{type of expression is ambiguous without more conte
 
 // <rdar://problem/22211854> wrong arg list crashing sourcekit
 func r22211854() {
-    func f(_ x: Int, _ y: Int, _ z: String = "") {}
-    func g<T>(_ x: T, _ y: T, _ z: String = "") {}
+    func f(_ x: Int, _ y: Int, _ z: String = "") {} // expected-note 2 {{'f' declared here}}
+    func g<T>(_ x: T, _ y: T, _ z: String = "") {} // expected-note 2 {{'g' declared here}}
 
     f(1) // expected-error{{missing argument for parameter #2 in call}}
     g(1) // expected-error{{missing argument for parameter #2 in call}}
@@ -838,7 +838,7 @@ func r23185177(_ x: P?) -> [String] {
 
 // <rdar://problem/22913570> Miscompile: wrong argument parsing when calling a function in swift2.0
 func r22913570() {
-  func f(_ from: Int = 0, to: Int) {}
+  func f(_ from: Int = 0, to: Int) {} // expected-note {{'f(_:to:)' declared here}}
   f(1 + 1) // expected-error{{missing argument for parameter 'to' in call}}
 }
 
@@ -872,3 +872,28 @@ let _ = (x, 3).1
 (x,y).1 = 7 // expected-error {{cannot assign to immutable expression of type 'Int'}}
 x = (x,(3,y)).1.1
 
+
+// SE-0101 sizeof family functions are reconfigured into MemoryLayout
+protocol Pse0101 {
+  associatedtype Value
+  func getIt() -> Value
+}
+class Cse0101<U> {
+  typealias T = U
+  var val: U { fatalError() }
+}
+func se0101<P: Pse0101>(x: Cse0101<P>) {
+  // Note: The first case is actually not allowed, but it is very common and can be compiled currently.
+  _ = sizeof(P) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-14=MemoryLayout<}} {{15-16=>.size}} {{none}}
+                // expected-warning@-1 {{missing '.self' for reference to metatype of type 'P'}}
+  _ = sizeof(P.self) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-14=MemoryLayout<}} {{15-21=>.size}} {{none}}
+  _ = sizeof(P.Value.self) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-14=MemoryLayout<}} {{21-27=>.size}} {{none}}
+  _ = sizeof(Cse0101<P>.self) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-14=MemoryLayout<}} {{24-30=>.size}} {{none}}
+  _ = alignof(Cse0101<P>.T.self) // expected-error {{'alignof' is unavailable: use MemoryLayout<T>.alignment instead.}} {{7-15=MemoryLayout<}} {{27-33=>.alignment}} {{none}}
+  _ = strideof(P.Type.self) // expected-error {{'strideof' is unavailable: use MemoryLayout<T>.stride instead.}} {{7-16=MemoryLayout<}} {{22-28=>.stride}} {{none}}
+  _ = sizeof(type(of: x)) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-26=MemoryLayout<Cse0101<P>>.size}} {{none}}/
+
+  _ = sizeofValue(x) // expected-error {{'sizeofValue' is unavailable: use MemoryLayout<T>.size instead.}} {{7-21=MemoryLayout<Cse0101<P>>.size}} {{none}}
+  _ = alignofValue(x.val) // expected-error {{'alignofValue' is unavailable: use MemoryLayout<T>.alignment instead.}} {{7-26=MemoryLayout<P>.alignment}} {{none}}
+  _ = strideofValue(x.val.getIt()) // expected-error {{'strideofValue' is unavailable: use MemoryLayout<T>.stride instead.}} {{7-35=MemoryLayout<P.Value>.stride}} {{none}}
+}

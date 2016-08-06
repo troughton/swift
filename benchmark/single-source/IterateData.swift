@@ -1,4 +1,4 @@
-//===--- Data.swift -------------------------------------------------------===//
+//===--- IterateData.swift ------------------------------------------------===//
 //
 // This source file is part of the Swift.org open source project
 //
@@ -29,6 +29,6 @@ public func run_IterateData(_ N: Int) {
   let data = generateData()
 
   for _ in 0...10*N {
-    _ = data.reduce(0, +)
+    _ = data.reduce(0, &+)
   }
 }

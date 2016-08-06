@@ -12,9 +12,6 @@
 // RUN: %line-directive %t/main.swift -- %target-run %t/Set
 // REQUIRES: executable_test
 
-// rdar://27547957
-// XFAIL: swift_test_mode_optimize
-
 import StdlibUnittest
 import StdlibCollectionUnittest
 
@@ -140,12 +137,12 @@ func isNativeSet<T : Hashable>(_ s: Set<T>) -> Bool {
 
 #if _runtime(_ObjC)
 func isNativeNSSet(_ s: NSSet) -> Bool {
-  let className: NSString = NSStringFromClass(s.dynamicType) as NSString
+  let className: NSString = NSStringFromClass(type(of: s)) as NSString
   return className.range(of: "NativeSetStorage").length > 0
 }
 
 func isCocoaNSSet(_ s: NSSet) -> Bool {
-  let className: NSString = NSStringFromClass(s.dynamicType) as NSString
+  let className: NSString = NSStringFromClass(type(of: s)) as NSString
   return className.range(of: "NSSet").length > 0 ||
     className.range(of: "NSCFSet").length > 0
 }
@@ -328,9 +325,9 @@ SetTestSuite.test("AssociatedTypes") {
 SetTestSuite.test("sizeof") {
   var s = Set(["Hello", "world"])
 #if arch(i386) || arch(arm)
-  expectEqual(4, sizeofValue(s))
+  expectEqual(4, MemoryLayout._ofInstance(s).size)
 #else
-  expectEqual(8, sizeofValue(s))
+  expectEqual(8, MemoryLayout._ofInstance(s).size)
 #endif
 }
 
@@ -2563,7 +2560,7 @@ SetTestSuite.test("SetDowncastConditionalEntryPoint") {
   }
 
   // Unsuccessful downcast
-  s.insert("Hello, world")
+  s.insert("Hello, world" as NSString)
   if let sCC = _setDownCastConditional(s) as Set<TestObjCKeyTy>? {
     expectTrue(false)
   }
@@ -2586,7 +2583,7 @@ SetTestSuite.test("SetDowncastConditional") {
   }
 
   // Unsuccessful downcast
-  s.insert("Hello, world, I'm your wild girl. I'm your ch-ch-ch-ch-ch-ch cherry bomb")
+  s.insert("Hello, world, I'm your wild girl. I'm your ch-ch-ch-ch-ch-ch cherry bomb" as NSString)
   if let sCC = s as? Set<TestObjCKeyTy> {
     expectTrue(false)
   }
@@ -2652,7 +2649,7 @@ SetTestSuite.test("SetBridgeFromObjectiveCConditionalEntryPoint") {
   }
 
   // Unsuccessful downcasts
-  s.insert("Hello, world, I'm your wild girl. I'm your ch-ch-ch-ch-ch-ch cherry bomb")
+  s.insert("Hello, world, I'm your wild girl. I'm your ch-ch-ch-ch-ch-ch cherry bomb" as NSString)
   if let sVC = _setBridgeFromObjectiveCConditional(s) as Set<TestBridgedKeyTy>? {
     expectTrue(false)
   }
@@ -2685,7 +2682,7 @@ SetTestSuite.test("SetBridgeFromObjectiveCConditional") {
   }
 
   // Unsuccessful downcasts
-  s.insert("Hello, world, I'm your wild girl. I'm your ch-ch-ch-ch-ch-ch cherry bomb")
+  s.insert("Hello, world, I'm your wild girl. I'm your ch-ch-ch-ch-ch-ch cherry bomb" as NSString)
   if let sCm = s as? Set<TestObjCKeyTy> {
     expectTrue(false)
   }

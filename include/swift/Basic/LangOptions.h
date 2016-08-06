@@ -131,14 +131,11 @@ namespace swift {
 
     /// \brief The upper bound, in bytes, of temporary data that can be
     /// allocated by the constraint solver.
-    unsigned SolverMemoryThreshold = 15000000;
+    unsigned SolverMemoryThreshold = 33554432; /* 32 * 1024 * 1024 */
 
     /// \brief Perform all dynamic allocations using malloc/free instead of
     /// optimized custom allocator, so that memory debugging tools can be used.
     bool UseMalloc = false;
-    
-    /// \brief Enable experimental "switch" pattern-matching features.
-    bool EnableExperimentalPatterns = false;
 
     /// \brief Enable experimental property behavior feature.
     bool EnableExperimentalPropertyBehaviors = false;
@@ -163,9 +160,6 @@ namespace swift {
     /// member of some type instead. This includes inits, computed properties,
     /// and methods.
     bool InferImportAsMember = false;
-
-    /// Whether we are stripping the "NS" prefix from Foundation et al.
-    bool StripNSPrefix = true;
 
     /// Should 'id' in Objective-C be imported as 'Any' in Swift?
     bool EnableIdAsAny = true;

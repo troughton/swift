@@ -15,50 +15,34 @@ import SwiftShims
 // Definitions that make elements of Builtin usable in real code
 // without gobs of boilerplate.
 
-/// Returns the contiguous memory footprint of `T`.
-///
-/// Does not include any dynamically-allocated or "remote" storage.
-/// In particular, `sizeof(X.self)`, when `X` is a class type, is the
-/// same regardless of how many stored properties `X` has.
-@_transparent
+@available(*, unavailable, message: "use MemoryLayout<T>.size instead.")
 public func sizeof<T>(_:T.Type) -> Int {
-  return Int(Builtin.sizeof(T.self))
+  Builtin.unreachable()
 }
 
-/// Returns the contiguous memory footprint of  `T`.
-///
-/// Does not include any dynamically-allocated or "remote" storage.
-/// In particular, `sizeof(a)`, when `a` is a class instance, is the
-/// same regardless of how many stored properties `a` has.
-@_transparent
+@available(*, unavailable, message: "use MemoryLayout<T>.size instead.")
 public func sizeofValue<T>(_:T) -> Int {
-  return sizeof(T.self)
+  Builtin.unreachable()
 }
 
-/// Returns the minimum memory alignment of `T`.
-@_transparent
+@available(*, unavailable, message: "use MemoryLayout<T>.alignment instead.")
 public func alignof<T>(_:T.Type) -> Int {
-  return Int(Builtin.alignof(T.self))
+  Builtin.unreachable()
 }
 
-/// Returns the minimum memory alignment of `T`.
-@_transparent
+@available(*, unavailable, message: "use MemoryLayout<T>.alignment instead.")
 public func alignofValue<T>(_:T) -> Int {
-  return alignof(T.self)
+  Builtin.unreachable()
 }
 
-/// Returns the least possible interval between distinct instances of
-/// `T` in memory.  The result is always positive.
-@_transparent
+@available(*, unavailable, message: "use MemoryLayout<T>.stride instead.")
 public func strideof<T>(_:T.Type) -> Int {
-  return Int(Builtin.strideof_nonzero(T.self))
+  Builtin.unreachable()
 }
 
-/// Returns the least possible interval between distinct instances of
-/// `T` in memory.  The result is always positive.
-@_transparent
+@available(*, unavailable, message: "use MemoryLayout<T>.stride instead.")
 public func strideofValue<T>(_:T) -> Int {
-  return strideof(T.self)
+  Builtin.unreachable()
 }
 
 // This function is the implementation of the `_roundUp` overload set.  It is
@@ -100,7 +84,7 @@ internal func _roundUp<DestinationType>(
   return UnsafeMutablePointer<DestinationType>(
     bitPattern: _roundUpImpl(
       UInt(bitPattern: pointer),
-      toAlignment: alignof(DestinationType.self))
+      toAlignment: MemoryLayout<DestinationType>.alignment)
   ).unsafelyUnwrapped
 }
 
@@ -119,7 +103,7 @@ func _canBeClass<T>(_: T.Type) -> Int8 {
 ///
 @_transparent
 public func unsafeBitCast<T, U>(_ x: T, to: U.Type) -> U {
-  _precondition(sizeof(T.self) == sizeof(U.self),
+  _precondition(MemoryLayout<T>.size == MemoryLayout<U>.size,
     "can't unsafeBitCast between types of different sizes")
   return Builtin.reinterpretCast(x)
 }
@@ -249,8 +233,8 @@ public func unsafeDowncast<T : AnyObject>(_ x: AnyObject, to: T.Type) -> T {
 public func _getUnsafePointerToStoredProperties(_ x: AnyObject)
   -> UnsafeMutableRawPointer {
   let storedPropertyOffset = _roundUp(
-    sizeof(_HeapObject.self),
-    toAlignment: alignof(Optional<AnyObject>.self))
+    MemoryLayout<_HeapObject>.size,
+    toAlignment: MemoryLayout<Optional<AnyObject>>.alignment)
   return UnsafeMutableRawPointer(Builtin.bridgeToRawPointer(x)) +
     storedPropertyOffset
 }
@@ -482,7 +466,7 @@ internal func _makeBridgeObject(
 
   _sanityCheck(
     _isObjCTaggedPointer(object)
-    || _usesNativeSwiftReferenceCounting(object.dynamicType)
+    || _usesNativeSwiftReferenceCounting(type(of: object))
     || bits == _objectPointerIsObjCBit,
     "All spare bits must be set in non-native, non-tagged bridge objects"
   )
@@ -496,14 +480,15 @@ internal func _makeBridgeObject(
   )
 }
 
+@_silgen_name("_swift_class_getSuperclass")
+internal func _swift_class_getSuperclass(_ t: AnyClass) -> AnyClass?
+
 /// Returns the superclass of `t`, if any.  The result is `nil` if `t` is
 /// a root class or class protocol.
 @inline(__always)
 public // @testable
 func _getSuperclass(_ t: AnyClass) -> AnyClass? {
-  return unsafeBitCast(
-    _swift_class_getSuperclass(unsafeBitCast(t, to: OpaquePointer.self)),
-    to: AnyClass.self)
+  return _swift_class_getSuperclass(t)
 }
 
 /// Returns the superclass of `t`, if any.  The result is `nil` if `t` is
@@ -559,7 +544,7 @@ func _isUnique_native<T>(_ object: inout T) -> Bool {
     (_bitPattern(Builtin.reinterpretCast(object)) & _objectPointerSpareBits)
     == 0)
   _sanityCheck(_usesNativeSwiftReferenceCounting(
-      (Builtin.reinterpretCast(object) as AnyObject).dynamicType))
+      type(of: Builtin.reinterpretCast(object) as AnyObject)))
   return Bool(Builtin.isUnique_native(&object))
 }
 
@@ -574,7 +559,7 @@ func _isUniqueOrPinned_native<T>(_ object: inout T) -> Bool {
     (_bitPattern(Builtin.reinterpretCast(object)) & _objectPointerSpareBits)
     == 0)
   _sanityCheck(_usesNativeSwiftReferenceCounting(
-      (Builtin.reinterpretCast(object) as AnyObject).dynamicType))
+      type(of: Builtin.reinterpretCast(object) as AnyObject)))
   return Bool(Builtin.isUniqueOrPinned_native(&object))
 }
 
@@ -600,8 +585,8 @@ public func unsafeUnwrap<T>(_ nonEmpty: T?) -> T {
 
 /// Extract an object reference from an Any known to contain an object.
 internal func _unsafeDowncastToAnyObject(fromAny any: Any) -> AnyObject {
-  _sanityCheck(any.dynamicType is AnyObject.Type
-               || any.dynamicType is AnyObject.Protocol,
+  _sanityCheck(type(of: any) is AnyObject.Type
+               || type(of: any) is AnyObject.Protocol,
                "Any expected to contain object reference")
   // With a SIL instruction, we could more efficiently grab the object reference
   // out of the Any's inline storage.

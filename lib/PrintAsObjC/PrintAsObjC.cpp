@@ -15,6 +15,7 @@
 #include "swift/AST/AST.h"
 #include "swift/AST/ASTVisitor.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/AST/NameLookup.h"
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/AST/TypeVisitor.h"
 #include "swift/AST/Comment.h"
@@ -37,14 +38,22 @@
 
 using namespace swift;
 
-static bool isNSObject(ASTContext &ctx, Type type) {
+static bool isNSObjectOrAnyHashable(ASTContext &ctx, Type type) {
   if (auto classDecl = type->getClassOrBoundGenericClass()) {
     return classDecl->getName()
              == ctx.getSwiftId(KnownFoundationEntity::NSObject) &&
            classDecl->getModuleContext()->getName() == ctx.Id_ObjectiveC;
   }
+  if (auto nomDecl = type->getAnyNominal()) {
+    return nomDecl->getName() == ctx.getIdentifier("AnyHashable") &&
+      nomDecl->getModuleContext() == ctx.getStdlibModule();
+  }
 
   return false;
+}
+
+static bool isAnyObjectOrAny(Type type) {
+  return type->isAnyObject() || type->isAny();
 }
 
 /// Returns true if \p name matches a keyword in any Clang language mode.
@@ -88,9 +97,13 @@ static StringRef getNameForObjC(const ValueDecl *VD,
   if (customNamesOnly)
     return StringRef();
 
-  if (auto clangDecl = dyn_cast_or_null<clang::NamedDecl>(VD->getClangDecl()))
+  if (auto clangDecl = dyn_cast_or_null<clang::NamedDecl>(VD->getClangDecl())) {
     if (const clang::IdentifierInfo *II = clangDecl->getIdentifier())
       return II->getName();
+    if (auto *anonDecl = dyn_cast<clang::TagDecl>(clangDecl))
+      if (auto *anonTypedef = anonDecl->getTypedefNameForAnonDecl())
+        return anonTypedef->getIdentifier()->getName();
+  }
 
   return VD->getName().str();
 }
@@ -125,6 +138,8 @@ class ObjCPrinter : private DeclVisitor<ObjCPrinter>,
   Accessibility minRequiredAccess;
   bool protocolMembersOptional = false;
 
+  Optional<Type> NSCopyingType;
+  
   friend ASTVisitor<ObjCPrinter>;
   friend TypeVisitor<ObjCPrinter>;
 
@@ -137,11 +152,19 @@ public:
     visit(const_cast<Decl *>(D));
   }
 
-  bool shouldInclude(const ValueDecl *VD) {
-    return (VD->isObjC() || VD->getAttrs().hasAttribute<CDeclAttr>()) &&
-      VD->getFormalAccess() >= minRequiredAccess &&
-      !(isa<ConstructorDecl>(VD) && 
-        cast<ConstructorDecl>(VD)->hasStubImplementation());
+  bool shouldInclude(const ValueDecl *VD, bool checkParent = true) {
+    if (!(VD->isObjC() || VD->getAttrs().hasAttribute<CDeclAttr>()))
+      return false;
+    if (VD->getFormalAccess() >= minRequiredAccess) {
+      return true;
+    } else if (checkParent) {
+      if (auto ctor = dyn_cast<ConstructorDecl>(VD)) {
+        // Check if we're overriding an initializer that is visible to obj-c
+        if (auto parent = ctor->getOverriddenDecl())
+          return shouldInclude(parent, false);
+      }
+    }
+    return false;
   }
 
 private:
@@ -479,7 +502,12 @@ private:
 
     // Swift designated initializers are Objective-C designated initializers.
     if (auto ctor = dyn_cast<ConstructorDecl>(AFD)) {
-      if (ctor->isDesignatedInit() &&
+      if (ctor->hasStubImplementation()
+          || ctor->getFormalAccess() < minRequiredAccess) {
+        // This will only be reached if the overridden initializer has the
+        // required access
+        os << " SWIFT_UNAVAILABLE";
+      } else if (ctor->isDesignatedInit() &&
           !isa<ProtocolDecl>(ctor->getDeclContext())) {
         os << " OBJC_DESIGNATED_INITIALIZER";
       }
@@ -846,6 +874,8 @@ private:
     auto &ctx = swiftNominal->getASTContext();
     assert(objcClass);
 
+    Type rewrittenArgsBuf[2];
+
     // Detect when the type arguments correspond to the unspecialized
     // type, and clear them out. There is some type-specific hackery
     // here for:
@@ -854,12 +884,37 @@ private:
     //   NSDictionary<NSObject *, id> --> NSDictionary
     //   NSSet<id> --> NSSet
     if (!typeArgs.empty() &&
-        (!hasGenericObjCType(objcClass) ||
-         (swiftNominal == ctx.getArrayDecl() && typeArgs[0]->isAnyObject()) ||
-         (swiftNominal == ctx.getDictionaryDecl() &&
-          isNSObject(ctx, typeArgs[0]) && typeArgs[1]->isAnyObject()) ||
-         (swiftNominal == ctx.getSetDecl() && isNSObject(ctx, typeArgs[0])))) {
+        (!hasGenericObjCType(objcClass)
+         || (swiftNominal == ctx.getArrayDecl() &&
+             isAnyObjectOrAny(typeArgs[0]))
+         || (swiftNominal == ctx.getDictionaryDecl() &&
+             isNSObjectOrAnyHashable(ctx, typeArgs[0]) &&
+             isAnyObjectOrAny(typeArgs[1]))
+         || (swiftNominal == ctx.getSetDecl() &&
+             isNSObjectOrAnyHashable(ctx, typeArgs[0])))) {
       typeArgs = {};
+    }
+    
+    // Use the proper upper id<NSCopying> bound for Dictionaries with
+    // upper-bounded keys.
+    else if (swiftNominal == ctx.getDictionaryDecl() &&
+             isNSObjectOrAnyHashable(ctx, typeArgs[0])) {
+      if (Module *M = ctx.getLoadedModule(ctx.Id_Foundation)) {
+        if (!NSCopyingType) {
+          UnqualifiedLookup lookup(ctx.getIdentifier("NSCopying"), M, nullptr);
+          auto type = lookup.getSingleTypeResult();
+          if (type && isa<ProtocolDecl>(type)) {
+            NSCopyingType = type->getDeclaredType();
+          } else {
+            NSCopyingType = Type();
+          }
+        }
+        if (*NSCopyingType) {
+          rewrittenArgsBuf[0] = *NSCopyingType;
+          rewrittenArgsBuf[1] = typeArgs[1];
+          typeArgs = rewrittenArgsBuf;
+        }
+      }
     }
 
     // Print the class type.
@@ -1106,12 +1161,17 @@ private:
     // Use the type as bridged to Objective-C unless the element type is itself
     // an imported type or a collection.
     const StructDecl *SD = ty->getStructOrBoundGenericStruct();
-    if (SD != ctx.getArrayDecl() &&
+    if (ty->isAny()) {
+      ty = ctx.getProtocol(KnownProtocolKind::AnyObject)
+        ->getDeclaredType();
+    } else if (SD != ctx.getArrayDecl() &&
         SD != ctx.getDictionaryDecl() &&
         SD != ctx.getSetDecl() &&
         !isSwiftNewtype(SD)) {
       ty = *ctx.getBridgedToObjC(&M, ty, /*resolver*/nullptr);
     }
+    
+    assert(ty && "unknown bridged type");
 
     print(ty, None);
   }
@@ -1276,25 +1336,14 @@ private:
     PCT = cast<ProtocolCompositionType>(canonicalComposition);
 
     // Dig out the protocols. If we see 'Error', record that we saw it.
-    bool hasError = false;
     SmallVector<ProtocolDecl *, 4> protos;
     for (auto protoTy : PCT->getProtocols()) {
       auto proto = protoTy->castTo<ProtocolType>()->getDecl();
-      if (proto->isSpecificProtocol(KnownProtocolKind::Error)) {
-        hasError = true;
-        continue;
-      }
-
       protos.push_back(proto);
     }
 
-    os << (isMetatype ? "Class"
-           : hasError ? "NSError"
-           : "id");
+    os << (isMetatype ? "Class" : "id");
     printProtocols(protos);
-
-    if (hasError && !isMetatype)
-      os << " *";
 
     printNullability(optionalKind);
   }
@@ -1810,10 +1859,9 @@ public:
 
     ASTContext &ctx = M.getASTContext();
 
-    auto protos = ED->getAllProtocols();
+    SmallVector<ProtocolConformance *, 1> conformances;
     auto errorTypeProto = ctx.getProtocol(KnownProtocolKind::Error);
-    if (std::find(protos.begin(), protos.end(), errorTypeProto) !=
-        protos.end()) {
+    if (ED->lookupConformance(&M, errorTypeProto, conformances)) {
       bool hasDomainCase = std::any_of(ED->getAllElements().begin(),
                                        ED->getAllElements().end(),
                                        [](const EnumElementDecl *elem) {
@@ -1960,6 +2008,9 @@ public:
            "#  define SWIFT_ENUM_NAMED(_type, _name, SWIFT_NAME) "
              "SWIFT_ENUM(_type, _name)\n"
            "# endif\n"
+           "#endif\n"
+           "#if !defined(SWIFT_UNAVAILABLE)\n"
+           "# define SWIFT_UNAVAILABLE __attribute__((unavailable))\n"
            "#endif\n"
            ;
     static_assert(SWIFT_MAX_IMPORTED_SIMD_ELEMENTS == 4,

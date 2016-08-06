@@ -310,17 +310,6 @@ namespace {
       }
       OS << ')';
     }
-    void visitNominalTypePattern(NominalTypePattern *P) {
-      printCommon(P, "pattern_nominal") << ' ';
-      P->getCastTypeLoc().getType().print(OS);
-      // FIXME: We aren't const-correct.
-      for (auto &elt : P->getMutableElements()) {
-        OS << '\n';
-        OS.indent(Indent) << elt.getPropertyName() << ": ";
-        printRec(elt.getSubPattern());
-      }
-      OS << ')';
-    }
     void visitExprPattern(ExprPattern *P) {
       printCommon(P, "pattern_expr");
       OS << '\n';
@@ -578,6 +567,9 @@ namespace {
           break;
         case Accessibility::Public:
           OS << "public";
+          break;
+        case Accessibility::Open:
+          OS << "open";
           break;
         }
       }
@@ -2916,8 +2908,11 @@ namespace {
       }
 
       printFlag(T->isAutoClosure(), "autoclosure");
-      printFlag(T->isNoEscape(), "noescape");
-      printFlag(T->isExplicitlyEscaping(), "escaping");
+
+      // Dump out either @noescape or @escaping
+      printFlag(T->isNoEscape(), "@noescape");
+      printFlag(!T->isNoEscape(), "@escaping");
+
       printFlag(T->throws(), "throws");
 
       printRec("input", T->getInput());

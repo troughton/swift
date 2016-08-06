@@ -357,11 +357,20 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
       // frameworks are broken by it.
       "-D_ISO646_H_", "-D__ISO646_H",
 
+      // Request new APIs from AppKit.
+      "-DSWIFT_SDK_OVERLAY_APPKIT_EPOCH=2",
+
       // Request new APIs from Foundation.
       "-DSWIFT_SDK_OVERLAY_FOUNDATION_EPOCH=8",
 
       // Request new APIs from SceneKit.
-      "-DSWIFT_SDK_OVERLAY2_SCENEKIT_EPOCH=2",
+      "-DSWIFT_SDK_OVERLAY2_SCENEKIT_EPOCH=3",
+
+      // Request new APIs from GameplayKit.
+      "-DSWIFT_SDK_OVERLAY_GAMEPLAYKIT_EPOCH=1",
+
+      // Request new APIs from SpriteKit.
+      "-DSWIFT_SDK_OVERLAY_SPRITEKIT_EPOCH=1",
 
       // Request new APIs from CoreImage.
       "-DSWIFT_SDK_OVERLAY_COREIMAGE_EPOCH=2",
@@ -374,6 +383,9 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
 
       // Request new APIs from CoreGraphics.
       "-DSWIFT_SDK_OVERLAY_COREGRAPHICS_EPOCH=0",
+
+      // Request new APIs from UIKit.
+      "-DSWIFT_SDK_OVERLAY_UIKIT_EPOCH=2",
     });
 
     // Get the version of this compiler and pass it to
@@ -1309,13 +1321,6 @@ ClangImporter::Implementation::Implementation(ASTContext &ctx,
     DeprecatedAsUnavailableMessage =
       "APIs deprecated as of OS X 10.9 and earlier are unavailable in Swift";
   }
-
-  // Prepopulate the set of module prefixes.
-  // FIXME: Hard-coded list should move into the module map language.
-  if (ctx.LangOpts.StripNSPrefix) {
-    ModulePrefixes["Foundation"] = "NS";
-    ModulePrefixes["ObjectiveC"] = "NS";
-  }
 }
 
 
@@ -1817,8 +1822,7 @@ static unsigned stripModulePrefixLength(
   // Check whether this is a known Foundation entity that conflicts with the
   // standard library.
   if (auto known = getKnownFoundationEntity(baseName))
-    if (nameConflictsWithStandardLibrary(*known))
-      return 0;
+    return 0;
 
   // If the character following the prefix is a '_', eat that, too.
   unsigned prefixLen = prefixPos->second.size();
@@ -4129,11 +4133,12 @@ void ClangModuleUnit::collectLinkLibraries(
 }
 
 StringRef ClangModuleUnit::getFilename() const {
-  if (!clangModule) {
+  if (!clangModule)
     return "<imports>";
-  }
-  return clangModule->getASTFile()
-    ? clangModule->getASTFile()->getName() : StringRef();
+  if (const clang::FileEntry *F = clangModule->getASTFile())
+    if (F->getName())
+      return F->getName();
+  return StringRef();
 }
 
 clang::TargetInfo &ClangImporter::getTargetInfo() const {
@@ -4435,7 +4440,6 @@ ClangImporter::Implementation::SwiftNameLookupExtension::hashExtension(
                             SWIFT_LOOKUP_TABLE_VERSION_MAJOR,
                             SWIFT_LOOKUP_TABLE_VERSION_MINOR,
                             Impl.InferImportAsMember,
-                            Impl.SwiftContext.LangOpts.StripNSPrefix,
                             Impl.HonorSwiftNewtypeAttr);
 }
 

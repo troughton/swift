@@ -85,7 +85,7 @@ public protocol RecoverableError : Error {
   /// "document" granularity, that do not affect the entire
   /// application.
   func attemptRecovery(optionIndex recoveryOptionIndex: Int,
-                       resultHandler handler: (recovered: Bool) -> Void)
+                       resultHandler handler: (_ recovered: Bool) -> Void)
 
   /// Attempt to recover from this error when the user selected the
   /// option at the given index. Returns true to indicate
@@ -103,8 +103,8 @@ public extension RecoverableError {
   /// mechanism (``attemptRecovery(optionIndex:)``) to implement
   /// document-modal recovery.
   func attemptRecovery(optionIndex recoveryOptionIndex: Int,
-                       resultHandler handler: (recovered: Bool) -> Void) {
-    handler(recovered: attemptRecovery(optionIndex: recoveryOptionIndex))
+                       resultHandler handler: (_ recovered: Bool) -> Void) {
+    handler(attemptRecovery(optionIndex: recoveryOptionIndex))
   }
 }
 
@@ -241,6 +241,11 @@ extension NSError : Error {
   public var _domain: String { return domain }
   public var _code: Int { return code }
   public var _userInfo: Any? { return userInfo }
+
+  /// The "embedded" NSError is itself.
+  public func _getEmbeddedNSError() -> AnyObject? {
+    return self
+  }
 }
 
 extension CFError : Error {
@@ -254,6 +259,11 @@ extension CFError : Error {
 
   public var _userInfo: Any? {
     return CFErrorCopyUserInfo(self) as Any
+  }
+
+  /// The "embedded" NSError is itself.
+  public func _getEmbeddedNSError() -> AnyObject? {
+    return self
   }
 }
 
@@ -496,6 +506,11 @@ extension _ErrorCodeProtocol where Self._ErrorType: _BridgedStoredNSError {
 }
 
 extension _BridgedStoredNSError {
+  /// Retrieve the embedded NSError from a bridged, stored NSError.
+  public func _getEmbeddedNSError() -> AnyObject? {
+    return _nsError
+  }
+
   public static func == (lhs: Self, rhs: Self) -> Bool {
     return lhs._nsError.isEqual(rhs._nsError)
   }

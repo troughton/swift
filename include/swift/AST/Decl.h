@@ -288,6 +288,11 @@ class alignas(1 << DeclAlignInBits) Decl {
     /// once (either in its declaration, or once later), making it immutable.
     unsigned IsLet : 1;
 
+    /// \brief Whether this is an 'inout' parameter; this is preferable
+    /// to checking if the parameter type is an InOutType, because invalid
+    /// inout parameters have an error type.
+    unsigned IsInOut : 1;
+
     /// \brief Whether this vardecl has an initial value bound to it in a way
     /// that isn't represented in the AST with an initializer in the pattern
     /// binding.  This happens in cases like "for i in ...", switch cases, etc.
@@ -301,7 +306,7 @@ class alignas(1 << DeclAlignInBits) Decl {
     /// a.storage for lazy var a is a decl that cannot be accessed.
     unsigned IsUserAccessible : 1;
   };
-  enum { NumVarDeclBits = NumAbstractStorageDeclBits + 5 };
+  enum { NumVarDeclBits = NumAbstractStorageDeclBits + 6 };
   static_assert(NumVarDeclBits <= 32, "fits in an unsigned");
   
   class EnumElementDeclBitfields {
@@ -812,6 +817,13 @@ public:
 
   /// Whether this declaration is weak-imported.
   bool isWeakImported(ModuleDecl *fromModule) const;
+
+  /// Returns true if the nature of this declaration allows overrides.
+  /// Note that this does not consider whether it is final or whether
+  /// the class it's on is final.
+  ///
+  /// If this returns true, the decl can be safely casted to ValueDecl.
+  bool isPotentiallyOverridable() const;
 
   // Make vanilla new/delete illegal for Decls.
   void *operator new(size_t Bytes) = delete;
@@ -1840,6 +1852,9 @@ public:
     InitCheckedAndRemoved.setInt(
       InitCheckedAndRemoved.getInt() | Flags::Checked);
   }
+
+  // Return the first variable initialized by this pattern.
+  VarDecl *getAnchoringVarDecl() const;
 };
 
 /// \brief This decl contains a pattern and optional initializer for a set
@@ -2184,7 +2199,8 @@ public:
   Accessibility getFormalAccess(const DeclContext *useDC = nullptr) const {
     assert(hasAccessibility() && "accessibility not computed yet");
     Accessibility result = TypeAndAccess.getInt().getValue();
-    if (useDC && result == Accessibility::Internal)
+    if (useDC && (result == Accessibility::Internal ||
+                  result == Accessibility::Public))
       return getFormalAccessImpl(useDC);
     return result;
   }
@@ -3731,7 +3747,7 @@ enum class AccessStrategy : unsigned char {
 /// Information about a behavior instantiated by a storage declaration.
 ///
 /// TODO: Accessors, composed behaviors
-struct BehaviorRecord {
+struct alignas(1 << 3) BehaviorRecord {
   // The behavior name.
   TypeRepr *ProtocolName;
   // The parameter expression, if any.
@@ -3838,7 +3854,7 @@ private:
   struct GetSetRecord;
   
   /// This is stored immediately before the GetSetRecord.
-  struct AddressorRecord {
+  struct alignas(1 << 3) AddressorRecord {
     FuncDecl *Address = nullptr;        // User-defined address accessor
     FuncDecl *MutableAddress = nullptr; // User-defined mutableAddress accessor
 
@@ -3850,7 +3866,7 @@ private:
   void configureAddressorRecord(AddressorRecord *record,
                                FuncDecl *addressor, FuncDecl *mutableAddressor);
 
-  struct GetSetRecord {
+  struct alignas(1 << 3) GetSetRecord {
     SourceRange Braces;
     FuncDecl *Get = nullptr;       // User-defined getter
     FuncDecl *Set = nullptr;       // User-defined setter
@@ -4234,6 +4250,7 @@ protected:
     VarDeclBits.IsUserAccessible = true;
     VarDeclBits.IsStatic = IsStatic;
     VarDeclBits.IsLet = IsLet;
+    VarDeclBits.IsInOut = false;
     VarDeclBits.IsDebuggerVar = false;
     VarDeclBits.HasNonPatternBindingInit = false;
     setType(Ty);
@@ -4330,6 +4347,10 @@ public:
   /// Is this an immutable 'let' property?
   bool isLet() const { return VarDeclBits.IsLet; }
   void setLet(bool IsLet) { VarDeclBits.IsLet = IsLet; }
+
+  /// Is this an 'inout' parameter?
+  bool isInOut() const { return VarDeclBits.IsInOut; }
+  void setInOut(bool InOut) { VarDeclBits.IsInOut = InOut; }
 
   /// Return true if this vardecl has an initial value bound to it in a way
   /// that isn't represented in the AST with an initializer in the pattern
@@ -4439,6 +4460,7 @@ public:
   ExprHandle *getDefaultValue() const {
     return DefaultValueAndIsVariadic.getPointer();
   }
+
   /// Whether or not this parameter is varargs.
   bool isVariadic() const { return DefaultValueAndIsVariadic.getInt(); }
   void setVariadic(bool value = true) {DefaultValueAndIsVariadic.setInt(value);}
@@ -6136,6 +6158,16 @@ inline ArrayRef<Requirement> ExtensionDecl::getGenericRequirements() const {
     return { };
 
   return GenericSig->getRequirements();
+}
+
+inline bool Decl::isPotentiallyOverridable() const {
+  if (isa<VarDecl>(this) ||
+      isa<SubscriptDecl>(this) ||
+      isa<FuncDecl>(this)) {
+    return getDeclContext()->getAsClassOrClassExtensionContext();
+  } else {
+    return false;
+  }
 }
 
 } // end namespace swift

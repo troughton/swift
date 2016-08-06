@@ -77,6 +77,7 @@ set(SWIFTLIB_ESSENTIAL
   LifetimeManager.swift
   ManagedBuffer.swift
   Map.swift.gyb
+  MemoryLayout.swift
   Mirrors.swift.gyb
   Misc.swift
   MutableCollection.swift
@@ -148,10 +149,10 @@ set(SWIFTLIB_SOURCES
   Zip.swift
   )
 set(GROUP_INFO_JSON_FILE ${CMAKE_CURRENT_SOURCE_DIR}/GroupInfo.json)
-set(swift_core_link_flags)
+set(swift_core_link_flags "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}")
 set(swift_core_framework_depends)
 set(swift_core_private_link_libraries)
-set(swift_stdlib_compile_flags)
+set(swift_stdlib_compile_flags "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}")
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   list(APPEND swift_core_link_flags "-all_load")
   list(APPEND swift_core_framework_depends Foundation)

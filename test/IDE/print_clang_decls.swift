@@ -89,7 +89,7 @@
 // FOUNDATION-NEXT: subscript(idx: Int) -> Any { get }
 
 // FOUNDATION-LABEL: {{^}}/// Aaa.  NSRuncingMode.  Bbb.{{$}}
-// FOUNDATION-NEXT: {{^}}enum RuncingMode : UInt {{{$}}
+// FOUNDATION-NEXT: {{^}}enum NSRuncingMode : UInt {{{$}}
 // FOUNDATION-NEXT: {{^}}  init?(rawValue: UInt){{$}}
 // FOUNDATION-NEXT: {{^}}  var rawValue: UInt { get }{{$}}
 // FOUNDATION-NEXT: {{^}}  case mince{{$}}
@@ -97,13 +97,13 @@
 // FOUNDATION-NEXT: {{^}}}{{$}}
 
 // FOUNDATION-LABEL: {{^}}/// Aaa.  NSRuncingOptions.  Bbb.{{$}}
-// FOUNDATION-NEXT: {{^}}struct RuncingOptions : OptionSet {{{$}}
+// FOUNDATION-NEXT: {{^}}struct NSRuncingOptions : OptionSet {{{$}}
 // FOUNDATION-NEXT: {{^}}  init(rawValue: UInt){{$}}
 // FOUNDATION-NEXT: {{^}}  let rawValue: UInt{{$}}
 // FOUNDATION-NEXT: {{^}}  @available(*, unavailable, message: "use [] to construct an empty option set"){{$}}
-// FOUNDATION-NEXT: {{^}}  static var none: RuncingOptions { get }{{$}}
-// FOUNDATION-NEXT: {{^}}  static var enableMince: RuncingOptions { get }{{$}}
-// FOUNDATION-NEXT: {{^}}  static var enableQuince: RuncingOptions { get }{{$}}
+// FOUNDATION-NEXT: {{^}}  static var none: NSRuncingOptions { get }{{$}}
+// FOUNDATION-NEXT: {{^}}  static var enableMince: NSRuncingOptions { get }{{$}}
+// FOUNDATION-NEXT: {{^}}  static var enableQuince: NSRuncingOptions { get }{{$}}
 // FOUNDATION-NEXT: {{^}}}{{$}}
 
 // FOUNDATION-LABEL: {{^}}/// Unavailable Global Functions{{$}}
@@ -120,8 +120,8 @@
 // CHECK-NULLABILITY: class SomeClass {
 // CHECK-NULLABILITY:   class func methodA(_ obj: SomeClass?) -> Any{{$}}
 // CHECK-NULLABILITY:   func methodA(_ obj: SomeClass?) -> Any{{$}}
-// CHECK-NULLABILITY:   class func methodB(_ block: ((Int32, Int32) -> Int32)? = nil) -> Any{{$}}
-// CHECK-NULLABILITY:   func methodB(_ block: ((Int32, Int32) -> Int32)? = nil) -> Any{{$}}
+// CHECK-NULLABILITY:   class func methodB(_ block: (@escaping (Int32, Int32) -> Int32)? = nil) -> Any{{$}}
+// CHECK-NULLABILITY:   func methodB(_ block: (@escaping (Int32, Int32) -> Int32)? = nil) -> Any{{$}}
 // CHECK-NULLABILITY:   func methodC() -> Any?
 // CHECK-NULLABILITY:   var property: Any?
 // CHECK-NULLABILITY:   func stringMethod() -> String{{$}}

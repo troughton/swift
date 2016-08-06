@@ -78,7 +78,6 @@ ParserResult<TypeRepr> Parser::parseTypeSimple(Diag<> MessageID,
     consumeToken(tok::code_complete);
     return makeParserCodeCompletionResult<TypeRepr>();
   case tok::kw_super:
-  case tok::kw_dynamicType:
   case tok::kw_self:
     // These keywords don't start a decl or a statement, and thus should be
     // safe to skip over.
@@ -681,7 +680,7 @@ ParserResult<TupleTypeRepr> Parser::parseTypeTupleBody() {
       SourceLoc secondNameLoc = std::get<3>(currentLabel);
 
       // True tuples have labels.
-      if (!isFunctionType || !Context.LangOpts.SuppressArgumentLabelsInTypes) {
+      if (!isFunctionType) {
         // If there were two names, complain.
         if (firstNameLoc.isValid() && secondNameLoc.isValid()) {
           auto diag = diagnose(firstNameLoc, diag::tuple_type_multiple_labels);

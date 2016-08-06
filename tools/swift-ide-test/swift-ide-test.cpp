@@ -309,11 +309,6 @@ HonorSwiftNewtypeAttr("enable-swift-newtype",
                       llvm::cl::init(false));
 
 static llvm::cl::opt<bool>
-StripNSPrefix("enable-strip-ns-prefix",
-              llvm::cl::desc("Strip the NS prefix from Foundation et al"),
-              llvm::cl::init(false));
-
-static llvm::cl::opt<bool>
 DisableObjCAttrRequiresFoundationModule(
     "disable-objc-attr-requires-foundation-module",
     llvm::cl::desc("Allow @objc to be used freely"),
@@ -543,6 +538,9 @@ static llvm::cl::opt<bool>
 NoEmptyLineBetweenMembers("no-empty-line-between-members",
                           llvm::cl::desc("Print no empty line between members."),
                           llvm::cl::init(false));
+
+static llvm::cl::opt<bool> DebugConstraintSolver("debug-constraints",
+    llvm::cl::desc("Enable verbose debugging from the constraint solver."));
 } // namespace options
 
 static std::unique_ptr<llvm::MemoryBuffer>
@@ -1110,6 +1108,7 @@ private:
     ValueDecl *Dcl = nullptr;
     TypeDecl *CtorTyRef = nullptr;
     ModuleEntity Mod;
+    Identifier ArgName;
     bool IsRef = true;
 
     SemanticSourceEntity(CharSourceRange Range,
@@ -1125,6 +1124,14 @@ private:
                          ModuleEntity Mod)
       : Range(Range),
         Mod(Mod) {}
+
+    SemanticSourceEntity(CharSourceRange Range,
+                         ValueDecl *Dcl,
+                         Identifier argName)
+      : Range(Range),
+        Dcl(Dcl),
+        ArgName(argName),
+        IsRef(true) {}
   };
 
   bool walkToDeclPre(Decl *D, CharSourceRange Range) override {
@@ -1148,7 +1155,7 @@ private:
 
   bool visitCallArgName(Identifier Name, CharSourceRange Range,
                         ValueDecl *D) override {
-    annotateSourceEntity({ Range, D, nullptr, /*IsRef=*/true });
+    annotateSourceEntity({ Range, D, Name });
     return true;
   }
 
@@ -1224,6 +1231,9 @@ private:
       if (Entity.Mod.isSystemModule())
         OS << 'i';
       OS << "Mod";
+    }
+    if (!Entity.ArgName.empty()) {
+      OS << "#" << Entity.ArgName.str();
     }
 
     OS << '>';
@@ -2782,7 +2792,6 @@ int main(int argc, char *argv[]) {
   InitInvok.getLangOptions().Swift3Migration |= options::Swift3Migration;
   InitInvok.getLangOptions().InferImportAsMember |=
     options::InferImportAsMember;
-  InitInvok.getLangOptions().StripNSPrefix |= options::StripNSPrefix;
   InitInvok.getClangImporterOptions().ImportForwardDeclarations |=
     options::ObjCForwardDeclarations;
   InitInvok.getClangImporterOptions().InferImportAsMember |=
@@ -2799,6 +2808,9 @@ int main(int argc, char *argv[]) {
     options::DebugForbidTypecheckPrefix;
   InitInvok.getLangOptions().EnableObjCAttrRequiresFoundation =
     !options::DisableObjCAttrRequiresFoundationModule;
+
+  InitInvok.getLangOptions().DebugConstraintSolver =
+      options::DebugConstraintSolver;
 
   for (auto ConfigName : options::BuildConfigs)
     InitInvok.getLangOptions().addCustomConditionalCompilationFlag(ConfigName);

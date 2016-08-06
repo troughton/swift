@@ -585,7 +585,7 @@ private:
         Info.ID == diag::invalid_ibinspectable.ID ||
         Info.ID == diag::invalid_ibaction_decl.ID)
       return false;
-    // Adding .dynamicType interacts poorly with the swift migrator by
+    // Adding type(of:) interacts poorly with the swift migrator by
     // invalidating some inits with type errors.
     if (Info.ID == diag::init_not_instance_member.ID)
       return false;
@@ -601,6 +601,9 @@ private:
         Info.ID == diag::convert_let_to_var.ID ||
         Info.ID == diag::parameter_extraneous_double_up.ID ||
         Info.ID == diag::attr_decl_attr_now_on_type.ID ||
+        Info.ID == diag::noescape_parameter.ID ||
+        Info.ID == diag::noescape_autoclosure.ID ||
+        Info.ID == diag::where_inside_brackets.ID ||
         Info.ID == diag::selector_construction_suggest.ID ||
         Info.ID == diag::selector_literal_deprecated_suggest.ID)
       return true;

@@ -3,6 +3,9 @@
 
 // REQUIRES: objc_interop
 
+// rdar://27226313
+// REQUIRES: optimized_stdlib
+
 import Dispatch
 import Foundation
 import StdlibUnittest
@@ -66,5 +69,22 @@ DispatchAPI.test("dispatch_data_t enumeration") {
 	// Ensure we can iterate the empty iterator
 	for x in DispatchData.empty {
 		_ = 1
+	}
+}
+
+DispatchAPI.test("dispatch_data_t deallocator") {
+	let q = DispatchQueue(label: "dealloc queue")
+	var t = 0
+
+	autoreleasepool {
+		let size = 1024
+		let p = UnsafeMutablePointer<UInt8>.allocate(capacity: size)
+		let d = DispatchData(bytesNoCopy: UnsafeBufferPointer(start: p, count: size), deallocator: .custom(q, {
+			t = 1
+		}))
+	}
+
+	q.sync {
+		expectEqual(1, t)
 	}
 }

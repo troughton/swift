@@ -16,9 +16,9 @@ public extension Foo {
 
 var gg = 1111
 
-public class C : Foo {
+open class C : Foo {
   @inline(never)
-  public func foo(_ x:Int) -> Int {
+  open func foo(_ x:Int) -> Int {
     gg += 1
     return gg + x
   }
@@ -162,7 +162,7 @@ protocol StaticP {
   static var size: Int { get }
 }
 struct HasStatic<T> : StaticP {
-  static var size: Int { return sizeof(T.self) }
+  static var size: Int { return MemoryLayout<T>.size }
 }
 public func testExMetatype() -> Int {
   let type: StaticP.Type = HasStatic<Int>.self

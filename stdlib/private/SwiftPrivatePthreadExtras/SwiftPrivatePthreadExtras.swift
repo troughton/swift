@@ -34,7 +34,7 @@ internal class PthreadBlockContextImpl<Argument, Result>: PthreadBlockContext {
   let block: (Argument) -> Result
   let arg: Argument
 
-  init(block: (Argument) -> Result, arg: Argument) {
+  init(block: @escaping (Argument) -> Result, arg: Argument) {
     self.block = block
     self.arg = arg
     super.init()
@@ -68,10 +68,9 @@ public typealias _stdlib_pthread_attr_t = UnsafePointer<pthread_attr_t>
 /// Block-based wrapper for `pthread_create`.
 public func _stdlib_pthread_create_block<Argument, Result>(
   _ attr: _stdlib_pthread_attr_t?,
-  _ start_routine: (Argument) -> Result,
+  _ start_routine: @escaping (Argument) -> Result,
   _ arg: Argument
-) -> (CInt, pthread_t?) 
-{
+) -> (CInt, pthread_t?) {
   let context = PthreadBlockContextImpl(block: start_routine, arg: arg)
   // We hand ownership off to `invokeBlockContext` through its void context
   // argument.

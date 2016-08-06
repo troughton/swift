@@ -53,7 +53,7 @@ const uint16_t VERSION_MAJOR = 0;
 /// in source control, you should also update the comment to briefly
 /// describe what change you made. The content of this comment isn't important;
 /// it just ensures a conflict if two people change the module format.
-const uint16_t VERSION_MINOR = 258; // Last change: precedencegroup
+const uint16_t VERSION_MINOR = 260; // Last change: open
 
 using DeclID = PointerEmbeddedInt<unsigned, 31>;
 using DeclIDField = BCFixed<31>;
@@ -291,8 +291,9 @@ enum class AccessibilityKind : uint8_t {
   FilePrivate,
   Internal,
   Public,
+  Open,
 };
-using AccessibilityKindField = BCFixed<2>;
+using AccessibilityKindField = BCFixed<3>;
 
 // These IDs must \em not be renumbered or reordered without incrementing
 // VERSION_MAJOR.
@@ -590,7 +591,6 @@ namespace decls_block {
     FunctionTypeRepresentationField, // representation
     BCFixed<1>,  // auto-closure?
     BCFixed<1>,  // noescape?
-    BCFixed<1>,  // explicitlyEscaping?
     BCFixed<1>   // throws?
   >;
 
@@ -1072,20 +1072,6 @@ namespace decls_block {
     ISA_PATTERN,
     TypeIDField, // type
     BCFixed<1>   // implicit?
-  >;
-
-  using NominalTypePatternLayout = BCRecordLayout<
-    NOMINAL_TYPE_PATTERN,
-    TypeIDField, // type
-    BCVBR<5>, // number of elements
-    BCFixed<1>  // implicit?
-    // The elements trail the record.
-  >;
-
-  using NominalTypePatternEltLayout = BCRecordLayout<
-    NOMINAL_TYPE_PATTERN_ELT,
-    DeclIDField // property
-    // The element pattern trails the record.
   >;
 
   using VarPatternLayout = BCRecordLayout<

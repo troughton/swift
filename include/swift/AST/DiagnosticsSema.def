@@ -204,6 +204,8 @@ ERROR(cannot_call_with_params, none,
       "cannot invoke %select{|initializer for type }2'%0' with an argument list"
       " of type '%1'", (StringRef, StringRef, bool))
 
+NOTE(pointer_init_add_mutating,none,
+     "do you want to add 'mutating'", ())
 ERROR(expected_do_in_statement,none,
       "expected 'do' keyword to designate a block of statements", ())
 
@@ -238,7 +240,8 @@ ERROR(cannot_invoke_closure_type,none,
 ERROR(cannot_infer_closure_type,none,
       "unable to infer closure type in the current context", ())
 ERROR(cannot_infer_closure_result_type,none,
-      "unable to infer closure return type in current context", ())
+      "unable to infer complex closure return type; "
+      "add explicit type to disambiguate", ())
 
 ERROR(incorrect_explicit_closure_result,none,
       "declared closure result %0 is incompatible with contextual type %1",
@@ -282,6 +285,10 @@ ERROR(cannot_convert_to_return_type_nil,none,
 
 ERROR(cannot_convert_thrown_type,none,
       "thrown expression type %0 does not conform to 'Error'", (Type))
+ERROR(cannot_throw_error_code,none,
+      "thrown error code type %0 does not conform to 'Error'; construct an %1 "
+      "instance", (Type, Type))
+
 ERROR(cannot_throw_nil,none,
       "cannot infer concrete Error for thrown 'nil' value", ())
 
@@ -691,7 +698,7 @@ ERROR(did_not_call_method,none,
       (Identifier))
 
 ERROR(init_not_instance_member,none,
-      "'init' is a member of the type; insert '.dynamicType' to initialize "
+      "'init' is a member of the type; use 'type(of: ...)' to initialize "
       "a new object of the same dynamic type", ())
 ERROR(super_initializer_not_in_initializer,none,
       "'super.init' cannot be called outside of an initializer", ())
@@ -988,6 +995,12 @@ ERROR(access_control_extension_more,none,
       "extension of %select{private|fileprivate|internal|PUBLIC}0 %1 cannot "
       "be declared %select{PRIVATE|fileprivate|internal|public}2",
       (Accessibility, DescriptiveDeclKind, Accessibility))
+ERROR(access_control_extension_open,none,
+      "extensions cannot use 'open' as their default access; use 'public'",
+      ())
+ERROR(access_control_open_bad_decl,none,
+      "only classes and overridable class members can be declared 'open';"
+      " use 'public'", ())
 
 ERROR(invalid_decl_attribute_simple,none,
       "attribute cannot be applied to declaration", ())
@@ -1513,6 +1526,10 @@ ERROR(override_not_accessible,none,
       "%select{its enclosing type|the declaration it overrides}2",
       (bool, DescriptiveDeclKind, bool))
 
+ERROR(override_of_non_open,none,
+      "overriding non-open %0 outside of its defining module",
+      (DescriptiveDeclKind))
+
 ERROR(method_does_not_override,none,
       "method does not override any method from its superclass", ())
 ERROR(property_does_not_override,none,
@@ -1602,6 +1619,8 @@ ERROR(override_mutable_covariant_subscript,none,
       (Type, Type))
 ERROR(decl_already_final,none,
       "static declarations are already final", ())
+ERROR(open_decl_cannot_be_final,none,
+      "%0 cannot be declared both 'final' and 'open'", (DescriptiveDeclKind))
 NOTE(decl_init_here,none,
      "initial value is here", ())
 
@@ -1621,6 +1640,12 @@ ERROR(inheritance_from_non_protocol,none,
   "inheritance from non-protocol type %0", (Type))
 ERROR(superclass_not_first,none,
   "superclass %0 must appear first in the inheritance clause", (Type))
+ERROR(superclass_not_open,none,
+  "cannot inherit from non-open class %0 outside of its defining module",
+  (Type))
+NOTE(superclass_here,none,"superclass is declared here", ())
+ERROR(superclass_of_open_not_open,none,
+  "superclass %0 of open class must be open", (Type))
 ERROR(circular_class_inheritance,none,
       "circular class inheritance %0", (StringRef))
 NOTE(class_here,none,
@@ -1821,6 +1846,8 @@ ERROR(autoclosure_function_type,none,
       ())
 ERROR(autoclosure_function_input_nonunit,none,
       "autoclosure argument type must be '()'", ())
+
+// FIXME: drop these when we drop @noescape
 ERROR(noescape_function_type,none,
       "@noescape may only be applied to parameters of function type",
       ())
@@ -1829,6 +1856,7 @@ ERROR(noescape_implied_by_autoclosure,none,
       "redundantly specified", ())
 ERROR(noescape_conflicts_escaping_autoclosure,none,
       "@noescape conflicts with @autoclosure(escaping)", ())
+
 ERROR(escaping_function_type,none,
       "@escaping may only be applied to parameters of function type", ())
 
@@ -2069,7 +2097,11 @@ ERROR(discard_expr_outside_of_assignment,none,
       ())
 ERROR(inout_expr_outside_of_call,none,
       "'&' can only appear immediately in a call argument list", ())
-
+ERROR(collection_literal_heterogenous,none,
+      "heterogenous collection literal could only be inferred to %0; add"
+      " explicit type annotation if this is intentional", (Type))
+ERROR(collection_literal_empty,none,
+      "empty collection literal requires an explicit type", ())
 
 ERROR(unresolved_member_no_inference,none,
       "reference to member %0 cannot be resolved without a contextual type",
@@ -2268,20 +2300,30 @@ WARNING(optional_pattern_match_promotion,none,
         (Type, Type))
 
 
-ERROR(type_of_metatype,none,
-      "'.dynamicType' is not allowed after a type name", ())
 ERROR(invalid_noescape_use,none,
-      "@noescape %select{value|parameter}1 %0 may only be called",
+      "non-escaping %select{value|parameter}1 %0 may only be called",
       (Identifier, bool))
 NOTE(noescape_autoclosure,none,
-    "parameter %0 is implicitly @noescape because it was declared @autoclosure",
+    "parameter %0 is implicitly non-escaping because it was declared @autoclosure",
+     (Identifier))
+NOTE(noescape_parameter,none,
+    "parameter %0 is implicitly non-escaping",
      (Identifier))
 
 ERROR(closure_noescape_use,none,
-      "closure use of @noescape parameter %0 may allow it to escape",
+      "closure use of non-escaping parameter %0 may allow it to escape",
       (Identifier))
 ERROR(decl_closure_noescape_use,none,
-      "declaration closing over @noescape parameter %0 may allow it to escape",
+      "declaration closing over non-escaping parameter %0 may allow it to escape",
+      (Identifier))
+ERROR(passing_noescape_to_escaping,none,
+      "passing non-escaping parameter %0 to function expecting an @escaping closure",
+      (Identifier))
+ERROR(assigning_noescape_to_escaping,none,
+      "assigning non-escaping parameter %0 to an @escaping closure",
+      (Identifier))
+ERROR(general_noescape_to_escaping,none,
+      "using non-escaping parameter %0 in a context expecting an @escaping closure",
       (Identifier))
 
 ERROR(capture_across_type_decl,none,
@@ -2451,21 +2493,6 @@ ERROR(condition_optional_element_pattern_not_valid_type,none,
       (Type))
 ERROR(enum_element_pattern_not_member_of_enum,none,
       "enum case '%0' is not a member of type %1", (StringRef, Type))
-ERROR(nominal_type_pattern_not_nominal_type,none,
-      "non-nominal type %0 cannot be used with property pattern syntax", (Type))
-ERROR(nominal_type_pattern_type_mismatch,none,
-      "type %0 of pattern does not match deduced type %1", (Type, Type))
-ERROR(nominal_type_pattern_property_not_found,none,
-      "property '%0' not found in type %1", (StringRef, Type))
-ERROR(nominal_type_pattern_property_ambiguous,none,
-      "property name '%0' in type %1 is ambiguous", (StringRef, Type))
-ERROR(nominal_type_pattern_not_property,none,
-      "member '%0' of type %1 is not a property", (StringRef, Type))
-ERROR(nominal_type_pattern_static_property,none,
-      "cannot match type property '%0' of type %1 in a 'case' pattern",
-      (StringRef, Type))
-ERROR(nominal_type_subpattern_without_property_name,none,
-      "subpattern of a struct or class pattern must have a keyword name", ())
 ERROR(ambiguous_enum_pattern_type,none,
       "generic enum type %0 is ambiguous without explicit generic parameters "
       "when matching value of type %1", (Type, Type))
@@ -2742,6 +2769,9 @@ NOTE(not_objc_empty_protocol_composition,none,
      "'Any' is not considered '@objc'; use 'AnyObject' instead", ())
 NOTE(not_objc_protocol,none,
      "protocol %0 is not '@objc'", (Type))
+NOTE(not_objc_error_protocol_composition,none,
+     "protocol composition involving 'Error' cannot be represented "
+     "in Objective-C", ())
 NOTE(not_objc_empty_tuple,none,
       "empty tuple type cannot be represented in Objective-C", ())
 NOTE(not_objc_tuple,none,

@@ -5,14 +5,11 @@
 // See http://swift.org/LICENSE.txt for license information
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
-// RUN: not --crash %target-swift-frontend %s -emit-silgen
-// Test case submitted to project by https://github.com/airspeedswift (airspeedswift)
-
-struct S<T> {
-    var a: [T] = []
+// RUN: not --crash %target-swift-frontend %s -parse
+// REQUIRES: asserts
+var b{{
 }
-extension S {
-    init(other: [T]) {
-        a = other
-    }
-}
+typealias e:A
+protocol A{
+typealias e:e:typealias F
+typealias e=F

@@ -1,7 +1,7 @@
 // RUN: %target-parse-verify-swift
 
 // Simple case.
-var fn : @autoclosure () -> Int = 4  // expected-error {{@autoclosure may only be used on parameters}}  expected-error {{cannot convert value of type 'Int' to specified type '@noescape () -> Int'}}
+var fn : @autoclosure () -> Int = 4  // expected-error {{@autoclosure may only be used on parameters}}  expected-error {{cannot convert value of type 'Int' to specified type '() -> Int'}}
 
 @autoclosure func func1() {}  // expected-error {{@autoclosure may only be used on 'parameter' declarations}}
 
@@ -46,16 +46,18 @@ protocol P2 : P1 {
   associatedtype Element
 }
 
-func overloadedEach<O: P1>(_ source: O, _ closure: () -> ()) {
+func overloadedEach<O: P1>(_ source: O, _ closure: @escaping () -> ()) {
 }
 
-func overloadedEach<P: P2>(_ source: P, _ closure: () -> ()) {
+func overloadedEach<P: P2>(_ source: P, _ closure: @escaping () -> ()) {
 }
 
 struct S : P2 {
   typealias Element = Int
   func each(_ closure: @autoclosure () -> ()) {
-    overloadedEach(self, closure) // expected-error {{invalid conversion from non-escaping function of type '@autoclosure () -> ()' to potentially escaping function type '() -> ()'}}
+    // expected-note@-1{{parameter 'closure' is implicitly non-escaping because it was declared @autoclosure}}
+
+    overloadedEach(self, closure) // expected-error {{passing non-escaping parameter 'closure' to function expecting an @escaping closure}}
   }
 }
 
@@ -84,10 +86,12 @@ class Sub : Super {
   override func f3(_ x: @autoclosure(escaping) () -> ()) { }  // expected-error{{does not override any method}}
 }
 
-func func12_sink(_ x: () -> Int) { }
+func func12_sink(_ x: @escaping () -> Int) { }
 
 func func12a(_ x: @autoclosure () -> Int) {
-  func12_sink(x) // expected-error{{invalid conversion from non-escaping function of type '@autoclosure () -> Int' to potentially escaping function type '() -> Int'}}
+    // expected-note@-1{{parameter 'x' is implicitly non-escaping because it was declared @autoclosure}}
+
+  func12_sink(x) // expected-error {{passing non-escaping parameter 'x' to function expecting an @escaping closure}}
 }
 func func12b(_ x: @autoclosure(escaping) () -> Int) {
   func12_sink(x)

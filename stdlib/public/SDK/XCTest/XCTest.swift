@@ -70,13 +70,13 @@ func _XCTRunThrowableBlock(_ block: @noescape () throws -> Void) -> _XCTThrowabl
   if let blockError = blockErrorOptional {
     return .failedWithError(error: blockError)
   } else if d.count > 0 {
-    let t: String = d["type"] as! String
+    let t: String = d["type" as NSString] as! String
     
     if t == "objc" {
       return .failedWithException(
-        className: d["className"] as! String,
-        name: d["name"] as! String,
-        reason: d["reason"] as! String)
+        className: d["className" as NSString] as! String,
+        name: d["name" as NSString] as! String,
+        reason: d["reason" as NSString] as! String)
     } else {
       return .failedWithUnknownException
     }
@@ -996,7 +996,7 @@ public func XCTAssertLessThanOrEqual<T : Comparable>(_ expression1: @autoclosure
   }
 }
 
-public func XCTAssertThrowsError<T>(_ expression: @autoclosure () throws -> T, _ message: @autoclosure () -> String = "", file: StaticString = #file, line: UInt = #line, _ errorHandler: (error: Error) -> Void = { _ in }) -> Void {
+public func XCTAssertThrowsError<T>(_ expression: @autoclosure () throws -> T, _ message: @autoclosure () -> String = "", file: StaticString = #file, line: UInt = #line, _ errorHandler: (_ error: Error) -> Void = { _ in }) -> Void {
   // evaluate expression exactly once
   var caughtErrorOptional: Error?
   
@@ -1011,7 +1011,7 @@ public func XCTAssertThrowsError<T>(_ expression: @autoclosure () throws -> T, _
   switch result {
   case .success:
     if let caughtError = caughtErrorOptional {
-      errorHandler(error: caughtError)
+      errorHandler(caughtError)
     } else {
       _XCTRegisterFailure(true, "XCTAssertThrowsError failed: did not throw an error", message, file, line)
     }

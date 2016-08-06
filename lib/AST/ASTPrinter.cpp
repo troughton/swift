@@ -1146,6 +1146,9 @@ class PrintAST : public ASTVisitor<PrintAST> {
     case Accessibility::Public:
       Printer << tok::kw_public;
       break;
+    case Accessibility::Open:
+      Printer.printKeyword("open");
+      break;
     }
     Printer << suffix << " ";
   }
@@ -1374,20 +1377,6 @@ void PrintAST::printPattern(const Pattern *pattern) {
     auto isa = cast<IsPattern>(pattern);
     Printer << tok::kw_is << " ";
     isa->getCastTypeLoc().getType().print(Printer, Options);
-    break;
-  }
-
-  case PatternKind::NominalType: {
-    auto type = cast<NominalTypePattern>(pattern);
-    type->getCastTypeLoc().getType().print(Printer, Options);
-    Printer << "(";
-    interleave(type->getElements().begin(), type->getElements().end(),
-               [&](const NominalTypePattern::Element &elt) {
-                 Printer << elt.getPropertyName().str() << ":";
-                 printPattern(elt.getSubPattern());
-               }, [&] {
-                 Printer << ", ";
-               });
     break;
   }
 
@@ -2535,7 +2524,11 @@ void PrintAST::visitVarDecl(VarDecl *decl) {
 }
 
 void PrintAST::visitParamDecl(ParamDecl *decl) {
-  return visitVarDecl(decl);
+  // Set and restore in-parameter-position printing of types
+  auto prior = Options.PrintAsInParamType;
+  Options.PrintAsInParamType = true;
+  visitVarDecl(decl);
+  Options.PrintAsInParamType = prior;
 }
 
 void PrintAST::printOneParameter(const ParamDecl *param, bool Curried,
@@ -2589,7 +2582,11 @@ void PrintAST::printOneParameter(const ParamDecl *param, bool Curried,
       TheTypeLoc.setType(BGT->getGenericArgs()[0]);
   }
 
+  // Set and restore in-parameter-position printing of types
+  auto prior = Options.PrintAsInParamType;
+  Options.PrintAsInParamType = true;
   printTypeLoc(TheTypeLoc);
+  Options.PrintAsInParamType = prior;
 
   if (param->isVariadic())
     Printer << "...";
@@ -3313,6 +3310,10 @@ class TypePrinter : public TypeVisitor<TypePrinter> {
   const PrintOptions &Options;
   Optional<std::vector<GenericParamList *>> UnwrappedGenericParams;
 
+  /// Whether we are printing something in a function parameter position, and
+  /// thus want to print @escaping if it escapes.
+  bool inParameterPrinting;
+
   void printDeclContext(DeclContext *DC) {
     switch (DC->getContextKind()) {
     case DeclContextKind::Module: {
@@ -3480,7 +3481,8 @@ class TypePrinter : public TypeVisitor<TypePrinter> {
 
 public:
   TypePrinter(ASTPrinter &Printer, const PrintOptions &PO)
-      : Printer(Printer), Options(PO) {}
+      : Printer(Printer), Options(PO),
+        inParameterPrinting(Options.PrintAsInParamType) {}
 
   void visit(Type T) {
     Printer.printTypePre(TypeLoc::withoutLoc(T));
@@ -3745,11 +3747,10 @@ public:
         Printer << "@autoclosure ";
       else
         Printer << "@autoclosure(escaping) ";
-    } else if (info.isNoEscape()) {
-      // autoclosure implies noescape.
-      Printer << "@noescape ";
-    } else if (info.isExplicitlyEscaping()) {
-      Printer << "@escaping ";
+    } else if (inParameterPrinting) {
+      if (!info.isNoEscape()) {
+        Printer << "@escaping ";
+      }
     }
 
     if (Options.PrintFunctionRepresentationAttrs) {
@@ -3821,14 +3822,35 @@ public:
 
     printFunctionExtInfo(T->getExtInfo());
     
+    // If we're stripping argument labels from types, do it when printing.
+    Type inputType = T->getInput();
+    if (auto tupleTy = dyn_cast<TupleType>(inputType.getPointer())) {
+      SmallVector<TupleTypeElt, 4> elements;
+      elements.reserve(tupleTy->getNumElements());
+      for (const auto &elt : tupleTy->getElements()) {
+        elements.push_back(TupleTypeElt(elt.getType(), Identifier(),
+                                        elt.isVararg()));
+      }
+      inputType = TupleType::get(elements, inputType->getASTContext());
+    }
+
     bool needsParens =
-      !isa<ParenType>(T->getInput().getPointer()) &&
-      !T->getInput()->is<TupleType>();
+      !isa<ParenType>(inputType.getPointer()) &&
+      !inputType->is<TupleType>();
     
     if (needsParens)
       Printer << "(";
-    
-    visit(T->getInput());
+
+    // Set in-parameter-position printing to print our parameters, then unset it
+    // for the return type (in case it is also a function), and restore at the
+    // end.
+    auto prior = inParameterPrinting;
+    inParameterPrinting = true;
+    visit(inputType);
+    inParameterPrinting = false;
+    SWIFT_DEFER {
+      inParameterPrinting = prior;
+    };
     
     if (needsParens)
       Printer << ")";
