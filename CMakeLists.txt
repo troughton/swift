@@ -1,7 +1,4 @@
 cmake_minimum_required(VERSION 2.8.12)
-if(POLICY CMP0054)
-cmake_policy(SET CMP0054 NEW)
-endif()
 
 if(POLICY CMP0051)
   cmake_policy(SET CMP0051 NEW)
@@ -323,6 +320,13 @@ endif()
 
 if(SWIFT_BUILT_STANDALONE)
   project(Swift C CXX ASM)
+endif()
+
+# In Cygwin, we should use the new poclicy for CMP0054 to compare the variable 
+# CMAKE_SYSTEM_NAME with string properly.
+# The boolean variable CYGWIN can be used after calling 'project()'.
+if(CYGWIN AND POLICY CMP0054)
+  cmake_policy(SET CMP0054 NEW)
 endif()
 
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "")
