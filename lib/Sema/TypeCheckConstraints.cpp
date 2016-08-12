@@ -2634,6 +2634,15 @@ void Solution::dump(raw_ostream &out) const {
     }
   }
 
+  if (!DefaultedTypeVariables.empty()) {
+    out << "\nDefaulted type variables: ";
+    interleave(DefaultedTypeVariables, [&](TypeVariableType *typeVar) {
+      out << "$T" << typeVar->getID();
+    }, [&] {
+      out << ", ";
+    });
+  }
+
   if (!Fixes.empty()) {
     out << "\nFixes:\n";
     for (auto &fix : Fixes) {
@@ -2781,6 +2790,15 @@ void ConstraintSystem::print(raw_ostream &out) {
       out << " opens to " << openedExistential.second->getString();
       out << "\n";
     }
+  }
+
+  if (!DefaultedTypeVariables.empty()) {
+    out << "\nDefaulted type variables: ";
+    interleave(DefaultedTypeVariables, [&](TypeVariableType *typeVar) {
+      out << "$T" << typeVar->getID();
+    }, [&] {
+      out << ", ";
+    });
   }
 
   if (failedConstraint) {
@@ -2942,6 +2960,10 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
       return CheckedCastKind::SetDowncast;
     }
     return CheckedCastKind::SetDowncastBridged;
+  }
+
+  if (cs.isAnyHashableType(toType) || cs.isAnyHashableType(fromType)) {
+    return CheckedCastKind::ValueCast;
   }
 
   // If the destination type is a subtype of the source type, we have

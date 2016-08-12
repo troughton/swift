@@ -2711,6 +2711,14 @@ namespace {
 
       expr->setSemanticExpr(result);
       expr->setType(arrayTy);
+
+      // If the array element type was defaulted, note that in the expression.
+      auto elementTypeVariable = cs.ArrayElementTypeVariables.find(expr);
+      if (elementTypeVariable != cs.ArrayElementTypeVariables.end()) {
+        if (solution.DefaultedTypeVariables.count(elementTypeVariable->second))
+          expr->setIsTypeDefaulted();
+      }
+
       return expr;
     }
 
@@ -2780,6 +2788,18 @@ namespace {
 
       expr->setSemanticExpr(result);
       expr->setType(dictionaryTy);
+
+      // If the dictionary key or value type was defaulted, note that in the
+      // expression.
+      auto elementTypeVariable = cs.DictionaryElementTypeVariables.find(expr);
+      if (elementTypeVariable != cs.DictionaryElementTypeVariables.end()) {
+        if (solution.DefaultedTypeVariables.count(
+              elementTypeVariable->second.first) ||
+            solution.DefaultedTypeVariables.count(
+              elementTypeVariable->second.second))
+          expr->setIsTypeDefaulted();
+      }
+
       return expr;
     }
 
@@ -3368,7 +3388,13 @@ namespace {
     }
     
     Expr *visitUnresolvedPatternExpr(UnresolvedPatternExpr *expr) {
-      llvm_unreachable("should have been eliminated during name binding");
+      // If we end up here, we should have diagnosed somewhere else
+      // already.
+      if (!SuppressDiagnostics) {
+        cs.TC.diagnose(expr->getLoc(), diag::pattern_in_expr,
+                       expr->getSubPattern()->getKind());
+      }
+      return expr;
     }
     
     Expr *visitBindOptionalExpr(BindOptionalExpr *expr) {
@@ -5302,6 +5328,27 @@ Expr *ExprRewriter::coerceToType(Expr *expr, Type toType,
       return new (tc.Context) CollectionUpcastConversionExpr(expr, toType,
                                                              {}, conv,
                                                              isBridged);
+    }
+
+    case ConversionRestrictionKind::HashableToAnyHashable: {
+      // Look through implicitly unwrapped optionals.
+      if (auto objTy
+            = cs.lookThroughImplicitlyUnwrappedOptionalType(expr->getType())) {
+        expr = coerceImplicitlyUnwrappedOptionalToValue(expr, objTy, locator);
+      }
+
+      // Find the conformance of the source type to Hashable.
+      auto hashable = tc.Context.getProtocol(KnownProtocolKind::Hashable);
+      ProtocolConformance *conformance;
+      bool conforms = tc.conformsToProtocol(expr->getType(), hashable, cs.DC,
+                                            ConformanceCheckFlags::InExpression,
+                                            &conformance);
+      assert(conforms && "must conform to Hashable");
+      (void)conforms;
+      ProtocolConformanceRef conformanceRef(hashable, conformance);
+
+      return new (tc.Context) AnyHashableErasureExpr(expr, toType,
+                                                     conformanceRef);
     }
 
     case ConversionRestrictionKind::DictionaryUpcast: {

@@ -1916,6 +1916,13 @@ public:
     printRec(E->getSubExpr());
     OS << ')';
   }
+  void visitAnyHashableErasureExpr(AnyHashableErasureExpr *E) {
+    printCommon(E, "any_hashable_erasure_expr") << '\n';
+    printRec(E->getConformance());
+    OS << '\n';
+    printRec(E->getSubExpr());
+    OS << ')';
+  }
   void visitLoadExpr(LoadExpr *E) {
     printCommon(E, "load_expr") << '\n';
     printRec(E->getSubExpr());
@@ -2910,7 +2917,6 @@ namespace {
       printFlag(T->isAutoClosure(), "autoclosure");
 
       // Dump out either @noescape or @escaping
-      printFlag(T->isNoEscape(), "@noescape");
       printFlag(!T->isNoEscape(), "@escaping");
 
       printFlag(T->throws(), "throws");

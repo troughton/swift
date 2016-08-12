@@ -72,8 +72,14 @@ ERROR(could_not_find_value_member,none,
 ERROR(could_not_find_type_member,none,
       "type %0 has no member %1", (Type, DeclName))
 
+ERROR(could_not_find_enum_case,none,
+      "enum type %0 has no case %1; did you mean %2", (Type, DeclName, DeclName))
+
 NOTE(did_you_mean_raw_type,none,
      "did you mean to specify a raw type on the enum declaration?", ())
+
+NOTE(any_as_anyobject_fixit, none,
+     "cast 'Any' to 'AnyObject' or use 'as!' to force downcast to a more specific type to access members", ())
 
 ERROR(expected_argument_in_contextual_member,none,
       "contextual member %0 expects argument of type %1", (DeclName, Type))
@@ -96,7 +102,7 @@ ERROR(could_not_use_type_member_on_instance,none,
 ERROR(could_not_use_enum_element_on_instance,none,
       "enum element %0 cannot be referenced as an instance member",
       (DeclName))
-ERROR(could_not_use_type_member_on_existential,none,
+ERROR(could_not_use_type_member_on_protocol_metatype,none,
       "static member %1 cannot be used on protocol metatype %0",
       (Type, DeclName))
 ERROR(could_not_use_instance_member_on_type,none,
@@ -592,8 +598,10 @@ ERROR(unsupported_existential_type,none,
       "protocol %0 can only be used as a generic constraint because it has "
       "Self or associated type requirements", (Identifier))
 
-ERROR(no_decl_in_module,none,
-      "no such decl in module", ())
+ERROR(decl_does_not_exist_in_module,none,
+      "%select{**MODULE**|type|struct|class|enum|protocol|variable|function}0 "
+      "%1 does not exist in module %2",
+      (/*ImportKind*/ unsigned, Identifier, Identifier))
 ERROR(imported_decl_is_wrong_kind,none,
       "%0 was imported as '%1', but is a "
       "%select{**MODULE**|type|struct|class|enum|protocol|variable|function}2",
@@ -2239,7 +2247,7 @@ ERROR(closure_implicit_capture_mutating_self,none,
       ())
 ERROR(nested_function_with_implicit_capture_argument,none,
       "nested function with %select{an |}0implicitly captured inout "
-      "parameter%select{|s}0 can only be used as a @noescape argument", (bool))
+      "parameter%select{|s}0 can only be used as a non-escaping argument", (bool))
 ERROR(nested_function_escaping_inout_capture,none,
       "nested function cannot capture inout parameter and escape", ())
 
@@ -2455,8 +2463,6 @@ ERROR(cannot_infer_type_for_pattern,none,
       "type annotation missing in pattern", ())
 ERROR(refutable_pattern_requires_initializer,none,
       "pattern matching requires an initializer value to match against", ())
-ERROR(invalid_pattern,none,
-      "invalid pattern", ())
 WARNING(var_pattern_didnt_bind_variables,none,
         "'%0' pattern has no effect; sub-pattern didn't bind any variables",
         (StringRef))

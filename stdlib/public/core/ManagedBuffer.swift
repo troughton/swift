@@ -68,7 +68,7 @@ open class ManagedBuffer<Header, Element> {
   /// - Note: This pointer is only valid for the duration of the
   ///   call to `body`.
   public final func withUnsafeMutablePointerToHeader<R>(
-    _ body: @noescape (UnsafeMutablePointer<Header>) throws -> R
+    _ body: (UnsafeMutablePointer<Header>) throws -> R
   ) rethrows -> R {
     return try withUnsafeMutablePointers { (v, e) in return try body(v) }
   }
@@ -79,7 +79,7 @@ open class ManagedBuffer<Header, Element> {
   /// - Note: This pointer is only valid for the duration of the
   ///   call to `body`.
   public final func withUnsafeMutablePointerToElements<R>(
-    _ body: @noescape (UnsafeMutablePointer<Element>) throws -> R
+    _ body: (UnsafeMutablePointer<Element>) throws -> R
   ) rethrows -> R {
     return try withUnsafeMutablePointers { return try body($0.1) }
   }
@@ -90,7 +90,7 @@ open class ManagedBuffer<Header, Element> {
   /// - Note: These pointers are only valid for the duration of the
   ///   call to `body`.
   public final func withUnsafeMutablePointers<R>(
-    _ body: @noescape (UnsafeMutablePointer<Header>, UnsafeMutablePointer<Element>) throws -> R
+    _ body: (UnsafeMutablePointer<Header>, UnsafeMutablePointer<Element>) throws -> R
   ) rethrows -> R {
     return try ManagedBufferPointer(self).withUnsafeMutablePointers(body)
   }
@@ -254,7 +254,7 @@ public struct ManagedBufferPointer<Header, Element> : Equatable {
   /// - Note: This pointer is only valid
   ///   for the duration of the call to `body`.
   public func withUnsafeMutablePointerToHeader<R>(
-    _ body: @noescape (UnsafeMutablePointer<Header>) throws -> R
+    _ body: (UnsafeMutablePointer<Header>) throws -> R
   ) rethrows -> R {
     return try withUnsafeMutablePointers { (v, e) in return try body(v) }
   }
@@ -265,7 +265,7 @@ public struct ManagedBufferPointer<Header, Element> : Equatable {
   /// - Note: This pointer is only valid for the duration of the
   ///   call to `body`.
   public func withUnsafeMutablePointerToElements<R>(
-    _ body: @noescape (UnsafeMutablePointer<Element>) throws -> R
+    _ body: (UnsafeMutablePointer<Element>) throws -> R
   ) rethrows -> R {
     return try withUnsafeMutablePointers { return try body($0.1) }
   }
@@ -276,7 +276,7 @@ public struct ManagedBufferPointer<Header, Element> : Equatable {
   /// - Note: These pointers are only valid for the duration of the
   ///   call to `body`.
   public func withUnsafeMutablePointers<R>(
-    _ body: @noescape (UnsafeMutablePointer<Header>, UnsafeMutablePointer<Element>) throws -> R
+    _ body: (UnsafeMutablePointer<Header>, UnsafeMutablePointer<Element>) throws -> R
   ) rethrows -> R {
     defer { _fixLifetime(_nativeBuffer) }
     return try body(_headerPointer, _elementPointer)
@@ -450,28 +450,30 @@ public func == <Header, Element>(
 // FIXME: when our calling convention changes to pass self at +0,
 // inout should be dropped from the arguments to these functions.
 
-/// Returns `true` iff `object` is known to be a class instance with a single
-/// strong reference.
+/// Returns a Boolean value indicating whether the given object is a
+/// class instance known to have a single strong reference.
 ///
-/// * Does *not* modify `object`; the use of `inout` is an
-///   implementation artifact.
-/// * Weak references do not affect the result of this function.
-///
-/// Useful for implementing the copy-on-write optimization for the
-/// deep storage of value types:
+/// The `isKnownUniquelyReferenced(_:)` function is useful for implementating
+/// the copy-on-write optimization for the deep storage of value types:
 ///
 ///     mutating func modifyMe(_ arg: X) {
-///       if isKnownUniquelyReferenced(&myStorage) {
-///         myStorage.modifyInPlace(arg)
-///       }
-///       else {
-///         myStorage = self.createModified(myStorage, arg)
-///       }
+///         if isKnownUniquelyReferenced(&myStorage) {
+///             myStorage.modifyInPlace(arg)
+///         } else {
+///             myStorage = self.createModified(myStorage, arg)
+///         }
 ///     }
 ///
-/// This function is safe to use for `mutating` functions in
-/// multithreaded code because a false positive would imply that there
-/// is already a user-level data race on the value being mutated.
+/// Weak references do not affect the result of this function.
+///
+/// This function is safe to use for mutating functions in multithreaded code
+/// because a false positive implies that there is already a user-level data
+/// race on the value being mutated.
+///
+/// - Parameter object: An instance of a class. This function does *not* modify
+///   `object`; the use of `inout` is an implementation artifact.
+/// - Returns: `true` if `object` is a known to have a
+///   single strong reference; otherwise, `false`.
 public func isKnownUniquelyReferenced<T : AnyObject>(_ object: inout T) -> Bool
 {
   return _isUnique(&object)
@@ -481,28 +483,31 @@ internal func _isKnownUniquelyReferencedOrPinned<T : AnyObject>(_ object: inout 
   return _isUniqueOrPinned(&object)
 }
 
-/// Returns `true` iff `object` is known to be a class instance with a single
-/// strong reference.
+/// Returns a Boolean value indicating whether the given object is a
+/// class instance known to have a single strong reference.
 ///
-/// * Does *not* modify `object`; the use of `inout` is an
-///   implementation artifact.
-/// * Weak references do not affect the result of this function.
-///
-/// Useful for implementing the copy-on-write optimization for the
-/// deep storage of value types:
+/// The `isKnownUniquelyReferenced(_:)` function is useful for implementating
+/// the copy-on-write optimization for the deep storage of value types:
 ///
 ///     mutating func modifyMe(_ arg: X) {
-///       if isKnownUniquelyReferenced(&myStorage) {
-///         myStorage.modifyInPlace(arg)
-///       }
-///       else {
-///         myStorage = self.createModified(myStorage, arg)
-///       }
+///         if isKnownUniquelyReferenced(&myStorage) {
+///             myStorage.modifyInPlace(arg)
+///         } else {
+///             myStorage = self.createModified(myStorage, arg)
+///         }
 ///     }
 ///
-/// This function is safe to use for `mutating` functions in
-/// multithreaded code because a false positive would imply that there
-/// is already a user-level data race on the value being mutated.
+/// Weak references do not affect the result of this function.
+///
+/// This function is safe to use for mutating functions in multithreaded code
+/// because a false positive implies that there is already a user-level data
+/// race on the value being mutated.
+///
+/// - Parameter object: An instance of a class. This function does *not* modify
+///   `object`; the use of `inout` is an implementation artifact.
+/// - Returns: `true` if `object` is a known to have a
+///   single strong reference; otherwise, `false`. If `object` is `nil`, the
+///   return value is `false`.
 public func isKnownUniquelyReferenced<T : AnyObject>(
   _ object: inout T?
 ) -> Bool {

@@ -60,8 +60,8 @@ autoreleasepool {
 // CHECK: exited
 print("exited")
 
-var d : NSDictionary = [415 as NSNumber : "Giants" as NSString, 510 as NSNumber : "A's" as NSString]
-var d_m : NSMutableDictionary = [1415 as NSNumber : "Big Giants" as NSString, 11510 as NSNumber : "B's" as NSString]
+var d : NSDictionary = [415 : "Giants" , 510 : "A's"]
+var d_m : NSMutableDictionary = [1415 : "Big Giants", 11510 : "B's"]
 
 // CHECK: 510 => A's
 for (key, value) in d {
@@ -91,7 +91,7 @@ for x in s_m {
 // CHECK: 2
 // CHECK: 1
 var a2 = [3, 2, 1]
-var nsa2 = (a2._buffer._asCocoaArray() as AnyObject) as! NSArray
+var nsa2: NSArray = a2._bridgeToObjectiveC()
 for x in nsa2 {
   print(x)
 }
@@ -107,7 +107,7 @@ class X : CustomStringConvertible {
 // CHECK: X(2)
 // CHECK: X(1)
 var a3 = [X(3), X(2), X(1)]
-var nsa3 = (a3._buffer._asCocoaArray() as AnyObject) as! NSArray
+var nsa3: NSArray = a3._bridgeToObjectiveC()
 for x in nsa3 {
   print(x)
 }

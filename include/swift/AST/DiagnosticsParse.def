@@ -1106,8 +1106,6 @@ ERROR(expr_selector_expected_rparen,PointsToFirstBadToken,
       "expected ')' to complete '#selector' expression", ())
 
 // Type-of expressions.
-ERROR(expr_typeof_expected_lparen,PointsToFirstBadToken,
-      "expected '(' following 'type'", ())
 ERROR(expr_typeof_expected_label_of,PointsToFirstBadToken,
       "expected argument label 'of:' within 'type(...)'", ())
 ERROR(expr_typeof_expected_expr,PointsToFirstBadToken,
@@ -1215,6 +1213,12 @@ ERROR(attr_noescape_conflicts_escaping_autoclosure,none,
 ERROR(attr_noescape_implied_by_autoclosure,none,
       "@noescape is implied by @autoclosure and should not be "
       "redundantly specified", ())
+WARNING(attr_autoclosure_escaping_deprecated,none,
+        "@autoclosure(escaping) is deprecated; use @autoclosure @escaping instead",
+        ())
+WARNING(attr_noescape_deprecated,none,
+        "@noescape is the default and is deprecated",
+        ())
 
 // convention
 ERROR(convention_attribute_expected_lparen,none,

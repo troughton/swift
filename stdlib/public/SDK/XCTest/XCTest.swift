@@ -44,7 +44,7 @@ func _XCTFailureDescription(_ assertionType: _XCTAssertionType, _ formatIndex: U
 // --- Exception Support ---
 
 @_silgen_name("_XCTRunThrowableBlockBridge")
-func _XCTRunThrowableBlockBridge(_: @noescape @convention(block) () -> Void) -> NSDictionary
+func _XCTRunThrowableBlockBridge(_: @convention(block) () -> Void) -> NSDictionary
 
 /// The Swift-style result of evaluating a block which may throw an exception.
 enum _XCTThrowableBlockResult {
@@ -56,7 +56,7 @@ enum _XCTThrowableBlockResult {
 
 /// Asks some Objective-C code to evaluate a block which may throw an exception or error,
 /// and if it does consume the exception and return information about it.
-func _XCTRunThrowableBlock(_ block: @noescape () throws -> Void) -> _XCTThrowableBlockResult {
+func _XCTRunThrowableBlock(_ block: () throws -> Void) -> _XCTThrowableBlockResult {
   var blockErrorOptional: Error?
   
   let d = _XCTRunThrowableBlockBridge({
@@ -70,13 +70,13 @@ func _XCTRunThrowableBlock(_ block: @noescape () throws -> Void) -> _XCTThrowabl
   if let blockError = blockErrorOptional {
     return .failedWithError(error: blockError)
   } else if d.count > 0 {
-    let t: String = d["type" as NSString] as! String
+    let t: String = d["type"] as! String
     
     if t == "objc" {
       return .failedWithException(
-        className: d["className" as NSString] as! String,
-        name: d["name" as NSString] as! String,
-        reason: d["reason" as NSString] as! String)
+        className: d["className"] as! String,
+        name: d["name"] as! String,
+        reason: d["reason"] as! String)
     } else {
       return .failedWithUnknownException
     }

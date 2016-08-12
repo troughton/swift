@@ -107,9 +107,8 @@ public:
   }
 };
 
-// Look inside the object file 'ObjectFile' and append any linker flags found in
-// its ".swift1_autolink_entries" section to 'LinkerFlags'. This will be used
-// for the recursive function 'extractLinkerFlags()'.
+/// Look inside the object file 'ObjectFile' and append any linker flags found in
+/// its ".swift1_autolink_entries" section to 'LinkerFlags'.
 static void
 extractLinkerFlagsFromObjectFile(const llvm::object::ObjectFile *ObjectFile,
                                  std::vector<std::string> &LinkerFlags) {
@@ -132,10 +131,10 @@ extractLinkerFlagsFromObjectFile(const llvm::object::ObjectFile *ObjectFile,
   }
 }
 
-// Look inside the binary 'Bin' and append any linker flags found in its
-// ".swift1_autolink_entries" section to 'LinkerFlags'. If 'Bin' is an archive,
-// recursively look inside all children within the archive. Return 'true' if
-// there was an error, and 'false' otherwise.
+/// Look inside the binary 'Bin' and append any linker flags found in its
+/// ".swift1_autolink_entries" section to 'LinkerFlags'. If 'Bin' is an archive,
+/// recursively look inside all children within the archive. Return 'true' if
+/// there was an error, and 'false' otherwise.
 static bool extractLinkerFlags(const llvm::object::Binary *Bin,
                                CompilerInstance &Instance,
                                StringRef BinaryFileName,

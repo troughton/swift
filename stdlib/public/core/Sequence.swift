@@ -60,8 +60,8 @@
 /// more idiomatic approach to traversing a sequence in Swift. Some
 /// algorithms, however, may call for direct iterator use.
 ///
-/// One example is the `reduce1(_:)` method. Similar to the `reduce(_:)` method
-/// defined in the standard library, which takes an initial value and a
+/// One example is the `reduce1(_:)` method. Similar to the `reduce(_:_:)`
+/// method defined in the standard library, which takes an initial value and a
 /// combining closure, `reduce1(_:)` uses the first element of the sequence as
 /// the initial value.
 ///
@@ -373,7 +373,7 @@ public protocol Sequence {
   /// - Returns: An array containing the transformed elements of this
   ///   sequence.
   func map<T>(
-    _ transform: @noescape (Iterator.Element) throws -> T
+    _ transform: (Iterator.Element) throws -> T
   ) rethrows -> [T]
 
   /// Returns an array containing, in order, the elements of the sequence
@@ -392,7 +392,7 @@ public protocol Sequence {
   ///   whether the element should be included in the returned array.
   /// - Returns: An array of the elements that `includeElement` allowed.
   func filter(
-    _ isIncluded: @noescape (Iterator.Element) throws -> Bool
+    _ isIncluded: (Iterator.Element) throws -> Bool
   ) rethrows -> [Iterator.Element]
 
   /// Calls the given closure on each element in the sequence in the same order
@@ -424,7 +424,7 @@ public protocol Sequence {
   ///
   /// - Parameter body: A closure that takes an element of the sequence as a
   ///   parameter.
-  func forEach(_ body: @noescape (Iterator.Element) throws -> Void) rethrows
+  func forEach(_ body: (Iterator.Element) throws -> Void) rethrows
 
   // Note: The complexity of Sequence.dropFirst(_:) requirement
   // is documented as O(n) because Collection.dropFirst(_:) is
@@ -466,6 +466,7 @@ public protocol Sequence {
   ///
   /// - Parameter n: The number of elements to drop off the end of the
   ///   sequence. `n` must be greater than or equal to zero.
+  /// - Returns: A subsequence leaving off the specified number of elements.
   ///
   /// - Complexity: O(*n*), where *n* is the length of the sequence.
   func dropLast(_ n: Int) -> SubSequence
@@ -562,7 +563,7 @@ public protocol Sequence {
   /// - Returns: An array of subsequences, split from this sequence's elements.
   func split(
     maxSplits: Int, omittingEmptySubsequences: Bool,
-    whereSeparator isSeparator: @noescape (Iterator.Element) throws -> Bool
+    whereSeparator isSeparator: (Iterator.Element) throws -> Bool
   ) rethrows -> [SubSequence]
 
   /// Returns the first element of the sequence that satisfies the given
@@ -573,7 +574,7 @@ public protocol Sequence {
   ///   whether the element is a match.
   /// - Returns: The first match or `nil` if there was no match.
   func first(
-    where predicate: @noescape (Iterator.Element) throws -> Bool
+    where predicate: (Iterator.Element) throws -> Bool
   ) rethrows -> Iterator.Element?
 
   func _customContainsEquatableElement(
@@ -583,7 +584,7 @@ public protocol Sequence {
   /// If `self` is multi-pass (i.e., a `Collection`), invoke `preprocess` and
   /// return its result.  Otherwise, return `nil`.
   func _preprocessingPass<R>(
-    _ preprocess: @noescape () throws -> R
+    _ preprocess: () throws -> R
   ) rethrows -> R?
 
   /// Create a native array buffer containing the elements of `self`,
@@ -721,7 +722,7 @@ extension Sequence {
   /// - Returns: An array containing the transformed elements of this
   ///   sequence.
   public func map<T>(
-    _ transform: @noescape (Iterator.Element) throws -> T
+    _ transform: (Iterator.Element) throws -> T
   ) rethrows -> [T] {
     let initialCapacity = underestimatedCount
     var result = ContiguousArray<T>()
@@ -756,7 +757,7 @@ extension Sequence {
   ///   whether the element should be included in the returned array.
   /// - Returns: An array of the elements that `includeElement` allowed.
   public func filter(
-    _ isIncluded: @noescape (Iterator.Element) throws -> Bool
+    _ isIncluded: (Iterator.Element) throws -> Bool
   ) rethrows -> [Iterator.Element] {
 
     var result = ContiguousArray<Iterator.Element>()
@@ -867,7 +868,7 @@ extension Sequence {
   public func split(
     maxSplits: Int = Int.max,
     omittingEmptySubsequences: Bool = true,
-    whereSeparator isSeparator: @noescape (Iterator.Element) throws -> Bool
+    whereSeparator isSeparator: (Iterator.Element) throws -> Bool
   ) rethrows -> [AnySequence<Iterator.Element>] {
     _precondition(maxSplits >= 0, "Must take zero or more splits")
     var result: [AnySequence<Iterator.Element>] = []
@@ -920,7 +921,7 @@ extension Sequence {
   }
 
   public func _preprocessingPass<R>(
-    _ preprocess: @noescape () throws -> R
+    _ preprocess: () throws -> R
   ) rethrows -> R? {
     return nil
   }
@@ -961,7 +962,7 @@ extension Sequence {
   /// - Parameter body: A closure that takes an element of the sequence as a
   ///   parameter.
   public func forEach(
-    _ body: @noescape (Iterator.Element) throws -> Void
+    _ body: (Iterator.Element) throws -> Void
   ) rethrows {
     for element in self {
       try body(element)
@@ -982,7 +983,7 @@ extension Sequence {
   ///   whether the element is a match.
   /// - Returns: The first match or `nil` if there was no match.
   public func first(
-    where predicate: @noescape (Iterator.Element) throws -> Bool
+    where predicate: (Iterator.Element) throws -> Bool
   ) rethrows -> Iterator.Element? {
     var foundElement: Iterator.Element? = nil
     do {
@@ -1084,11 +1085,11 @@ extension Sequence where
     return AnySequence(_DropFirstSequence(_iterator: makeIterator(), limit: n))
   }
 
-  /// Returns a subsequence containing all but the given number of final 
+  /// Returns a subsequence containing all but the given number of final
   /// elements.
   ///
   /// The sequence must be finite. If the number of elements to drop exceeds
-  /// the number of elements in the sequence, the result is an empty 
+  /// the number of elements in the sequence, the result is an empty
   /// subsequence.
   ///
   ///     let numbers = [1, 2, 3, 4, 5]
@@ -1099,6 +1100,8 @@ extension Sequence where
   ///
   /// - Parameter n: The number of elements to drop off the end of the
   ///   sequence. `n` must be greater than or equal to zero.
+  /// - Returns: A subsequence leaving off the specified number of elements.
+  ///
   /// - Complexity: O(*n*), where *n* is the length of the sequence.
   public func dropLast(_ n: Int) -> AnySequence<Iterator.Element> {
     _precondition(n >= 0, "Can't drop a negative number of elements from a sequence")
@@ -1158,22 +1161,41 @@ extension Sequence {
   /// Returns a subsequence containing all but the first element of the
   /// sequence.
   ///
-  /// For example:
+  /// The following example drops the first element from an array of integers.
   ///
   ///     let numbers = [1, 2, 3, 4, 5]
   ///     print(numbers.dropFirst())
   ///     // Prints "[2, 3, 4, 5]"
   ///
+  /// If the sequence has no elements, the result is an empty subsequence.
+  ///
+  ///     let empty: [Int] = []
+  ///     print(empty.dropFirst())
+  ///     // Prints "[]"
+  ///
+  /// - Returns: A subsequence starting after the first element of the
+  ///   sequence.
+  ///
   /// - Complexity: O(1)
   public func dropFirst() -> SubSequence { return dropFirst(1) }
 
-  /// Returns a subsequence containing all but the last element of the sequence.
+  /// Returns a subsequence containing all but the last element of the
+  /// sequence.
   ///
-  /// The sequence must be finite.
+  /// The sequence must be finite. If the sequence has no elements, the result
+  /// is an empty subsequence.
   ///
   ///     let numbers = [1, 2, 3, 4, 5]
   ///     print(numbers.dropLast())
   ///     // Prints "[1, 2, 3, 4]"
+  ///
+  /// If the sequence has no elements, the result is an empty subsequence.
+  ///
+  ///     let empty: [Int] = []
+  ///     print(empty.dropLast())
+  ///     // Prints "[]"
+  ///
+  /// - Returns: A subsequence leaving off the last element of the sequence.
   ///
   /// - Complexity: O(*n*), where *n* is the length of the sequence.
   public func dropLast() -> SubSequence  { return dropLast(1) }
@@ -1204,7 +1226,7 @@ extension Sequence {
 public struct IteratorSequence<
   Base : IteratorProtocol
 > : IteratorProtocol, Sequence {
-  /// Construct an instance whose iterator is a copy of `base`.
+  /// Creates an instance whose iterator is a copy of `base`.
   public init(_ base: Base) {
     _base = base
   }
@@ -1242,7 +1264,7 @@ extension Sequence {
 
   @available(*, unavailable, message: "call 'split(maxSplits:omittingEmptySubsequences:isSeparator:)' and invert the 'allowEmptySlices' argument")
   public func split(_ maxSplit: Int, allowEmptySlices: Bool,
-    isSeparator: @noescape (Iterator.Element) throws -> Bool
+    isSeparator: (Iterator.Element) throws -> Bool
   ) rethrows -> [SubSequence] {
     Builtin.unreachable()
   }

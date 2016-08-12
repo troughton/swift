@@ -501,7 +501,7 @@ extension Array : _ObjectiveCBridgeable {
 
   @_semantics("convertToObjectiveC")
   public func _bridgeToObjectiveC() -> NSArray {
-    return unsafeBitCast(self._buffer._asCocoaArray() as AnyObject, to: NSArray.self)
+    return unsafeBitCast(self._bridgeToObjectiveCImpl(), to: NSArray.self)
   }
 
   public static func _forceBridgeFromObjectiveC(
@@ -567,11 +567,12 @@ extension Array : _ObjectiveCBridgeable {
 
 extension NSDictionary : ExpressibleByDictionaryLiteral {
   public required convenience init(
-    dictionaryLiteral elements: (NSCopying, AnyObject)...
+    dictionaryLiteral elements: (Any, Any)...
   ) {
+    // FIXME: Unfortunate that the `NSCopying` check has to be done at runtime.
     self.init(
-      objects: elements.map { $0.1 },
-      forKeys: elements.map { $0.0 },
+      objects: elements.map { $0.1 as AnyObject },
+      forKeys: elements.map { $0.0 as AnyObject as! NSCopying },
       count: elements.count)
   }
 }
@@ -976,11 +977,38 @@ extension NSDictionary : Sequence {
     }
   }
 
+  // Bridging subscript.
+  @objc
+  public subscript(key: Any) -> Any? {
+    @objc(_swift_objectForKeyedSubscript:)
+    get {
+      // Deliberately avoid the subscript operator in case the dictionary
+      // contains non-copyable keys. This is rare since NSMutableDictionary
+      // requires them, but we don't want to paint ourselves into a corner.
+      return self.object(forKey: key)
+    }
+  }
+
   /// Return an *iterator* over the elements of this *sequence*.
   ///
   /// - Complexity: O(1).
   public func makeIterator() -> Iterator {
     return Iterator(self)
+  }
+}
+
+extension NSMutableDictionary {
+  // Bridging subscript.
+  override public subscript(key: Any) -> Any? {
+    get {
+      return self.object(forKey: key)
+    }
+    @objc(_swift_setObject:forKeyedSubscript:)
+    set {
+      // FIXME: Unfortunate that the `NSCopying` check has to be done at
+      // runtime.
+      self.setObject(newValue, forKey: key as AnyObject as! NSCopying)
+    }
   }
 }
 
@@ -1605,3 +1633,20 @@ extension AnyHashable : _ObjectiveCBridgeable {
   }
 }
 
+//===----------------------------------------------------------------------===//
+// CVarArg for bridged types
+//===----------------------------------------------------------------------===//
+
+extension CVarArg where Self: _ObjectiveCBridgeable {
+  /// Default implementation for bridgeable types.
+  public var _cVarArgEncoding: [Int] {
+    let object = self._bridgeToObjectiveC()
+    _autorelease(object)
+    return _encodeBitsAsWords(object)
+  }
+}
+
+extension String: CVarArg {}
+extension Array: CVarArg {}
+extension Dictionary: CVarArg {}
+extension Set: CVarArg {}

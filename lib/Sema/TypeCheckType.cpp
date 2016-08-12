@@ -724,6 +724,7 @@ static Type diagnoseUnknownType(TypeChecker &tc, DeclContext *dc,
                                 SourceRange parentRange,
                                 ComponentIdentTypeRepr *comp,
                                 TypeResolutionOptions options,
+                                NameLookupOptions lookupOptions,
                                 GenericTypeResolver *resolver,
                                 UnsatisfiedDependency *unsatisfiedDependency) {
   // Unqualified lookup case.
@@ -785,6 +786,30 @@ static Type diagnoseUnknownType(TypeChecker &tc, DeclContext *dc,
   }
 
   // Qualified lookup case.
+
+  // Try ignoring access control.
+  NameLookupOptions relookupOptions = lookupOptions;
+  relookupOptions |= NameLookupFlags::KnownPrivate;
+  relookupOptions |= NameLookupFlags::IgnoreAccessibility;
+  auto inaccessibleMembers = tc.lookupMemberType(dc, parentType,
+                                                 comp->getIdentifier(),
+                                                 relookupOptions);
+  if (inaccessibleMembers) {
+    // FIXME: What if the unviable candidates have different levels of access?
+    const TypeDecl *first = inaccessibleMembers.front().first;
+    tc.diagnose(comp->getIdLoc(), diag::candidate_inaccessible,
+                comp->getIdentifier(), first->getFormalAccess());
+
+    // FIXME: If any of the candidates (usually just one) are in the same module
+    // we could offer a fix-it.
+    for (auto lookupResult : inaccessibleMembers)
+      tc.diagnose(lookupResult.first, diag::type_declared_here);
+
+    // Don't try to recover here; we'll get more access-related diagnostics
+    // downstream if we do.
+    return ErrorType::get(tc.Context);
+  }
+
   // FIXME: Typo correction!
 
   // Lookup into a type.
@@ -986,7 +1011,7 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
       return ErrorType::get(TC.Context);
 
     return diagnoseUnknownType(TC, DC, nullptr, SourceRange(), comp, options,
-                               resolver, unsatisfiedDependency);
+                               lookupOptions, resolver, unsatisfiedDependency);
   }
 
   comp->setValue(currentDecl);
@@ -1150,7 +1175,8 @@ static Type resolveNestedIdentTypeComponent(
     }
 
     Type ty = diagnoseUnknownType(TC, DC, parentTy, parentRange, comp, options,
-                                  resolver, unsatisfiedDependency);
+                                  lookupOptions, resolver,
+                                  unsatisfiedDependency);
     if (!ty || ty->is<ErrorType>()) {
       return ErrorType::get(TC.Context);
     }
@@ -1889,15 +1915,13 @@ Type TypeResolver::resolveAttributedType(TypeAttributes &attrs,
     }
 
     bool defaultNoEscape = false;
-    // TODO: Get rid of the need for checking autoclosure, by refactoring
-    // special autoclosure knowledge to just as "isEscaping" or similar.
-    if (isFunctionParam && !attrs.has(TAK_autoclosure)) {
-      // Closure params default to non-escaping
-      if (attrs.has(TAK_noescape)) {
-        // FIXME: diagnostic to tell user this is redundant and drop it
-      } else if (!attrs.has(TAK_escaping)) {
-        defaultNoEscape = isDefaultNoEscapeContext(DC);
-      }
+    if (isFunctionParam && !attrs.has(TAK_escaping)) {
+      defaultNoEscape = isDefaultNoEscapeContext(DC);
+    }
+
+    if (isFunctionParam && attrs.has(TAK_noescape) &&
+        isDefaultNoEscapeContext(DC)) {
+      // FIXME: diagnostic to tell user this is redundant and drop it
     }
 
     // Resolve the function type directly with these attributes.

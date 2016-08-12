@@ -709,12 +709,20 @@ bool ConstraintSystem::isSetType(Type type) {
   return false;
 }
 
+bool ConstraintSystem::isAnyHashableType(Type type) {
+  if (auto st = type->getAs<StructType>()) {
+    return st->getDecl() == TC.Context.getAnyHashableDecl();
+  }
+
+  return false;
+}
+
 Type ConstraintSystem::openBindingType(Type type, 
                                        ConstraintLocatorBuilder locator) {
   Type result = openType(type, locator);
   
   if (isArrayType(type)) {
-    auto boundStruct = cast<BoundGenericStructType>(type.getPointer());
+    auto boundStruct = type->getAs<BoundGenericStructType>();
     if (auto replacement = getTypeChecker().getArraySliceType(
                              SourceLoc(), boundStruct->getGenericArgs()[0])) {
       return replacement;

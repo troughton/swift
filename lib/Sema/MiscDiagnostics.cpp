@@ -240,10 +240,6 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
       while (auto Conv = dyn_cast<ImplicitConversionExpr>(Base))
         Base = Conv->getSubExpr();
 
-      if (auto collection = dyn_cast<CollectionExpr>(E))
-        if (collection->isTypeDefaulted())
-          checkTypeDefaultedCollectionExpr(collection);
-
       // Record call arguments.
       if (auto Call = dyn_cast<CallExpr>(Base))
         CallArgs.insert(Call->getArg());
@@ -390,10 +386,6 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
     /// an error if it was inferred to this type in an invalid context, which is
     /// one in which the parent expression is not itself a collection literal.
     void checkTypeDefaultedCollectionExpr(CollectionExpr *c) {
-      if (auto *ParentExpr = Parent.getAsExpr())
-        if (isa<CollectionExpr>(ParentExpr))
-          return;
-
       // If the parent is a non-expression, or is not itself a literal, then
       // produce an error with a fixit to add the type as an explicit
       // annotation.
@@ -703,6 +695,16 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
 
   DiagnoseWalker Walker(TC, DC, isExprStmt);
   const_cast<Expr *>(E)->walk(Walker);
+
+  // Diagnose uses of collection literals with defaulted types at the top
+  // level.
+  if (auto collection
+        = dyn_cast<CollectionExpr>(E->getSemanticsProvidingExpr())) {
+    if (collection->isTypeDefaulted()) {
+      Walker.checkTypeDefaultedCollectionExpr(
+        const_cast<CollectionExpr *>(collection));
+    }
+  }
 }
 
 
@@ -1434,11 +1436,53 @@ void swift::fixItAvailableAttrRename(TypeChecker &TC,
   });
 
   if (auto args = dyn_cast<TupleShuffleExpr>(argExpr)) {
-    if (!args->getVariadicArgs().empty()) {
-      // FIXME: Support variadic arguments.
+    argExpr = args->getSubExpr();
+
+    // Coerce the `argumentLabelIDs` to the user supplied arguments.
+    // e.g:
+    //   @available(.., renamed: "new(w:x:y:z:)")
+    //   func old(a: Int, b: Int..., c: String="", d: Int=0){}
+    //   old(a: 1, b: 2, 3, 4, d: 5)
+    // coerce
+    //   argumentLabelIDs = {"w", "x", "y", "z"}
+    // to
+    //   argumentLabelIDs = {"w", "x", "", "", "z"}
+    auto elementMap = args->getElementMapping();
+    if (elementMap.size() != argumentLabelIDs.size()) {
+      // Mismatched lengths; give up.
       return;
     }
-    argExpr = args->getSubExpr();
+    auto I = argumentLabelIDs.begin();
+    for (auto shuffleIdx : elementMap) {
+      switch (shuffleIdx) {
+      case TupleShuffleExpr::DefaultInitialize:
+      case TupleShuffleExpr::CallerDefaultInitialize:
+        // Defaulted: remove param label of it.
+        I = argumentLabelIDs.erase(I);
+        break;
+      case TupleShuffleExpr::Variadic: {
+        auto variadicArgsNum = args->getVariadicArgs().size();
+        if (variadicArgsNum == 0) {
+          // No arguments: Remove param label of it.
+          I = argumentLabelIDs.erase(I);
+        } else if (variadicArgsNum == 1) {
+          // One argument: Just advance.
+          ++I;
+        } else {
+          // Two or more arguments: Insert empty labels after the first one.
+          I = argumentLabelIDs.insert(++I, --variadicArgsNum, Identifier());
+          I += variadicArgsNum;
+        }
+        break;
+      }
+      default:
+        // Normal: Just advance.
+        assert(shuffleIdx == (I - argumentLabelIDs.begin()) &&
+               "SE-0060 guarantee");
+        ++I;
+        break;
+      }
+    }
   }
 
   if (auto args = dyn_cast<TupleExpr>(argExpr)) {

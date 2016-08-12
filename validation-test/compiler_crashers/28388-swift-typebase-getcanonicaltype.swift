@@ -6,6 +6,4 @@
 // See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
 // RUN: not --crash %target-swift-frontend %s -parse
-// REQUIRES: asserts
-class B<enum B{case c
-var:{if c
+class A{protocol a{struct d:a{{}class B<T>:A{{}}let c=f=1}typealias f)typealias B<>:AnyObject
