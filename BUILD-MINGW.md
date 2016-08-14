@@ -23,6 +23,7 @@ pacman -S mingw-w64-x86_64-libxml2     # 2.9.4-1
 pacman -S mingw-w64-x86_64-wineditline # 2.101-4
 pacman -S mingw-w64-x86_64-winpthreads # git-5.0.0.4670
 pacman -S mingw-w64-x86_64-pkg-config  # 0.29.1-1
+pacman -S mingw-w64-x86_64-dlfcn       # 1.0.0-2
 pacman -S make                         # 4.1-4
 pacman -S python                       # 3.4.3-3
 pacman -S python2                      # 2.7.11-1
@@ -83,7 +84,6 @@ cmake -G Ninja -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX
 
 ninja -k 5
 // Ignore the build error for lib\libLTO.dll.a
-export PATH=$WORKDIR/build/NinjaMinGW/llvm/bin:$PATH
 ```
 
 Build Swift
