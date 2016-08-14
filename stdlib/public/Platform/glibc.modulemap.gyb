@@ -331,12 +331,10 @@ module SwiftGlibc [system] {
       }
 % end
 
-% if CMAKE_SDK in ["CYGWIN"]:
       module file {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/file.h"
         export *
       }
-% end
 
       module ipc {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/ipc.h"
