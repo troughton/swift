@@ -185,7 +185,7 @@ void irgen::emitDeallocatePartialClassInstance(IRGenFunction &IGF,
 static llvm::Function *createDtorFn(IRGenModule &IGM,
                                     const HeapLayout &layout) {
   llvm::Function *fn = llvm::Function::Create(IGM.DeallocatingDtorTy,
-                                              llvm::Function::PrivateLinkage,
+                                              llvm::Function::InternalLinkage,
                                               "objectdestroy", &IGM.Module);
   fn->setAttributes(IGM.constructInitialAttributes());
   // FIXME: should we be setting visibility and DLL storage as well?
@@ -229,7 +229,7 @@ static llvm::Function *createDtorFn(IRGenModule &IGM,
 /// TODO: give this some reasonable name and possibly linkage.
 llvm::Constant *HeapLayout::createSizeFn(IRGenModule &IGM) const {
   llvm::Function *fn = llvm::Function::Create(IGM.DeallocatingDtorTy,
-                                              llvm::Function::PrivateLinkage,
+                                              llvm::Function::InternalLinkage,
                                               "objectsize", &IGM.Module);
   fn->setAttributes(IGM.constructInitialAttributes());
   // FIXME: should we be setting visibility and DLL storage as well?

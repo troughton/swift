@@ -1222,7 +1222,7 @@ createInPlaceMetadataInitializationFunction(IRGenModule &IGM,
   auto fnTy = llvm::FunctionType::get(IGM.VoidTy, {IGM.Int8PtrTy},
                                       /*variadic*/ false);
   llvm::Function *fn = llvm::Function::Create(
-      fnTy, llvm::GlobalValue::PrivateLinkage,
+      fnTy, llvm::GlobalValue::InternalLinkage,
       Twine("initialize_metadata_") + type->getDecl()->getName().str(),
       &IGM.Module);
   // FIXME: should we be setting visibility and DLL storage as well?
@@ -2392,7 +2392,7 @@ namespace {
     auto fnTy = llvm::FunctionType::get(metadataArrayPtrTy,
                                         IGM.TypeMetadataPtrTy,
                                         /*vararg*/ false);
-    auto fn = llvm::Function::Create(fnTy, llvm::GlobalValue::PrivateLinkage,
+    auto fn = llvm::Function::Create(fnTy, llvm::GlobalValue::InternalLinkage,
                                      llvm::Twine("get_field_types_") +
                                          type->getName().str(),
                                      IGM.getModule());
@@ -5272,7 +5272,7 @@ namespace {
       auto fnTy = llvm::FunctionType::get(IGM.VoidTy, {IGM.TypeMetadataPtrTy},
                                           /*variadic*/ false);
       llvm::Function *fn = llvm::Function::Create(
-          fnTy, llvm::GlobalValue::PrivateLinkage,
+          fnTy, llvm::GlobalValue::InternalLinkage,
           Twine("initialize_metadata_") + type->getDecl()->getName().str(),
           &IGM.Module);
       // FIXME: should we be setting visibility and DLL storage as well?
