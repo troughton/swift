@@ -98,3 +98,29 @@ Build
   utils/build-script -R --build-swift-static-stdlib --foundation
 ```
 
+Build and Install XCTest
+------------------------
+```
+Backup and Remove lib/swift/CoreFoundation
+
+utils/build-script --release --assertions --xctest -- --skip-test-cmark --skip-test-swift --skip-test-foundation --skip-build-benchmarks --skip-build-llvm
+
+cd $WORKDIR/build/Ninja-ReleaseAssert/xctest-cygwin-x86_64
+cp -p libXCTest.dll $WORKDIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
+cp -p libXCTest.dll $WORKDIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/lib/swift/cygwin
+cp -p XCTest.swiftdoc XCTest.swiftmodule $WORKDIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/lib/swift/cygwin/x86_64
+```
+
+Build and Install Swift Package Manager
+---------------------------------------
+```
+Recover CoreFoundation
+XCTest should be installed
+
+utils/build-script -R --swiftpm --llbuild --skip-build-foundation --skip-build-llvm  -j 3
+
+cd $WORKDIR/build/Ninja-ReleaseAssert/swiftpm-cygwin-x86_64/.bootstrap/bin
+cp -p swift-build.exe swift-package.exe swift-test.exe $WORKDIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
+cd $WORKDIR/build/Ninja-ReleaseAssert/swiftpm-cygwin-x86_64/.bootstrap/lib/swift
+cp -rp pm $WORKDIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/lib/swift
+```

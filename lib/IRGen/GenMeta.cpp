@@ -2895,7 +2895,7 @@ namespace {
       auto ty = llvm::FunctionType::get(IGM.TypeMetadataPtrTy,
                                         argTys, /*isVarArg*/ false);
       llvm::Function *f = llvm::Function::Create(
-          ty, llvm::GlobalValue::PrivateLinkage,
+          ty, llvm::GlobalValue::InternalLinkage,
           llvm::Twine("create_generic_metadata_") + Target->getName().str(),
           &IGM.Module);
       // FIXME: should we be setting visibility and DLL storage as well?
