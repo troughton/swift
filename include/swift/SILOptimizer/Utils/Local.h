@@ -138,7 +138,7 @@ void replaceDeadApply(ApplySite Old, ValueBase *New);
 
 /// \brief Return true if the substitution map contains a
 /// substitution that is an unbound generic type.
-bool hasUnboundGenericTypes(TypeSubstitutionMap &SubsMap);
+bool hasUnboundGenericTypes(const TypeSubstitutionMap &SubsMap);
 
 /// Return true if the substitution list contains a substitution
 /// that is an unbound generic.
@@ -146,7 +146,7 @@ bool hasUnboundGenericTypes(ArrayRef<Substitution> Subs);
 
 /// \brief Return true if the substitution map contains a
 /// substitution that refers to the dynamic Self type.
-bool hasDynamicSelfTypes(TypeSubstitutionMap &SubsMap);
+bool hasDynamicSelfTypes(const TypeSubstitutionMap &SubsMap);
 
 /// \brief Return true if the substitution list contains a
 /// substitution that refers to the dynamic Self type.
@@ -154,7 +154,7 @@ bool hasDynamicSelfTypes(ArrayRef<Substitution> Subs);
 
 /// \brief Return true if any call inside the given function may bind dynamic
 /// 'Self' to a generic argument of the callee.
-bool computeMayBindDynamicSelf(SILFunction *F);
+bool mayBindDynamicSelf(SILFunction *F);
 
 /// \brief Move an ApplyInst's FuncRef so that it dominates the call site.
 void placeFuncRef(ApplyInst *AI, DominanceInfo *DT);

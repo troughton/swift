@@ -39,6 +39,11 @@ class SILFunction;
 } // end namespace swift
 
 namespace swift {
+/// Return true if this is a retain instruction.
+bool isRetainInstruction(SILInstruction *II);
+
+/// Return true if this is a release instruction.
+bool isReleaseInstruction(SILInstruction *II);
 
 using RetainList = llvm::SmallVector<SILInstruction *, 1>;
 using ReleaseList = llvm::SmallVector<SILInstruction *, 1>;
@@ -442,13 +447,23 @@ private:
   RCIdentityFunctionInfo *RCFI;
 
   /// The epilogue retains or releases.
-  llvm::SmallVector<SILInstruction *, 1> EpilogueARCInsts; 
+  llvm::SmallSetVector<SILInstruction *, 1> EpilogueARCInsts; 
 
   /// All the retain/release block state for all the basic blocks in the function. 
   llvm::DenseMap<SILBasicBlock *, EpilogueARCBlockState *> EpilogueARCBlockStates;
 
   /// The exit blocks of the function.
   llvm::SmallPtrSet<SILBasicBlock *, 2> ExitBlocks;
+
+  /// Return true if this is a function exitting block this epilogue ARC
+  /// matcher is interested in. 
+  bool isInterestedFunctionExitingBlock(SILBasicBlock *BB) {
+    if (EpilogueARCKind::Release == Kind)  
+      return BB->getTerminator()->isFunctionExiting();
+
+    return BB->getTerminator()->isFunctionExiting() &&
+           BB->getTerminator()->getTermKind() != TermKind::ThrowInst;
+  }
 
   /// Return true if this is a function exit block.
   bool isExitBlock(SILBasicBlock *BB) {
@@ -484,14 +499,15 @@ public:
     // Initialize the epilogue arc data flow context.
     initializeDataflow();
     // Converge the data flow.
-    convergeDataflow();
+    if (!convergeDataflow())
+      return false;
     // Lastly, find the epilogue ARC instructions.
     return computeEpilogueARC();
   }
 
   /// Reset the epilogue arc instructions. 
   void resetEpilogueARCInsts() { EpilogueARCInsts.clear(); }
-  llvm::SmallVector<SILInstruction *, 1> getEpilogueARCInsts() {
+  llvm::SmallSetVector<SILInstruction *, 1> getEpilogueARCInsts() {
     return EpilogueARCInsts;
   }
 
@@ -499,7 +515,7 @@ public:
   void initializeDataflow();
 
   /// Keep iterating until the data flow is converged.
-  void convergeDataflow();
+  bool convergeDataflow();
 
   /// Find the epilogue ARC instructions.
   bool computeEpilogueARC();
@@ -561,7 +577,7 @@ public:
 /// empty set if no epilogue ARC instructions can be found.
 ///
 /// NOTE: This function assumes Arg is has @owned semantic.
-llvm::SmallVector<SILInstruction *, 1> 
+llvm::SmallSetVector<SILInstruction *, 1> 
 computeEpilogueARCInstructions(EpilogueARCContext::EpilogueARCKind Kind,
                                SILValue Arg, SILFunction *F,
                                PostOrderFunctionInfo *PO, AliasAnalysis *AA,

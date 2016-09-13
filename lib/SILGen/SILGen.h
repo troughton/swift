@@ -181,11 +181,16 @@ public:
   SILType getLoweredType(Type t) {
     return Types.getTypeLowering(t).getLoweredType();
   }
+
+  /// Translate a formal enum element decl into its lowered form.
+  ///
+  /// This just turns ImplicitlyUnwrappedOptional's cases into Optional's.
+  EnumElementDecl *getLoweredEnumElementDecl(EnumElementDecl *element);
   
   /// Get or create the declaration of a reabstraction thunk with the
   /// given signature.
   SILFunction *getOrCreateReabstractionThunk(
-                                           GenericParamList *thunkContextParams,
+                                           GenericEnvironment *genericEnv,
                                            CanSILFunctionType thunkType,
                                            CanSILFunctionType fromType,
                                            CanSILFunctionType toType,
@@ -393,8 +398,8 @@ public:
 
   /// Find the conformance of the given Swift type to the
   /// _BridgedStoredNSError protocol.
-  ProtocolConformance *getConformanceToBridgedStoredNSError(SILLocation loc,
-                                                            Type type);
+  Optional<ProtocolConformanceRef>
+  getConformanceToBridgedStoredNSError(SILLocation loc, Type type);
 
   /// Retrieve the conformance of NSError to the Error protocol.
   ProtocolConformance *getNSErrorConformanceToError();
@@ -423,12 +428,6 @@ public:
 
   /// Mark protocol conformances from the given set of substitutions as used.
   void useConformancesFromSubstitutions(ArrayRef<Substitution> subs);
-
-  /// Substitute the `Self` type from a protocol conformance into a protocol
-  /// requirement's type to get the type of the witness.
-  CanAnyFunctionType
-  substSelfTypeIntoProtocolRequirementType(CanGenericFunctionType reqtTy,
-                                           ProtocolConformance *conformance);
 
   /// Emit a `mark_function_escape` instruction for top-level code when a
   /// function or closure at top level refers to script globals.

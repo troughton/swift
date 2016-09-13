@@ -137,7 +137,8 @@ public protocol UnicodeCodec {
   /// Searches for the first occurrence of a `CodeUnit` that is equal to 0.
   ///
   /// Is an equivalent of `strlen` for C-strings.
-  /// - Complexity: O(n)
+  ///
+  /// - Complexity: O(*n*)
   static func _nullCodeUnitOffset(in input: UnsafePointer<CodeUnit>) -> Int
 }
 
@@ -839,7 +840,7 @@ internal func _transcodeSomeUTF16AsUTF8<Input>(
     nextIndex = input.index(nextIndex, offsetBy: utf16Length)
   }
   // FIXME: Annoying check, courtesy of <rdar://problem/16740169>
-  if utf8Count < MemoryLayout._ofInstance(result).size {
+  if utf8Count < MemoryLayout.size(ofValue: result) {
     result |= ~0 << numericCast(utf8Count * 8)
   }
   return (nextIndex, result)
@@ -1139,6 +1140,16 @@ extension UnicodeCodec {
 @available(*, unavailable, renamed: "UnicodeCodec")
 public typealias UnicodeCodecType = UnicodeCodec
 
+extension UnicodeCodec {
+  @available(*, unavailable, renamed: "encode(_:into:)")
+  public static func encode(
+    _ input: UnicodeScalar,
+    output put: (CodeUnit) -> Void
+  ) {
+    Builtin.unreachable()
+  }
+}
+
 @available(*, unavailable, message: "use 'transcode(_:from:to:stoppingOnError:into:)'")
 public func transcode<Input, InputEncoding, OutputEncoding>(
   _ inputEncoding: InputEncoding.Type, _ outputEncoding: OutputEncoding.Type,
@@ -1165,3 +1176,7 @@ extension UTF16 {
     Builtin.unreachable()
   }
 }
+
+/// A namespace for Unicode utilities.
+internal enum _Unicode {}
+

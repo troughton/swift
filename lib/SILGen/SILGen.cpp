@@ -46,6 +46,20 @@ SILGenModule::~SILGenModule() {
   M.verify();
 }
 
+EnumElementDecl *SILGenModule::getLoweredEnumElementDecl(EnumElementDecl *elt) {
+  auto &ctx = getASTContext();
+  if (elt->getParentEnum()->classifyAsOptionalType()
+        != OTK_ImplicitlyUnwrappedOptional)
+    return elt;
+
+  if (elt == ctx.getImplicitlyUnwrappedOptionalSomeDecl()) {
+    return ctx.getOptionalSomeDecl();
+  } else {
+    assert(elt == ctx.getImplicitlyUnwrappedOptionalNoneDecl());
+    return ctx.getOptionalNoneDecl();
+  }
+}
+
 static SILDeclRef
 getBridgingFn(Optional<SILDeclRef> &cacheSlot,
               SILGenModule &SGM,
@@ -319,15 +333,13 @@ VarDecl *SILGenModule::getNSErrorRequirement(SILLocation loc) {
   return found;
 }
 
-ProtocolConformance *
+Optional<ProtocolConformanceRef>
 SILGenModule::getConformanceToBridgedStoredNSError(SILLocation loc, Type type) {
   auto proto = getBridgedStoredNSError(loc);
-  if (!proto) return nullptr;
+  if (!proto) return None;
 
   // Find the conformance to _BridgedStoredNSError.
-  auto result = SwiftModule->lookupConformance(type, proto, nullptr);
-  if (result) return result->getConcrete();
-  return nullptr;
+  return SwiftModule->lookupConformance(type, proto, nullptr);
 }
 
 ProtocolConformance *SILGenModule::getNSErrorConformanceToError() {
@@ -577,8 +589,7 @@ void SILGenModule::preEmitFunction(SILDeclRef constant,
 
   assert(F->empty() && "already emitted function?!");
 
-  F->setContextGenericParams(
-                         Types.getConstantInfo(constant).ContextGenericParams);
+  F->setGenericEnvironment(Types.getConstantInfo(constant).GenericEnv);
 
   // Create a debug scope for the function using astNode as source location.
   F->setDebugScope(new (M) SILDebugScope(Loc, F));
@@ -1026,9 +1037,9 @@ void SILGenModule::emitDefaultArgGenerators(SILDeclRef::Loc decl,
   unsigned index = 0;
   for (auto paramList : paramLists) {
     for (auto param : *paramList) {
-      if (auto handle = param->getDefaultValue())
+      if (auto defaultArg = param->getDefaultValue())
         emitDefaultArgGenerator(SILDeclRef::getDefaultArgGenerator(decl, index),
-                                handle->getExpr());
+                                defaultArg);
       ++index;
     }
   }
@@ -1183,6 +1194,9 @@ void SILGenModule::visitTopLevelCodeDecl(TopLevelCodeDecl *td) {
   if (!TopLevelSGF->B.hasValidInsertionPoint())
     return;
 
+  ProfilerRAII Profiler(*this, td);
+  TopLevelSGF->emitProfilerIncrement(td->getBody());
+ 
   for (auto &ESD : td->getBody()->getElements()) {
     if (!TopLevelSGF->B.hasValidInsertionPoint()) {
       if (Stmt *S = ESD.dyn_cast<Stmt*>()) {

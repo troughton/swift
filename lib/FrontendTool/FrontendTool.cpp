@@ -23,6 +23,7 @@
 #include "swift/FrontendTool/FrontendTool.h"
 
 #include "swift/Subsystems.h"
+#include "swift/AST/ASTScope.h"
 #include "swift/AST/DiagnosticsFrontend.h"
 #include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/IRGenOptions.h"
@@ -33,6 +34,7 @@
 #include "swift/Basic/Dwarf.h"
 #include "swift/Basic/Fallthrough.h"
 #include "swift/Basic/FileSystem.h"
+#include "swift/Basic/LLVMContext.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/Basic/Timer.h"
 #include "swift/Frontend/DiagnosticVerifier.h"
@@ -598,6 +600,13 @@ private:
     if (Info.ID == diag::objc_witness_selector_mismatch.ID ||
         Info.ID == diag::witness_non_objc.ID)
       return false;
+    // This interacts badly with the migrator. For such code:
+    //   func test(p: Int, _: String) {}
+    //   test(0, "")
+    // the compiler bizarrely suggests to change order of arguments in the call
+    // site.
+    if (Info.ID == diag::argument_out_of_order_unnamed_unnamed.ID)
+      return false;
     // The following interact badly with the swift migrator by removing @IB*
     // attributes when there is some unrelated type issue.
     if (Info.ID == diag::invalid_iboutlet.ID ||
@@ -612,6 +621,10 @@ private:
     // Adding type(of:) interacts poorly with the swift migrator by
     // invalidating some inits with type errors.
     if (Info.ID == diag::init_not_instance_member.ID)
+      return false;
+    // Renaming enum cases interacts poorly with the swift migrator by
+    // reverting changes made by the mgirator.
+    if (Info.ID == diag::could_not_find_enum_case.ID)
       return false;
 
     if (Kind == DiagnosticKind::Error)
@@ -631,7 +644,13 @@ private:
         Info.ID == diag::selector_construction_suggest.ID ||
         Info.ID == diag::selector_literal_deprecated_suggest.ID ||
         Info.ID == diag::attr_noescape_deprecated.ID ||
-        Info.ID == diag::attr_autoclosure_escaping_deprecated.ID)
+        Info.ID == diag::attr_autoclosure_escaping_deprecated.ID ||
+        Info.ID == diag::attr_warn_unused_result_removed.ID ||
+        Info.ID == diag::any_as_anyobject_fixit.ID ||
+        Info.ID == diag::deprecated_protocol_composition.ID ||
+        Info.ID == diag::deprecated_protocol_composition_single.ID ||
+        Info.ID == diag::deprecated_any_composition.ID ||
+        Info.ID == diag::deprecated_operator_body.ID)
       return true;
 
     return false;
@@ -690,7 +709,7 @@ static bool performCompile(CompilerInstance &Instance,
 
   bool inputIsLLVMIr = Invocation.getInputKind() == InputFileKind::IFK_LLVM_IR;
   if (inputIsLLVMIr) {
-    auto &LLVMContext = llvm::getGlobalContext();
+    auto &LLVMContext = getGlobalLLVMContext();
 
     // Load in bitcode file.
     assert(Invocation.getInputFilenames().size() == 1 &&
@@ -763,6 +782,7 @@ static bool performCompile(CompilerInstance &Instance,
   if (Action == FrontendOptions::DumpParse ||
       Action == FrontendOptions::DumpAST ||
       Action == FrontendOptions::PrintAST ||
+      Action == FrontendOptions::DumpScopeMaps ||
       Action == FrontendOptions::DumpTypeRefinementContexts ||
       Action == FrontendOptions::DumpInterfaceHash) {
     SourceFile *SF = PrimarySourceFile;
@@ -772,7 +792,51 @@ static bool performCompile(CompilerInstance &Instance,
     }
     if (Action == FrontendOptions::PrintAST)
       SF->print(llvm::outs(), PrintOptions::printEverything());
-    else if (Action == FrontendOptions::DumpTypeRefinementContexts)
+    else if (Action == FrontendOptions::DumpScopeMaps) {
+      ASTScope &scope = SF->getScope();
+
+      if (opts.DumpScopeMapLocations.empty()) {
+        scope.expandAll();
+      } else if (auto bufferID = SF->getBufferID()) {
+        SourceManager &sourceMgr = Instance.getSourceMgr();
+        // Probe each of the locations, and dump what we find.
+        for (auto lineColumn : opts.DumpScopeMapLocations) {
+          SourceLoc loc = sourceMgr.getLocForLineCol(*bufferID,
+                                                     lineColumn.first,
+                                                     lineColumn.second);
+          if (loc.isInvalid()) continue;
+
+          llvm::errs() << "***Scope at " << lineColumn.first << ":"
+            << lineColumn.second << "***\n";
+          auto locScope = scope.findInnermostEnclosingScope(loc);
+          locScope->print(llvm::errs(), 0, false, false);
+
+          // Dump the AST context, too.
+          if (auto dc = locScope->getDeclContext()) {
+            dc->printContext(llvm::errs());
+          }
+
+          // Grab the local bindings introduced by this scope.
+          auto localBindings = locScope->getLocalBindings();
+          if (!localBindings.empty()) {
+            llvm::errs() << "Local bindings: ";
+            interleave(localBindings.begin(), localBindings.end(),
+                       [&](ValueDecl *value) {
+                         llvm::errs() << value->getFullName();
+                       },
+                       [&]() {
+                         llvm::errs() << " ";
+                       });
+            llvm::errs() << "\n";
+          }
+        }
+
+        llvm::errs() << "***Complete scope map***\n";
+      }
+
+      // Print the resulting map.
+      scope.print(llvm::errs());
+    } else if (Action == FrontendOptions::DumpTypeRefinementContexts)
       SF->getTypeRefinementContext()->dump(llvm::errs(), Context.SourceMgr);
     else if (Action == FrontendOptions::DumpInterfaceHash)
       SF->dumpInterfaceHash(llvm::errs());
@@ -1012,7 +1076,7 @@ static bool performCompile(CompilerInstance &Instance,
 
   // FIXME: We shouldn't need to use the global context here, but
   // something is persisting across calls to performIRGeneration.
-  auto &LLVMContext = llvm::getGlobalContext();
+  auto &LLVMContext = getGlobalLLVMContext();
   if (PrimarySourceFile) {
     performIRGeneration(IRGenOpts, *PrimarySourceFile, SM.get(),
                         opts.getSingleOutputFilename(), LLVMContext);

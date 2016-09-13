@@ -253,6 +253,36 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Action = FrontendOptions::DumpParse;
     } else if (Opt.matches(OPT_dump_ast)) {
       Action = FrontendOptions::DumpAST;
+    } else if (Opt.matches(OPT_dump_scope_maps)) {
+      Action = FrontendOptions::DumpScopeMaps;
+
+      StringRef value = A->getValue();
+      if (value == "expanded") {
+        // Note: fully expanded the scope map.
+      } else {
+        // Parse a comma-separated list of line:column for lookups to
+        // perform (and dump the result of).
+        SmallVector<StringRef, 4> locations;
+        value.split(locations, ',');
+
+        bool invalid = false;
+        for (auto location : locations) {
+          auto lineColumnStr = location.split(':');
+          unsigned line, column;
+          if (lineColumnStr.first.getAsInteger(10, line) ||
+              lineColumnStr.second.getAsInteger(10, column)) {
+            Diags.diagnose(SourceLoc(), diag::error_invalid_source_location_str,
+                           location);
+            invalid = true;
+            continue;
+          }
+
+          Opts.DumpScopeMapLocations.push_back({line, column});
+        }
+
+        if (!invalid && Opts.DumpScopeMapLocations.empty())
+          Diags.diagnose(SourceLoc(), diag::error_no_source_location_scope_map);
+      }
     } else if (Opt.matches(OPT_dump_type_refinement_contexts)) {
       Action = FrontendOptions::DumpTypeRefinementContexts;
     } else if (Opt.matches(OPT_dump_interface_hash)) {
@@ -433,6 +463,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
     case FrontendOptions::PrintAST:
+    case FrontendOptions::DumpScopeMaps:
     case FrontendOptions::DumpTypeRefinementContexts:
       // Textual modes.
       Opts.setSingleOutputFilename("-");
@@ -622,6 +653,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
     case FrontendOptions::PrintAST:
+    case FrontendOptions::DumpScopeMaps:
     case FrontendOptions::DumpTypeRefinementContexts:
     case FrontendOptions::Immediate:
     case FrontendOptions::REPL:
@@ -648,6 +680,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
     case FrontendOptions::PrintAST:
+    case FrontendOptions::DumpScopeMaps:
     case FrontendOptions::DumpTypeRefinementContexts:
     case FrontendOptions::Immediate:
     case FrontendOptions::REPL:
@@ -676,6 +709,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
     case FrontendOptions::PrintAST:
+    case FrontendOptions::DumpScopeMaps:
     case FrontendOptions::DumpTypeRefinementContexts:
     case FrontendOptions::EmitSILGen:
     case FrontendOptions::Immediate:
@@ -727,7 +761,8 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
 }
 
 static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
-                          DiagnosticEngine &Diags, bool isImmediate) {
+                          DiagnosticEngine &Diags,
+                          const FrontendOptions &FrontendOpts) {
   using namespace options;
 
   Opts.AttachCommentsToDecls |= Args.hasArg(OPT_dump_api_path);
@@ -740,11 +775,10 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableExperimentalNestedGenericTypes |=
     Args.hasArg(OPT_enable_experimental_nested_generic_types);
 
-  Opts.EnableExperimentalCollectionCasts |=
-    Args.hasArg(OPT_enable_experimental_collection_casts);
-
   Opts.DisableAvailabilityChecking |=
       Args.hasArg(OPT_disable_availability_checking);
+  if (FrontendOpts.InputKind == InputFileKind::IFK_SIL)
+    Opts.DisableAvailabilityChecking = true;
   
   if (auto A = Args.getLastArg(OPT_enable_access_control,
                                OPT_disable_access_control)) {
@@ -761,6 +795,7 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
       = A->getOption().matches(OPT_enable_target_os_checking);
   }
   
+  Opts.EnableASTScopeLookup |= Args.hasArg(OPT_enable_astscope_lookup);
   Opts.DebugConstraintSolver |= Args.hasArg(OPT_debug_constraints);
   Opts.IterativeTypeChecker |= Args.hasArg(OPT_iterative_type_checker);
   Opts.DebugGenericSignatures |= Args.hasArg(OPT_debug_generic_signatures);
@@ -769,12 +804,9 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   if (Opts.DebuggerSupport)
     Opts.EnableDollarIdentifiers = true;
   Opts.Playground |= Args.hasArg(OPT_playground);
-  Opts.Swift3Migration |= Args.hasArg(OPT_swift3_migration);
-  Opts.WarnOmitNeedlessWords = Args.hasArg(OPT_warn_omit_needless_words);
   Opts.InferImportAsMember |= Args.hasArg(OPT_enable_infer_import_as_member);
 
   Opts.EnableThrowWithoutTry |= Args.hasArg(OPT_enable_throw_without_try);
-  Opts.EnableIdAsAny |= Args.hasArg(OPT_enable_id_as_any);
 
   if (auto A = Args.getLastArg(OPT_enable_objc_attr_requires_foundation_module,
                                OPT_disable_objc_attr_requires_foundation_module)) {
@@ -787,9 +819,6 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     Opts.EnableTestableAttrRequiresTestableModule
       = A->getOption().matches(OPT_enable_testable_attr_requires_testable_module);
   }
-
-  Opts.SuppressArgumentLabelsInTypes |=
-    Args.hasArg(OPT_suppress_argument_labels_in_types);
 
   if (const Arg *A = Args.getLastArg(OPT_debug_constraints_attempt)) {
     unsigned attempt;
@@ -887,7 +916,6 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
   }
 
   Opts.InferImportAsMember |= Args.hasArg(OPT_enable_infer_import_as_member);
-  Opts.HonorSwiftNewtypeAttr |= Args.hasArg(OPT_enable_swift_newtype);
   Opts.DumpClangDiagnostics |= Args.hasArg(OPT_dump_clang_diagnostics);
 
   if (Args.hasArg(OPT_embed_bitcode))
@@ -1327,8 +1355,7 @@ bool CompilerInvocation::parseArgs(ArrayRef<const char *> Args,
     return true;
   }
 
-  if (ParseLangArgs(LangOpts, ParsedArgs, Diags,
-                    FrontendOpts.actionIsImmediate())) {
+  if (ParseLangArgs(LangOpts, ParsedArgs, Diags, FrontendOpts)) {
     return true;
   }
 

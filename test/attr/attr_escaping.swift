@@ -70,4 +70,60 @@ func callEscapingAutoclosureWithNoEscape_3(_ fn: @autoclosure () -> Int) {
   takesEscapingAutoclosure(fn()) // expected-error{{closure use of non-escaping parameter 'fn' may allow it to escape}}
 }
 
+let foo: @escaping (Int) -> Int // expected-error{{@escaping attribute may only be used in function parameter position}} {{10-20=}}
 
+struct GenericStruct<T> {}
+
+func misuseEscaping(_ a: @escaping Int) {} // expected-error{{@escaping attribute only applies to function types}}
+func misuseEscaping(_ a: (@escaping Int)?) {} // expected-error{{@escaping attribute only applies to function types}}
+
+func misuseEscaping(_ a: (@escaping (Int) -> Int)?) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{27-37=}}
+  // expected-note@-1{{closure is already escaping in optional type argument}}
+func misuseEscaping(nest a: (((@escaping (Int) -> Int))?)) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{32-42=}}
+  // expected-note@-1{{closure is already escaping in optional type argument}}
+func misuseEscaping(iuo a: (@escaping (Int) -> Int)!) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{29-39=}}
+  // expected-note@-1{{closure is already escaping in optional type argument}}
+
+func misuseEscaping(_ a: Optional<@escaping (Int) -> Int>, _ b: Int) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{35-45=}}
+func misuseEscaping(_ a: (@escaping (Int) -> Int, Int)) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{27-37=}}
+func misuseEscaping(_ a: [@escaping (Int) -> Int]) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{27-37=}}
+func misuseEscaping(_ a: [@escaping (Int) -> Int]?) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{27-37=}}
+func misuseEscaping(_ a: [Int : @escaping (Int) -> Int]) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{33-43=}}
+func misuseEscaping(_ a: GenericStruct<@escaping (Int) -> Int>) {} // expected-error{{@escaping attribute may only be used in function parameter position}} {{40-50=}}
+
+func takesEscapingGeneric<T>(_ fn: @escaping () -> T) {}
+func callEscapingGeneric<T>(_ fn: () -> T) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{35-35=@escaping }}
+  takesEscapingGeneric(fn) // expected-error {{passing non-escaping parameter 'fn' to function expecting an @escaping closure}}
+}
+
+
+class Super {}
+class Sub: Super {}
+
+func takesEscapingSuper(_ fn: @escaping () -> Super) {}
+func callEscapingSuper(_ fn: () -> Sub) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{30-30=@escaping }}
+  takesEscapingSuper(fn) // expected-error {{passing non-escaping parameter 'fn' to function expecting an @escaping closure}}
+}
+
+func takesEscapingSuperGeneric<T: Super>(_ fn: @escaping () -> T) {}
+func callEscapingSuperGeneric(_ fn: () -> Sub) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{37-37=@escaping }}
+  takesEscapingSuperGeneric(fn) // expected-error {{passing non-escaping parameter 'fn' to function expecting an @escaping closure}}
+}
+func callEscapingSuperGeneric<T: Sub>(_ fn: () -> T) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{45-45=@escaping }}
+  takesEscapingSuperGeneric(fn) // expected-error {{passing non-escaping parameter 'fn' to function expecting an @escaping closure}}
+}
+
+func testModuloOptionalness() {
+  var iuoClosure: (() -> Void)! = nil
+  func setIUOClosure(_ fn: () -> Void) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{28-28=@escaping }}
+    iuoClosure = fn // expected-error{{assigning non-escaping parameter 'fn' to an @escaping closure}}
+  }
+  var iuoClosureExplicit: ImplicitlyUnwrappedOptional<() -> Void>
+  func setExplicitIUOClosure(_ fn: () -> Void) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{36-36=@escaping }}
+    iuoClosureExplicit = fn // expected-error{{assigning non-escaping parameter 'fn' to an @escaping closure}}
+  }
+  var deepOptionalClosure: (() -> Void)???
+  func setDeepOptionalClosure(_ fn: () -> Void) { // expected-note {{parameter 'fn' is implicitly non-escaping}} {{37-37=@escaping }}
+    deepOptionalClosure = fn // expected-error{{assigning non-escaping parameter 'fn' to an @escaping closure}}
+  }
+}

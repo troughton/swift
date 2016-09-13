@@ -321,7 +321,7 @@ void swift::replaceDeadApply(ApplySite Old, ValueBase *New) {
   recursivelyDeleteTriviallyDeadInstructions(OldApply, true);
 }
 
-bool swift::hasUnboundGenericTypes(TypeSubstitutionMap &SubsMap) {
+bool swift::hasUnboundGenericTypes(const TypeSubstitutionMap &SubsMap) {
   // Check whether any of the substitutions are dependent.
   for (auto &entry : SubsMap)
     if (entry.second->getCanonicalType()->hasArchetype())
@@ -338,7 +338,7 @@ bool swift::hasUnboundGenericTypes(ArrayRef<Substitution> Subs) {
   return false;
 }
 
-bool swift::hasDynamicSelfTypes(TypeSubstitutionMap &SubsMap) {
+bool swift::hasDynamicSelfTypes(const TypeSubstitutionMap &SubsMap) {
   // Check whether any of the substitutions are refer to dynamic self.
   for (auto &entry : SubsMap)
     if (entry.second->getCanonicalType()->hasDynamicSelfType())
@@ -356,16 +356,19 @@ bool swift::hasDynamicSelfTypes(ArrayRef<Substitution> Subs) {
   return false;
 }
 
-bool swift::computeMayBindDynamicSelf(SILFunction *F) {
-  for (auto &BB : *F)
-    for (auto &I : BB) {
-      if (auto AI = FullApplySite::isa(&I))
-        if (hasDynamicSelfTypes(AI.getSubstitutions()))
-          return true;
-      if (auto MI = dyn_cast<MetatypeInst>(&I))
-        if (MI->getType().getSwiftRValueType()->hasDynamicSelfType())
-          return true;
+bool swift::mayBindDynamicSelf(SILFunction *F) {
+  if (!F->hasSelfMetadataParam())
+    return false;
+
+  SILValue MDArg = F->getSelfMetadataArgument();
+
+  for (Operand *MDUse : F->getSelfMetadataArgument()->getUses()) {
+    SILInstruction *MDUser = MDUse->getUser();
+    for (Operand &TypeDepOp : MDUser->getTypeDependentOperands()) {
+      if (TypeDepOp.get() == MDArg)
+        return true;
     }
+  }
   return false;
 }
 
@@ -524,14 +527,12 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
   }
 
   auto &M = B->getModule();
-  OptionalTypeKind SrcOTK;
-  OptionalTypeKind DestOTK;
 
   // Check if src and dest types are optional.
   auto OptionalSrcTy = SrcTy.getSwiftRValueType()
-                            .getAnyOptionalObjectType(SrcOTK);
+                            .getAnyOptionalObjectType();
   auto OptionalDestTy = DestTy.getSwiftRValueType()
-                              .getAnyOptionalObjectType(DestOTK);
+                              .getAnyOptionalObjectType();
 
   // If both types are classes and dest is the superclass of src,
   // simply perform an upcast.
@@ -573,7 +574,7 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
           OptionalDestLoweredTy, CheckOnly);
 
     // Unwrap the original optional value.
-    auto *SomeDecl = B->getASTContext().getOptionalSomeDecl(SrcOTK);
+    auto *SomeDecl = B->getASTContext().getOptionalSomeDecl();
     auto *NoneBB = B->getFunction().createBasicBlock();
     auto *SomeBB = B->getFunction().createBasicBlock();
     auto *CurBB = B->getInsertionPoint()->getParent();
@@ -596,8 +597,7 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
                                      OptionalSrcLoweredTy,
                                      OptionalDestLoweredTy).getValue();
     // Wrap into optional.
-    CastedValue =  B->createOptionalSome(Loc, CastedUnwrappedValue,
-                                        DestOTK, DestTy);
+    CastedValue =  B->createOptionalSome(Loc, CastedUnwrappedValue, DestTy);
     B->createBranch(Loc, ContBB, {CastedValue});
 
     // Handle the None case.
@@ -612,8 +612,8 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
 
   // Src is not optional, but dest is optional.
   if (!OptionalSrcTy && OptionalDestTy) {
-    auto OptionalSrcCanTy = OptionalType::get(DestOTK,
-        SrcTy.getSwiftRValueType()).getCanonicalTypeOrNull();
+    auto OptionalSrcCanTy =
+      OptionalType::get(SrcTy.getSwiftRValueType())->getCanonicalType();
     auto LoweredOptionalSrcType = M.Types.getLoweredType(OptionalSrcCanTy);
     if (CheckOnly)
       return castValueToABICompatibleType(B, Loc, Value,
@@ -622,7 +622,6 @@ Optional<SILValue> swift::castValueToABICompatibleType(SILBuilder *B, SILLocatio
 
     // Wrap the source value into an optional first.
     SILValue WrappedValue = B->createOptionalSome(Loc, Value,
-                                                  DestOTK,
                                                   LoweredOptionalSrcType);
     // Cast the wrapped value.
     return castValueToABICompatibleType(B, Loc, WrappedValue,
@@ -1228,7 +1227,7 @@ bool ValueLifetimeAnalysis::computeFrontier(Frontier &Fr, Mode mode) {
       // the last use is part of the frontier.
       SILInstruction *LastUser = findLastUserInBlock(BB);
       if (!isa<TermInst>(LastUser)) {
-        Fr.push_back(&*next(LastUser->getIterator()));
+        Fr.push_back(&*std::next(LastUser->getIterator()));
         continue;
       }
       // In case the last user is a TermInst we add all successor blocks to the
@@ -1372,11 +1371,7 @@ static bool isBridgingCast(CanType SourceType, CanType TargetType) {
 /// return the ObjC type it bridges to.
 /// If target is an ObjC type, return this type.
 static Type getCastFromObjC(SILModule &M, CanType source, CanType target) {
-  Optional<Type> BridgedTy = M.getASTContext().getBridgedToObjC(
-      M.getSwiftModule(), target, nullptr);
-  if (!BridgedTy.hasValue() || !BridgedTy.getValue())
-    return Type();
-  return BridgedTy.getValue();
+  return M.getASTContext().getBridgedToObjC(M.getSwiftModule(), target);
 }
 
 /// Create a call of _forceBridgeFromObjectiveC_bridgeable or
@@ -2464,10 +2459,15 @@ optimizeUnconditionalCheckedCastAddrInst(UnconditionalCheckedCastAddrInst *Inst)
       Feasibility == DynamicCastFeasibility::MaySucceed) {
 
     bool ResultNotUsed = isa<AllocStackInst>(Dest);
+    DestroyAddrInst *DestroyDestInst = nullptr;
     for (auto Use : Dest->getUses()) {
       auto *User = Use->getUser();
       if (isa<DeallocStackInst>(User) || User == Inst)
         continue;
+      if (isa<DestroyAddrInst>(User) && !DestroyDestInst) {
+        DestroyDestInst = cast<DestroyAddrInst>(User);
+        continue;
+      }
       ResultNotUsed = false;
       break;
     }
@@ -2483,6 +2483,8 @@ optimizeUnconditionalCheckedCastAddrInst(UnconditionalCheckedCastAddrInst *Inst)
         case CastConsumptionKind::CopyOnSuccess:
           break;
       }
+      if (DestroyDestInst)
+        EraseInstAction(DestroyDestInst);
       EraseInstAction(Inst);
       WillSucceedAction();
       return nullptr;

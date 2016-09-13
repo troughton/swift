@@ -34,12 +34,15 @@ else()
 endif()
 
 set(swift_runtime_sources
+    AnyHashableSupport.cpp
     Casting.cpp
     CygwinPort.cpp
     Demangle.cpp
     Enum.cpp
+    ErrorObjectConstants.cpp
     ErrorObjectNative.cpp
     Errors.cpp
+    ErrorDefaultImpls.cpp
     Heap.cpp
     HeapObject.cpp
     KnownMetadata.cpp

@@ -594,11 +594,14 @@ public:
       if (getActiveDominancePoint() == VarDominancePoint ||
           isActiveDominancePointDominatedBy(VarDominancePoint)) {
         llvm::Type *ArgTys;
-        auto *Ty = Storage->getType()->getScalarType();
-        // Pointers and Floats are expected to fit into a register.
-        if (Ty->isPointerTy() || Ty->isFloatingPointTy())
-          ArgTys = { Storage->getType() };
+        auto *Ty = Storage->getType();
+        // Vectors, Pointers and Floats are expected to fit into a register.
+        if (Ty->isPointerTy() || Ty->isFloatingPointTy() || Ty->isVectorTy())
+          ArgTys = { Ty };
         else {
+          // If this is not a scalar or vector type, we can't handle it.
+          if (isa<llvm::CompositeType>(Ty))
+            continue;
           // The storage is guaranteed to be no larger than the register width.
           // Extend the storage so it would fit into a register.
           llvm::Type *IntTy;
@@ -747,8 +750,10 @@ public:
     // Force all archetypes referenced by the type to be bound by this point.
     // TODO: just make sure that we have a path to them that the debug info
     //       can follow.
-    if (!IGM.IRGen.Opts.Optimize && Ty.getType()->hasArchetype())
-      Ty.getType()->getCanonicalType().visit([&](Type t) {
+    auto runtimeTy = getRuntimeReifiedType(IGM,
+                                           Ty.getType()->getCanonicalType());
+    if (!IGM.IRGen.Opts.Optimize && runtimeTy->hasArchetype())
+      runtimeTy.visit([&](Type t) {
         if (auto archetype = dyn_cast<ArchetypeType>(CanType(t)))
           emitTypeMetadataRef(archetype);
        });

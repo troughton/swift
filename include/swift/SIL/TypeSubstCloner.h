@@ -55,7 +55,7 @@ public:
 
   TypeSubstCloner(SILFunction &To,
                   SILFunction &From,
-                  TypeSubstitutionMap &ContextSubs,
+                  const SubstitutionMap &ContextSubs,
                   ArrayRef<Substitution> ApplySubs,
                   SILOpenedArchetypesTracker &OpenedArchetypesTracker,
                   bool Inlining = false)
@@ -68,7 +68,7 @@ public:
 
   TypeSubstCloner(SILFunction &To,
                   SILFunction &From,
-                  TypeSubstitutionMap &ContextSubs,
+                  const SubstitutionMap &ContextSubs,
                   ArrayRef<Substitution> ApplySubs,
                   bool Inlining = false)
     : SILClonerWithScopes<ImplClass>(To, Inlining),
@@ -81,22 +81,24 @@ public:
 
 protected:
   SILType remapType(SILType Ty) {
-    return SILType::substType(Original.getModule(), SwiftMod, SubsMap, Ty);
+    return SILType::substType(Original.getModule(), SwiftMod,
+                              SubsMap.getMap(), Ty);
   }
 
   CanType remapASTType(CanType ty) {
-    return ty.subst(SwiftMod, SubsMap, None)->getCanonicalType();
+    return ty.subst(SubsMap, None)->getCanonicalType();
   }
 
   Substitution remapSubstitution(Substitution sub) {
-    auto newSub = sub.subst(SwiftMod,
-                            Original.getContextGenericParams(),
-                            ApplySubs);
+    if (!ApplySubs.empty()) {
+      auto sig = Original.getLoweredFunctionType()->getGenericSignature();
+      auto *env = Original.getGenericEnvironment();
+      sub = sub.subst(SwiftMod, sig, env, ApplySubs);
+    }
     // Remap opened archetypes into the cloned context.
-    newSub = Substitution(getASTTypeInClonedContext(newSub.getReplacement()
-                                                      ->getCanonicalType()),
-                          newSub.getConformances());
-    return newSub;
+    return Substitution(getASTTypeInClonedContext(sub.getReplacement()
+                                                    ->getCanonicalType()),
+                        sub.getConformances());
   }
 
   ProtocolConformanceRef remapConformance(CanType type,
@@ -205,13 +207,13 @@ protected:
 
   void visitWitnessMethodInst(WitnessMethodInst *Inst) {
     // Specialize the Self substitution of the witness_method.
-    //
-    // FIXME: This needs to not only handle Self but all Self derived types so
-    // we handle type aliases correctly.
-    auto sub =
-      Inst->getSelfSubstitution().subst(Inst->getModule().getSwiftModule(),
-                                        Original.getContextGenericParams(),
-                                        ApplySubs);
+    auto sub = Inst->getSelfSubstitution();
+    if (!ApplySubs.empty()) {
+      auto sig = Original.getLoweredFunctionType()->getGenericSignature();
+      auto *env = Original.getGenericEnvironment();
+      sub = sub.subst(Inst->getModule().getSwiftModule(),
+                      sig, env, ApplySubs);
+    }
 
     assert(sub.getConformances().size() == 1 &&
            "didn't get conformance from substitution?!");
@@ -287,7 +289,7 @@ protected:
   /// The Swift module that the cloned function belongs to.
   Module *SwiftMod;
   /// The substitutions list for the specialization.
-  TypeSubstitutionMap &SubsMap;
+  const SubstitutionMap &SubsMap;
   /// The original function to specialize.
   SILFunction &Original;
   /// The substitutions used at the call site.

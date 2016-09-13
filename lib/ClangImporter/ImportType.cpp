@@ -14,6 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CFTypeInfo.h"
 #include "ImporterImpl.h"
 #include "ClangDiagnosticConsumer.h"
 #include "swift/Strings.h"
@@ -245,18 +246,42 @@ namespace {
         return Type();
 
       // OpenCL types that don't have Swift equivalents.
-      case clang::BuiltinType::OCLImage1d:
-      case clang::BuiltinType::OCLImage1dArray:
-      case clang::BuiltinType::OCLImage1dBuffer:
-      case clang::BuiltinType::OCLImage2d:
-      case clang::BuiltinType::OCLImage2dArray:
-      case clang::BuiltinType::OCLImage2dDepth:
-      case clang::BuiltinType::OCLImage2dArrayDepth:
-      case clang::BuiltinType::OCLImage2dMSAA:
-      case clang::BuiltinType::OCLImage2dArrayMSAA:
-      case clang::BuiltinType::OCLImage2dMSAADepth:
-      case clang::BuiltinType::OCLImage2dArrayMSAADepth:
-      case clang::BuiltinType::OCLImage3d:
+      case clang::BuiltinType::OCLImage1dRO:
+      case clang::BuiltinType::OCLImage1dRW:
+      case clang::BuiltinType::OCLImage1dWO:
+      case clang::BuiltinType::OCLImage1dArrayRO:
+      case clang::BuiltinType::OCLImage1dArrayRW:
+      case clang::BuiltinType::OCLImage1dArrayWO:
+      case clang::BuiltinType::OCLImage1dBufferRO:
+      case clang::BuiltinType::OCLImage1dBufferRW:
+      case clang::BuiltinType::OCLImage1dBufferWO:
+      case clang::BuiltinType::OCLImage2dRO:
+      case clang::BuiltinType::OCLImage2dRW:
+      case clang::BuiltinType::OCLImage2dWO:
+      case clang::BuiltinType::OCLImage2dArrayRO:
+      case clang::BuiltinType::OCLImage2dArrayRW:
+      case clang::BuiltinType::OCLImage2dArrayWO:
+      case clang::BuiltinType::OCLImage2dDepthRO:
+      case clang::BuiltinType::OCLImage2dDepthRW:
+      case clang::BuiltinType::OCLImage2dDepthWO:
+      case clang::BuiltinType::OCLImage2dArrayDepthRO:
+      case clang::BuiltinType::OCLImage2dArrayDepthRW:
+      case clang::BuiltinType::OCLImage2dArrayDepthWO:
+      case clang::BuiltinType::OCLImage2dMSAARO:
+      case clang::BuiltinType::OCLImage2dMSAARW:
+      case clang::BuiltinType::OCLImage2dMSAAWO:
+      case clang::BuiltinType::OCLImage2dArrayMSAARO:
+      case clang::BuiltinType::OCLImage2dArrayMSAARW:
+      case clang::BuiltinType::OCLImage2dArrayMSAAWO:
+      case clang::BuiltinType::OCLImage2dMSAADepthRO:
+      case clang::BuiltinType::OCLImage2dMSAADepthRW:
+      case clang::BuiltinType::OCLImage2dMSAADepthWO:
+      case clang::BuiltinType::OCLImage2dArrayMSAADepthRO:
+      case clang::BuiltinType::OCLImage2dArrayMSAADepthRW:
+      case clang::BuiltinType::OCLImage2dArrayMSAADepthWO:
+      case clang::BuiltinType::OCLImage3dRO:
+      case clang::BuiltinType::OCLImage3dRW:
+      case clang::BuiltinType::OCLImage3dWO:
       case clang::BuiltinType::OCLSampler:
       case clang::BuiltinType::OCLEvent:
       case clang::BuiltinType::OCLClkEvent:
@@ -331,7 +356,7 @@ namespace {
         pointeeType = Impl.importType(pointeeQualType,
                                       ImportTypeKind::Pointee,
                                       AllowNSUIntegerAsInt,
-                                      /*can fully bridge*/false);
+                                      /*isFullyBridgeable*/false);
 
       // If the pointed-to type is unrepresentable in Swift, import as
       // OpaquePointer.
@@ -418,7 +443,7 @@ namespace {
       Type elementType = Impl.importType(type->getElementType(),
                                          ImportTypeKind::Pointee,
                                          AllowNSUIntegerAsInt,
-                                         /*can fully bridge*/false);
+                                         /*isFullyBridgeable*/false);
       if (!elementType)
         return Type();
       
@@ -492,6 +517,7 @@ namespace {
         // FIXME: If we were walking TypeLocs, we could actually get parameter
         // names. The probably doesn't matter outside of a FuncDecl, which
         // we'll have to special-case, but it's an interesting bit of data loss.
+        // We also lose `noescape`. <https://bugs.swift.org/browse/SR-2529>
         params.push_back(swiftParamTy);
       }
 
@@ -572,7 +598,7 @@ namespace {
       ImportHint hint = ImportHint::None;
 
       if (Impl.getSwiftNewtypeAttr(type->getDecl(), /*useSwift2Name=*/false)) {
-        if (ClangImporter::Implementation::isCFTypeDecl(type->getDecl()))
+        if (isCFTypeDecl(type->getDecl()))
           hint = ImportHint::SwiftNewtypeFromCFPointer;
         else
           hint = ImportHint::SwiftNewtype;
@@ -985,11 +1011,9 @@ namespace {
 
       // id maps to Any in bridgeable contexts, AnyObject otherwise.
       if (type->isObjCIdType()) {
-        if (Impl.SwiftContext.LangOpts.EnableIdAsAny)
-          return {proto->getDeclaredType(),
-                  ImportHint(ImportHint::ObjCBridged,
-                             Impl.SwiftContext.TheAnyType)};
-        return {proto->getDeclaredType(), ImportHint::ObjCPointer};
+        return {proto->getDeclaredType(),
+                ImportHint(ImportHint::ObjCBridged,
+                           Impl.SwiftContext.TheAnyType)};
       }
 
       // Class maps to AnyObject.Type.
@@ -1896,18 +1920,42 @@ OmissionTypeName ClangImporter::Implementation::getClangTypeNameForOmission(
       return OmissionTypeName();
 
     // OpenCL types that don't have Swift equivalents.
-    case clang::BuiltinType::OCLImage1d:
-    case clang::BuiltinType::OCLImage1dArray:
-    case clang::BuiltinType::OCLImage1dBuffer:
-    case clang::BuiltinType::OCLImage2d:
-    case clang::BuiltinType::OCLImage2dArray:
-    case clang::BuiltinType::OCLImage2dDepth:
-    case clang::BuiltinType::OCLImage2dArrayDepth:
-    case clang::BuiltinType::OCLImage2dMSAA:
-    case clang::BuiltinType::OCLImage2dArrayMSAA:
-    case clang::BuiltinType::OCLImage2dMSAADepth:
-    case clang::BuiltinType::OCLImage2dArrayMSAADepth:
-    case clang::BuiltinType::OCLImage3d:
+    case clang::BuiltinType::OCLImage1dRO:
+    case clang::BuiltinType::OCLImage1dRW:
+    case clang::BuiltinType::OCLImage1dWO:
+    case clang::BuiltinType::OCLImage1dArrayRO:
+    case clang::BuiltinType::OCLImage1dArrayRW:
+    case clang::BuiltinType::OCLImage1dArrayWO:
+    case clang::BuiltinType::OCLImage1dBufferRO:
+    case clang::BuiltinType::OCLImage1dBufferRW:
+    case clang::BuiltinType::OCLImage1dBufferWO:
+    case clang::BuiltinType::OCLImage2dRO:
+    case clang::BuiltinType::OCLImage2dRW:
+    case clang::BuiltinType::OCLImage2dWO:
+    case clang::BuiltinType::OCLImage2dArrayRO:
+    case clang::BuiltinType::OCLImage2dArrayRW:
+    case clang::BuiltinType::OCLImage2dArrayWO:
+    case clang::BuiltinType::OCLImage2dDepthRO:
+    case clang::BuiltinType::OCLImage2dDepthRW:
+    case clang::BuiltinType::OCLImage2dDepthWO:
+    case clang::BuiltinType::OCLImage2dArrayDepthRO:
+    case clang::BuiltinType::OCLImage2dArrayDepthRW:
+    case clang::BuiltinType::OCLImage2dArrayDepthWO:
+    case clang::BuiltinType::OCLImage2dMSAARO:
+    case clang::BuiltinType::OCLImage2dMSAARW:
+    case clang::BuiltinType::OCLImage2dMSAAWO:
+    case clang::BuiltinType::OCLImage2dArrayMSAARO:
+    case clang::BuiltinType::OCLImage2dArrayMSAARW:
+    case clang::BuiltinType::OCLImage2dArrayMSAAWO:
+    case clang::BuiltinType::OCLImage2dMSAADepthRO:
+    case clang::BuiltinType::OCLImage2dMSAADepthRW:
+    case clang::BuiltinType::OCLImage2dMSAADepthWO:
+    case clang::BuiltinType::OCLImage2dArrayMSAADepthRO:
+    case clang::BuiltinType::OCLImage2dArrayMSAADepthRW:
+    case clang::BuiltinType::OCLImage2dArrayMSAADepthWO:
+    case clang::BuiltinType::OCLImage3dRO:
+    case clang::BuiltinType::OCLImage3dRW:
+    case clang::BuiltinType::OCLImage3dWO:
     case clang::BuiltinType::OCLSampler:
     case clang::BuiltinType::OCLEvent:
     case clang::BuiltinType::OCLClkEvent:
@@ -2127,9 +2175,9 @@ DefaultArgumentKind ClangImporter::Implementation::inferDefaultArgument(
 
 /// Adjust the result type of a throwing function based on the
 /// imported error information.
-static Type adjustResultTypeForThrowingFunction(
-              const ClangImporter::Implementation::ImportedErrorInfo &errorInfo,
-              Type resultTy) {
+static Type
+adjustResultTypeForThrowingFunction(const ImportedErrorInfo &errorInfo,
+                                    Type resultTy) {
   switch (errorInfo.Kind) {
   case ForeignErrorConvention::ZeroResult:
   case ForeignErrorConvention::NonZeroResult:
@@ -2150,9 +2198,8 @@ static Type adjustResultTypeForThrowingFunction(
 /// Produce the foreign error convention from the imported error info,
 /// error parameter type, and original result type.
 static ForeignErrorConvention
-getForeignErrorInfo(
-    const ClangImporter::Implementation::ImportedErrorInfo &errorInfo,
-    CanType errorParamTy, CanType origResultTy) {
+getForeignErrorInfo(const ImportedErrorInfo &errorInfo, CanType errorParamTy,
+                    CanType origResultTy) {
   assert(errorParamTy && "not fully initialized!");
   using FEC = ForeignErrorConvention;
   auto ReplaceParamWithVoid = errorInfo.ReplaceParamWithVoid
@@ -2272,7 +2319,14 @@ Type ClangImporter::Implementation::importMethodType(
                                OptionalityOfReturn);
     // Adjust the result type for a throwing function.
     if (swiftResultTy && errorInfo) {
-      origSwiftResultTy = swiftResultTy->getCanonicalType();
+
+      // Get the original unbridged result type.
+      origSwiftResultTy = importType(resultType, resultKind,
+                                 allowNSUIntegerAsIntInResult,
+                                 /*isFullyBridgeable*/false,
+                                 OptionalityOfReturn)
+                              ->getCanonicalType();
+
       swiftResultTy = adjustResultTypeForThrowingFunction(*errorInfo,
                                                           swiftResultTy);
     }
@@ -2709,10 +2763,3 @@ Type ClangImporter::Implementation::getNSCopyingType() {
 Type ClangImporter::Implementation::getNSObjectProtocolType() {
   return getNamedProtocolType(*this, "NSObject");
 }
-
-Type ClangImporter::Implementation::getCFStringRefType() {
-  if (auto decl = dyn_cast_or_null<TypeDecl>(importDeclByName("CFStringRef")))
-    return decl->getDeclaredType();
-  return Type();
-}
-

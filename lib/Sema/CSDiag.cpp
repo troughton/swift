@@ -1982,6 +1982,7 @@ private:
 
   bool visitExpr(Expr *E);
   bool visitIdentityExpr(IdentityExpr *E);
+  bool visitTryExpr(TryExpr *E);
   bool visitTupleExpr(TupleExpr *E);
   
   bool visitUnresolvedMemberExpr(UnresolvedMemberExpr *E);
@@ -2349,14 +2350,32 @@ diagnoseTypeMemberOnInstanceLookup(Type baseObjTy,
                                    SourceLoc loc) {
   SourceRange baseRange = baseExpr ? baseExpr->getSourceRange() : SourceRange();
 
+  Optional<InFlightDiagnostic> Diag;
+
   // If the base of the lookup is a protocol metatype, suggest
   // to replace the metatype with 'Self'
   // error saying the lookup cannot be on a protocol metatype
   if (auto metatypeTy = baseObjTy->getAs<MetatypeType>()) {
-    auto Diag = diagnose(loc,
-                         diag::could_not_use_type_member_on_protocol_metatype,
-                         baseObjTy, memberName);
-    Diag.highlight(baseRange).highlight(nameLoc.getSourceRange());
+    assert(metatypeTy->getInstanceType()->isExistentialType());
+
+    // Give a customized message if we're accessing a member type
+    // of a protocol -- otherwise a diagnostic talking about
+    // static members doesn't make a whole lot of sense
+    if (isa<TypeAliasDecl>(member)) {
+      Diag.emplace(diagnose(loc,
+                            diag::typealias_outside_of_protocol,
+                            memberName.getBaseName()));
+    } else if (isa<AssociatedTypeDecl>(member)) {
+      Diag.emplace(diagnose(loc,
+                            diag::assoc_type_outside_of_protocol,
+                            memberName.getBaseName()));
+    } else {
+      Diag.emplace(diagnose(loc,
+                            diag::could_not_use_type_member_on_protocol_metatype,
+                            baseObjTy, memberName));
+    }
+
+    Diag->highlight(baseRange).highlight(nameLoc.getSourceRange());
 
     // See through function decl context
     if (auto parent = CS->DC->getInnermostTypeContext()) {
@@ -2365,17 +2384,13 @@ diagnoseTypeMemberOnInstanceLookup(Type baseObjTy,
       if (auto extensionContext = parent->getAsProtocolExtensionContext()) {
         if (extensionContext->getDeclaredType()->getCanonicalType()
             == metatypeTy->getInstanceType()->getCanonicalType()) {
-          Diag.fixItReplace(baseRange, "Self");
+          Diag->fixItReplace(baseRange, "Self");
         }
       }
     }
 
     return;
   }
-
-  // Otherwise the static member lookup was invalid because it was
-  // called on an instance
-  Optional<InFlightDiagnostic> Diag;
 
   if (isa<EnumElementDecl>(member))
     Diag.emplace(diagnose(loc, diag::could_not_use_enum_element_on_instance,
@@ -2457,9 +2472,10 @@ findCorrectEnumCaseName(MetatypeType *MetaTy, LookupResult &Result,
                         DeclName memberName) {
   if (!memberName.isSimpleName())
     return DeclName();
-  if (!MetaTy->getInstanceType()->is<EnumType>())
+  if (!MetaTy->getInstanceType()->is<EnumType>() &&
+      !MetaTy->getInstanceType()->is<BoundGenericEnumType>())
     return DeclName();
-  std::vector<DeclName> candidates;
+  llvm::SmallVector<DeclName, 4> candidates;
   for (auto &correction : Result) {
     DeclName correctName = correction.Decl->getFullName();
     if (!correctName.isSimpleName())
@@ -2467,7 +2483,7 @@ findCorrectEnumCaseName(MetatypeType *MetaTy, LookupResult &Result,
     if (!isa<EnumElementDecl>(correction.Decl))
       continue;
     if (correctName.getBaseName().str().
-          compare_lower(memberName.getBaseName().str()) == 0)
+          equals_lower(memberName.getBaseName().str()))
       candidates.push_back(correctName);
   }
   if (candidates.size() == 1)
@@ -2524,13 +2540,10 @@ diagnoseUnviableLookupResults(MemberLookupResult &result, Type baseObjTy,
           return; // Always prefer this over typo corrections.
         }
       } else if (baseObjTy->isAny()) {
-        if (auto DRE = dyn_cast<DeclRefExpr>(baseExpr)) {
-          auto name = DRE->getDecl()->getName().str().str();
-          std::string replacement = "(" + name + " as AnyObject)";
-          diagnose(loc, diag::any_as_anyobject_fixit)
-            .fixItReplace(baseExpr->getSourceRange(), replacement);
-          return;
-        }
+        diagnose(loc, diag::any_as_anyobject_fixit)
+          .fixItInsert(baseExpr->getStartLoc(), "(")
+          .fixItInsertAfter(baseExpr->getEndLoc(), " as AnyObject)");
+        return;
       }
     }
 
@@ -2916,6 +2929,27 @@ bool FailureDiagnosis::diagnoseGeneralConversionFailure(Constraint *constraint){
     }
     return true;
   }
+
+  // Due to migration reasons, types used to conform to BooleanType, which
+  // contain a member var 'boolValue', now does not convert to Bool. This block
+  // tries to add a specific diagnosis/fixit to explicitly invoke 'boolValue'.
+  if (toType->isBool()) {
+    auto LookupResult = CS->TC.lookupMember(CS->DC, fromType,
+      DeclName(CS->TC.Context.getIdentifier("boolValue")));
+    if (!LookupResult.empty()) {
+      if (isa<VarDecl>(LookupResult.begin()->Decl)) {
+        if (anchor->canAppendCallParentheses())
+          diagnose(anchor->getLoc(), diag::types_not_convertible_use_bool_value,
+                   fromType, toType).fixItInsertAfter(anchor->getEndLoc(),
+                                                      ".boolValue");
+        else
+          diagnose(anchor->getLoc(), diag::types_not_convertible_use_bool_value,
+            fromType, toType).fixItInsert(anchor->getStartLoc(), "(").
+              fixItInsertAfter(anchor->getEndLoc(), ").boolValue");
+        return true;
+      }
+    }
+  }
   
   diagnose(anchor->getLoc(), diag::types_not_convertible,
            constraint->getKind() == ConstraintKind::Subtype,
@@ -3137,6 +3171,17 @@ static void eraseOpenedExistentials(Expr *&expr) {
         assert(value != OpenExistentials.end() &&
                "didn't see this OVE in a containing OpenExistentialExpr?");
         return { true, value->second };
+      }
+
+      // Handle collection upcasts specially so that we don't blow up on
+      // their embedded OVEs.
+      if (auto CDE = dyn_cast<CollectionUpcastConversionExpr>(expr)) {
+        if (auto result = CDE->getSubExpr()->walk(*this)) {
+          CDE->setSubExpr(result);
+          return { false, CDE };
+        } else {
+          return { true, CDE };
+        }
       }
       
       return { true, expr };
@@ -3666,17 +3711,17 @@ static bool tryDiagnoseNonEscapingParameterToEscaping(Expr *expr, Type srcType,
   // Need to be referencing a parameter of function type
   auto declRef = dyn_cast<DeclRefExpr>(expr);
   if (!declRef || !isa<ParamDecl>(declRef->getDecl()) ||
-      !declRef->getType()->is<FunctionType>())
+      !declRef->getType()->is<AnyFunctionType>())
     return false;
 
-  // Must be from non-escaping function to escaping function
-  auto srcFT = srcType->getAs<FunctionType>();
-  auto destFT = dstType->getAs<FunctionType>();
-  if (!srcFT || !destFT || !srcFT->isNoEscape() || destFT->isNoEscape())
-    return false;
+  // Must be from non-escaping function to escaping function. For the
+  // destination type, we read through optionality to give better diagnostics in
+  // the event of an implicit promotion.
+  auto srcFT = srcType->getAs<AnyFunctionType>();
+  auto dstFT =
+      dstType->lookThroughAllAnyOptionalTypes()->getAs<AnyFunctionType>();
 
-  // Function types must be equivalent modulo @escaping, @convention, etc.
-  if (!destFT->isEqual(srcFT->withExtInfo(destFT->getExtInfo())))
+  if (!srcFT || !dstFT || !srcFT->isNoEscape() || dstFT->isNoEscape())
     return false;
 
   // Pick a specific diagnostic for the specific use
@@ -4016,6 +4061,9 @@ bool FailureDiagnosis::diagnoseContextualConversionError() {
   case CTP_ArrayElement:
   case CTP_DictionaryKey:
   case CTP_DictionaryValue:
+  case CTP_AssignSource:
+  case CTP_Initialization:
+  case CTP_ReturnStmt:
     tryRawRepresentableFixIts(diag, CS, exprType, contextualType,
                               KnownProtocolKind::ExpressibleByIntegerLiteral,
                               expr) ||
@@ -4728,6 +4776,12 @@ bool FailureDiagnosis::visitSubscriptExpr(SubscriptExpr *SE) {
   if (!baseExpr) return true;
   auto baseType = baseExpr->getType();
   
+  if (isa<NilLiteralExpr>(baseExpr)) {
+    diagnose(baseExpr->getLoc(), diag::cannot_subscript_nil_literal)
+      .highlight(baseExpr->getSourceRange());
+    return true;
+  }
+
   auto locator =
     CS->getConstraintLocator(SE, ConstraintLocator::SubscriptMember);
 
@@ -4975,26 +5029,41 @@ bool FailureDiagnosis::diagnoseNilLiteralComparison(
   return true;
 }
 
-/// When initializing UnsafeMutablePointer from a given UnsafePointer, we need
-/// to insert "mutating:" label before the argument to ensure the correct
-/// intializer gets called. This function checks if we need to add the label.
-static bool shouldAddMutating(ASTContext &Ctx, const Expr *Fn,
-                              const Expr* Arg) {
+/// When initializing Unsafe[Mutable]Pointer<T> from Unsafe[Mutable]RawPointer,
+/// issue a diagnostic that refers to the API for binding memory to a type.
+static bool isCastToTypedPointer(ASTContext &Ctx, const Expr *Fn,
+                                 const Expr* Arg) {
   auto *TypeExp = dyn_cast<TypeExpr>(Fn);
   auto *ParenExp = dyn_cast<ParenExpr>(Arg);
   if (!TypeExp || !ParenExp)
     return false;
+
   auto InitType = TypeExp->getInstanceType();
   auto ArgType = ParenExp->getSubExpr()->getType();
   if (InitType.isNull() || ArgType.isNull())
     return false;
-  if (auto *InitNom = InitType->getAnyNominal()) {
-    if (auto *ArgNom = ArgType->getAnyNominal()) {
-      return InitNom == Ctx.getUnsafeMutablePointerDecl() &&
-        ArgNom == Ctx.getUnsafePointerDecl();
-    }
+
+  // unwrap one level of Optional
+  if (auto ArgOptType = ArgType->getOptionalObjectType())
+    ArgType = ArgOptType;
+
+  auto *InitNom = InitType->getAnyNominal();
+  if (!InitNom)
+    return false;
+
+  if (InitNom != Ctx.getUnsafeMutablePointerDecl()
+      && InitNom != Ctx.getUnsafePointerDecl()) {
+    return false;
   }
-  return false;
+  auto *ArgNom = ArgType->getAnyNominal();
+  if (!ArgNom)
+    return false;
+
+  if (ArgNom != Ctx.getUnsafeMutableRawPointerDecl()
+      && ArgNom != Ctx.getUnsafeRawPointerDecl()) {
+    return false;
+  }
+  return true;
 }
 
 bool FailureDiagnosis::visitApplyExpr(ApplyExpr *callExpr) {
@@ -5312,10 +5381,9 @@ bool FailureDiagnosis::visitApplyExpr(ApplyExpr *callExpr) {
              overloadName, argString, isInitializer);
   }
 
-
-  if (shouldAddMutating(CS->DC->getASTContext(), fnExpr, argExpr)) {
-    diagnose(fnExpr->getLoc(), diag::pointer_init_add_mutating).fixItInsert(
-      cast<ParenExpr>(argExpr)->getSubExpr()->getStartLoc(), "mutating: ");
+  if (isCastToTypedPointer(CS->DC->getASTContext(), fnExpr, argExpr)) {
+    diagnose(fnExpr->getLoc(), diag::pointer_init_to_type)
+      .highlight(argExpr->getSourceRange());
   }
   
   // Did the user intend on invoking a different overload?
@@ -5586,11 +5654,11 @@ bool FailureDiagnosis::visitClosureExpr(ClosureExpr *CE) {
       // don't confuse the issue.
       fnType = FunctionType::get(fnType->getInput(), fnType->getResult());
       diagnose(params->getStartLoc(), diag::closure_argument_list_tuple,
-               fnType, inferredArgCount, actualArgCount);
+               fnType, inferredArgCount, actualArgCount, (actualArgCount == 1));
       return true;
     }
 
-    if (CS->TC.coerceParameterListToType(params, CE, inferredArgType))
+    if (CS->TC.coerceParameterListToType(params, CE, fnType))
       return true;
 
     expectedResultType = fnType->getResult();
@@ -6001,7 +6069,7 @@ bool FailureDiagnosis::visitUnresolvedMemberExpr(UnresolvedMemberExpr *E) {
     return true;
   }
   
-  auto argumentTy = candidateInfo[0].getArgumentType();
+  auto candidateArgTy = candidateInfo[0].getArgumentType();
 
   // Depending on how we matched, produce tailored diagnostics.
   switch (candidateInfo.closeness) {
@@ -6020,9 +6088,9 @@ bool FailureDiagnosis::visitUnresolvedMemberExpr(UnresolvedMemberExpr *E) {
   case CC_ExactMatch: {        // This is a perfect match for the arguments.
 
     // If we have an exact match, then we must have an argument list, check it.
-    if (argumentTy) {
+    if (candidateArgTy) {
       assert(E->getArgument() && "Exact match without argument?");
-      if (!typeCheckArgumentChildIndependently(E->getArgument(), argumentTy,
+      if (!typeCheckArgumentChildIndependently(E->getArgument(), candidateArgTy,
                                                candidateInfo))
         return true;
     }
@@ -6056,16 +6124,16 @@ bool FailureDiagnosis::visitUnresolvedMemberExpr(UnresolvedMemberExpr *E) {
       
   case CC_ArgumentLabelMismatch: { // Argument labels are not correct.
     auto argExpr = typeCheckArgumentChildIndependently(E->getArgument(),
-                                                       argumentTy,
+                                                       candidateArgTy,
                                                        candidateInfo);
     if (!argExpr) return true;
 
     // Construct the actual expected argument labels that our candidate
     // expected.
-    assert(argumentTy &&
+    assert(candidateArgTy &&
            "Candidate must expect an argument to have a label mismatch");
     SmallVector<Identifier, 2> argLabelsScratch;
-    auto arguments = decomposeArgType(argumentTy,
+    auto arguments = decomposeArgType(candidateArgTy,
                                       candidateInfo[0].getArgumentLabels(
                                         argLabelsScratch));
     
@@ -6083,26 +6151,40 @@ bool FailureDiagnosis::visitUnresolvedMemberExpr(UnresolvedMemberExpr *E) {
   case CC_ArgumentCountMismatch:  // This candidate has wrong # arguments.
     // If we have no argument, the candidates must have expected one.
     if (!E->getArgument()) {
-      if (!argumentTy)
+      if (!candidateArgTy)
         return false; // Candidate must be incorrect for some other reason.
       
       // Pick one of the arguments that are expected as an exemplar.
-      diagnose(E->getNameLoc(), diag::expected_argument_in_contextual_member,
-               E->getName(), argumentTy);
+      if (candidateArgTy->isVoid()) {
+        // If this member is () -> T, suggest adding parentheses.
+        diagnose(E->getNameLoc(), diag::expected_parens_in_contextual_member,
+                 E->getName())
+          .fixItInsertAfter(E->getEndLoc(), "()");
+      } else {
+        diagnose(E->getNameLoc(), diag::expected_argument_in_contextual_member,
+                 E->getName(), candidateArgTy);
+      }
       return true;
     }
      
-    // If an argument value was specified, but this is a simple enumerator, then
-    // we fail with a nice error message.
-    auto argTy = candidateInfo[0].getArgumentType();
-    if (!argTy) {
-      diagnose(E->getNameLoc(), diag::unexpected_argument_in_contextual_member,
-               E->getName());
+    // If an argument value was specified, but this member expects no arguments,
+    // then we fail with a nice error message.
+    if (!candidateArgTy) {
+      if (E->getArgument()->getType()->isVoid()) {
+        diagnose(E->getNameLoc(), diag::unexpected_parens_in_contextual_member,
+                 E->getName())
+          .fixItRemove(E->getArgument()->getSourceRange());
+      } else {
+        diagnose(E->getNameLoc(), diag::unexpected_argument_in_contextual_member,
+                 E->getName())
+          .highlight(E->getArgument()->getSourceRange());
+      }
       return true;
     }
 
-    assert(E->getArgument() && argTy && "Exact match without an argument?");
-    return !typeCheckArgumentChildIndependently(E->getArgument(), argTy,
+    assert(E->getArgument() && candidateArgTy &&
+           "Exact match without an argument?");
+    return !typeCheckArgumentChildIndependently(E->getArgument(), candidateArgTy,
                                                 candidateInfo);
   }
 
@@ -6214,6 +6296,12 @@ bool FailureDiagnosis::visitIdentityExpr(IdentityExpr *E) {
   return false;
 }
 
+/// A TryExpr doesn't change it's argument, nor does it change the contextual
+/// type.
+bool FailureDiagnosis::visitTryExpr(TryExpr *E) {
+  return visit(E->getSubExpr());
+}
+
 bool FailureDiagnosis::visitExpr(Expr *E) {
   // Check each of our immediate children to see if any of them are
   // independently invalid.
@@ -6268,7 +6356,7 @@ void ConstraintSystem::diagnoseFailureForExpr(Expr *expr) {
   // inconsistent state.
   simplify(/*ContinueAfterFailures*/true);
 
-  // Look through RebindSelfInConstructorExpr to avoid weird sema issues.
+  // Look through RebindSelfInConstructorExpr to avoid weird Sema issues.
   if (auto *RB = dyn_cast<RebindSelfInConstructorExpr>(expr))
     expr = RB->getSubExpr();
   

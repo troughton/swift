@@ -536,72 +536,6 @@ void GenericParamList::addTrailingWhereClause(
   Requirements = newRequirements;
 }
 
-ArrayRef<Substitution>
-GenericParamList::getForwardingSubstitutions(ASTContext &C) {
-  SmallVector<Substitution, 4> subs;
-
-  // TODO: IRGen wants substitutions for secondary archetypes.
-  // for (auto &param : params->getNestedGenericParams()) {
-  //  ArchetypeType *archetype = param.getAsTypeParam()->getArchetype();
-
-  for (auto archetype : getAllNestedArchetypes()) {
-    // "Check conformance" on each declared protocol to build a
-    // conformance map.
-    SmallVector<ProtocolConformanceRef, 2> conformances;
-
-    for (ProtocolDecl *proto : archetype->getConformsTo()) {
-      conformances.push_back(ProtocolConformanceRef(proto));
-    }
-
-    // Build an identity mapping with the derived conformances.
-    auto replacement = SubstitutedType::get(archetype, archetype, C);
-    subs.push_back({replacement, C.AllocateCopy(conformances)});
-  }
-
-  return C.AllocateCopy(subs);
-}
-
-/// \brief Add the nested archetypes of the given archetype to the set
-/// of all archetypes.
-void GenericParamList::addNestedArchetypes(ArchetypeType *archetype,
-                                      SmallPtrSetImpl<ArchetypeType*> &known,
-                                      SmallVectorImpl<ArchetypeType*> &all) {
-  for (auto nested : archetype->getNestedTypes()) {
-    auto nestedArch = nested.second.getAsArchetype();
-    if (!nestedArch)
-      continue;
-    if (known.insert(nestedArch).second) {
-      assert(!nestedArch->isPrimary() && "Unexpected primary archetype");
-      all.push_back(nestedArch);
-      addNestedArchetypes(nestedArch, known, all);
-    }
-  }
-}
-
-ArrayRef<ArchetypeType*>
-GenericParamList::deriveAllArchetypes(ArrayRef<GenericTypeParamDecl *> params,
-                                      SmallVectorImpl<ArchetypeType*> &all) {
-  // This should be kept in sync with ArchetypeBuilder::getAllArchetypes().
-
-  assert(all.empty());
-  llvm::SmallPtrSet<ArchetypeType*, 8> known;
-
-  // Collect all the primary archetypes.
-  for (auto param : params) {
-    auto archetype = param->getArchetype();
-    if (known.insert(archetype).second)
-      all.push_back(archetype);
-  }
-
-  // Collect all the nested archetypes.
-  for (auto param : params) {
-    auto archetype = param->getArchetype();
-    addNestedArchetypes(archetype, known, all);
-  }
-
-  return all;
-}
-
 TrailingWhereClause::TrailingWhereClause(
                        SourceLoc whereLoc,
                        ArrayRef<RequirementRepr> requirements)
@@ -809,11 +743,6 @@ void ExtensionDecl::setGenericParams(GenericParamList *params) {
   }
 }
 
-void ExtensionDecl::setGenericSignature(GenericSignature *sig) {
-  assert(!GenericSig && "Already have generic signature");
-  GenericSig = sig;
-}
-
 DeclRange ExtensionDecl::getMembers() const {
   loadAllMembers();
   return IterableDeclContext::getMembers();
@@ -863,11 +792,11 @@ PatternBindingDecl::PatternBindingDecl(SourceLoc StaticLoc,
                                        unsigned NumPatternEntries,
                                        DeclContext *Parent)
   : Decl(DeclKind::PatternBinding, Parent),
-    StaticLoc(StaticLoc), VarLoc(VarLoc),
-    numPatternEntries(NumPatternEntries) {
+    StaticLoc(StaticLoc), VarLoc(VarLoc) {
   PatternBindingDeclBits.IsStatic = StaticLoc.isValid();
   PatternBindingDeclBits.StaticSpelling =
        static_cast<unsigned>(StaticSpelling);
+  PatternBindingDeclBits.NumPatternEntries = NumPatternEntries;
 }
 
 PatternBindingDecl *
@@ -876,9 +805,18 @@ PatternBindingDecl::create(ASTContext &Ctx, SourceLoc StaticLoc,
                            SourceLoc VarLoc,
                            Pattern *Pat, Expr *E,
                            DeclContext *Parent) {
-  return create(Ctx, StaticLoc, StaticSpelling, VarLoc,
-                PatternBindingEntry(Pat, E),
-                Parent);
+  DeclContext *BindingInitContext = nullptr;
+  if (!Parent->isLocalContext())
+    BindingInitContext = new (Ctx) PatternBindingInitializer(Parent);
+
+  auto Result = create(Ctx, StaticLoc, StaticSpelling, VarLoc,
+                       PatternBindingEntry(Pat, E, BindingInitContext),
+                       Parent);
+
+  if (BindingInitContext)
+    cast<PatternBindingInitializer>(BindingInitContext)->setBinding(Result, 0);
+
+  return Result;
 }
 
 PatternBindingDecl *
@@ -900,7 +838,31 @@ PatternBindingDecl::create(ASTContext &Ctx, SourceLoc StaticLoc,
     ++elt;
     auto &newEntry = entries[elt];
     newEntry = pe; // This should take care of initializer with flags
-    PBD->setPattern(elt, pe.getPattern());
+    DeclContext *initContext = pe.getInitContext();
+    if (!initContext && !Parent->isLocalContext()) {
+      auto pbi = new (Ctx) PatternBindingInitializer(Parent);
+      pbi->setBinding(PBD, elt);
+      initContext = pbi;
+    }
+
+    PBD->setPattern(elt, pe.getPattern(), initContext);
+  }
+  return PBD;
+}
+
+PatternBindingDecl *PatternBindingDecl::createDeserialized(
+                      ASTContext &Ctx, SourceLoc StaticLoc,
+                      StaticSpellingKind StaticSpelling,
+                      SourceLoc VarLoc,
+                      unsigned NumPatternEntries,
+                      DeclContext *Parent) {
+  size_t Size = totalSizeToAlloc<PatternBindingEntry>(NumPatternEntries);
+  void *D = allocateMemoryForDecl<PatternBindingDecl>(Ctx, Size,
+                                                      /*ClangNode*/false);
+  auto PBD = ::new (D) PatternBindingDecl(StaticLoc, StaticSpelling, VarLoc,
+                                          NumPatternEntries, Parent);
+  for (auto &entry : PBD->getMutablePatternList()) {
+    entry = PatternBindingEntry(nullptr, nullptr, nullptr);
   }
   return PBD;
 }
@@ -956,17 +918,40 @@ VarDecl *PatternBindingEntry::getAnchoringVarDecl() const {
   return variables[0];
 }
 
+SourceRange PatternBindingEntry::getSourceRange() const {
+  ASTContext *ctx = nullptr;
+
+  SourceLoc endLoc;
+  getPattern()->forEachVariable([&](VarDecl *var) {
+    auto accessorsEndLoc = var->getBracesRange().End;
+    if (accessorsEndLoc.isValid()) {
+      endLoc = accessorsEndLoc;
+      if (!ctx) ctx = &var->getASTContext();
+    }
+  });
+
+  // Check the initializer.
+  SourceLoc initEndLoc = getOrigInitRange().End;
+  if (initEndLoc.isValid() &&
+      (endLoc.isInvalid() ||
+       (ctx && ctx->SourceMgr.isBeforeInBuffer(endLoc, initEndLoc))))
+    endLoc = initEndLoc;
+
+  // Check the pattern.
+  if (endLoc.isInvalid())
+    endLoc = getPattern()->getEndLoc();
+
+  SourceLoc startLoc = getPattern()->getStartLoc();
+  if (startLoc.isValid() != endLoc.isValid()) return SourceRange();
+
+  return SourceRange(startLoc, endLoc);
+}
+
 SourceRange PatternBindingDecl::getSourceRange() const {
   SourceLoc startLoc = getStartLoc();
-
-   // Take the init of the last pattern in the list.
-  if (auto init = getPatternList().back().getInit()) {
-    SourceLoc EndLoc = init->getEndLoc();
-    if (EndLoc.isValid())
-      return { startLoc, EndLoc };
-  }
-  // If the last pattern had no init, we take the end of its pattern.
-  return { startLoc, getPatternList().back().getPattern()->getEndLoc() };
+  SourceLoc endLoc = getPatternList().back().getSourceRange().End;
+  if (startLoc.isValid() != endLoc.isValid()) return SourceRange();
+  return { startLoc, endLoc };
 }
 
 static StaticSpellingKind getCorrectStaticSpellingForDecl(const Decl *D) {
@@ -995,9 +980,11 @@ bool PatternBindingDecl::hasStorage() const {
   return false;
 }
 
-void PatternBindingDecl::setPattern(unsigned i, Pattern *P) {
+void PatternBindingDecl::setPattern(unsigned i, Pattern *P,
+                                    DeclContext *InitContext) {
   auto PatternList = getMutablePatternList();
   PatternList[i].setPattern(P);
+  PatternList[i].setInitContext(InitContext);
   
   // Make sure that any VarDecl's contained within the pattern know about this
   // PatternBindingDecl as their parent.
@@ -1896,16 +1883,13 @@ const DeclContext *
 ValueDecl::getFormalAccessScope(const DeclContext *useDC) const {
   const DeclContext *result = getDeclContext();
   Accessibility access = getFormalAccess(useDC);
-  bool swift3PrivateChecked = false;
 
   while (!result->isModuleScopeContext()) {
     if (result->isLocalContext())
       return result;
 
-    if (access == Accessibility::Private && !swift3PrivateChecked) {
-      if (result->getASTContext().LangOpts.EnableSwift3Private)
-        return result;
-      swift3PrivateChecked = true;
+    if (access == Accessibility::Private) {
+      return result;
     }
 
     if (auto enclosingNominal = dyn_cast<NominalTypeDecl>(result)) {
@@ -2019,14 +2003,10 @@ bool NominalTypeDecl::derivesProtocolConformance(ProtocolDecl *protocol) const {
   if (!knownProtocol)
     return false;
 
-  // All nominal types can derive their Error conformance.
-  if (*knownProtocol == KnownProtocolKind::Error)
-    return true;
-
   if (auto *enumDecl = dyn_cast<EnumDecl>(this)) {
     switch (*knownProtocol) {
-    // Enums with raw types can implicitly derive their RawRepresentable
-    // conformance.
+    // The presence of a raw type is an explicit declaration that
+    // the compiler should derive a RawRepresentable conformance.
     case KnownProtocolKind::RawRepresentable:
       return enumDecl->hasRawType();
     
@@ -2056,9 +2036,8 @@ void NominalTypeDecl::computeType() {
   //
   // If this protocol has been deserialized, it already has generic parameters.
   // Don't add them again.
-  if (!getGenericParams())
-    if (auto proto = dyn_cast<ProtocolDecl>(this))
-      setGenericParams(proto->createGenericParams(proto));
+  if (auto proto = dyn_cast<ProtocolDecl>(this))
+    proto->createGenericParamsIfMissing();
 
   // If we still don't have a declared type, don't crash -- there's a weird
   // circular declaration issue in the code.
@@ -2212,11 +2191,6 @@ void GenericTypeDecl::setGenericParams(GenericParamList *params) {
   if (params)
     for (auto Param : *params)
       Param->setDeclContext(this);
-}
-
-void GenericTypeDecl::setGenericSignature(GenericSignature *sig) {
-  assert(!GenericSig && "Already have generic signature");
-  GenericSig = sig;
 }
 
 
@@ -2975,6 +2949,11 @@ GenericParamList *ProtocolDecl::createGenericParams(DeclContext *dc) {
   return result;
 }
 
+void ProtocolDecl::createGenericParamsIfMissing() {
+  if (!getGenericParams())
+    setGenericParams(createGenericParams(this));
+}
+
 /// Returns the default witness for a requirement, or nullptr if there is
 /// no default.
 ConcreteDeclRef ProtocolDecl::getDefaultWitness(ValueDecl *requirement) const {
@@ -3729,10 +3708,10 @@ ParamDecl::ParamDecl(ParamDecl *PD)
     ArgumentName(PD->getArgumentName()),
     ArgumentNameLoc(PD->getArgumentNameLoc()),
     LetVarInOutLoc(PD->getLetVarInOutLoc()),
-    typeLoc(PD->getTypeLoc()),
-    DefaultValueAndIsVariadic(PD->DefaultValueAndIsVariadic),
+    DefaultValueAndIsVariadic(nullptr, PD->DefaultValueAndIsVariadic.getInt()),
     IsTypeLocImplicit(PD->IsTypeLocImplicit),
     defaultArgumentKind(PD->defaultArgumentKind) {
+  typeLoc = PD->getTypeLoc();
 }
 
 
@@ -3853,38 +3832,41 @@ ParamDecl *ParamDecl::createSelf(SourceLoc loc, DeclContext *DC,
 
 /// Return the full source range of this parameter.
 SourceRange ParamDecl::getSourceRange() const {
-  SourceRange range;
-  
   SourceLoc APINameLoc = getArgumentNameLoc();
   SourceLoc nameLoc = getNameLoc();
-  
-  if (APINameLoc.isValid() && nameLoc.isInvalid())
-    range = APINameLoc;
-  else if (APINameLoc.isInvalid() && nameLoc.isValid())
-    range = nameLoc;
-  else
-    range = SourceRange(APINameLoc, nameLoc);
-  
-  if (range.isInvalid()) return range;
-  
+
+  SourceLoc startLoc;
+  if (APINameLoc.isValid())
+    startLoc = APINameLoc;
+  else if (nameLoc.isValid())
+    startLoc = nameLoc;
+  else {
+    startLoc = getTypeLoc().getSourceRange().Start;
+  }
+  if (startLoc.isInvalid())
+    return SourceRange();
+
   // It would be nice to extend the front of the range to show where inout is,
   // but we don't have that location info.  Extend the back of the range to the
   // location of the default argument, or the typeloc if they are valid.
   if (auto expr = getDefaultValue()) {
-    auto endLoc = expr->getExpr()->getEndLoc();
+    auto endLoc = expr->getEndLoc();
     if (endLoc.isValid())
-      return SourceRange(range.Start, endLoc);
+      return SourceRange(startLoc, endLoc);
   }
   
   // If the typeloc has a valid location, use it to end the range.
   if (auto typeRepr = getTypeLoc().getTypeRepr()) {
     auto endLoc = typeRepr->getEndLoc();
     if (endLoc.isValid() && !isTypeLocImplicit())
-      return SourceRange(range.Start, endLoc);
+      return SourceRange(startLoc, endLoc);
   }
-  
-  // Otherwise, just return the info we have about the parameter.
-  return range;
+
+  // The name has a location we can use.
+  if (nameLoc.isValid())
+    return SourceRange(startLoc, nameLoc);
+
+  return startLoc;
 }
 
 Type ParamDecl::getVarargBaseTy(Type VarArgT) {
@@ -3897,6 +3879,39 @@ Type ParamDecl::getVarargBaseTy(Type VarArgT) {
   }
   assert(isa<ErrorType>(T));
   return T;
+}
+
+void ParamDecl::setDefaultValue(Expr *E) {
+  if (!DefaultValueAndIsVariadic.getPointer()) {
+    if (!E) return;
+
+    DefaultValueAndIsVariadic.setPointer(
+      getASTContext().Allocate<StoredDefaultArgument>());
+  }
+
+  DefaultValueAndIsVariadic.getPointer()->DefaultArg = E;
+}
+
+void ParamDecl::setDefaultArgumentInitContext(Initializer *initContext) {
+  assert(DefaultValueAndIsVariadic.getPointer());
+  DefaultValueAndIsVariadic.getPointer()->InitContext = initContext;
+}
+
+void DefaultArgumentInitializer::changeFunction(AbstractFunctionDecl *parent) {
+  assert(parent->isLocalContext());
+  setParent(parent);
+
+  unsigned offset = getIndex();
+  for (auto list : parent->getParameterLists()) {
+    if (offset < list->size()) {
+      auto param = list->get(offset);
+      if (param->getDefaultValue())
+        param->setDefaultArgumentInitContext(this);
+      return;
+    }
+
+    offset -= list->size();
+  }
 }
 
 /// Determine whether the given Swift type is an integral type, i.e.,
@@ -3970,10 +3985,7 @@ ObjCSubscriptKind SubscriptDecl::getObjCSubscriptKind(
   if (Type objectTy = indexTy->getAnyOptionalObjectType())
     indexTy = objectTy;
 
-  if (getASTContext().getBridgedToObjC(getDeclContext(), indexTy, resolver))
-    return ObjCSubscriptKind::Keyed;
-
-  return ObjCSubscriptKind::None;
+  return ObjCSubscriptKind::Keyed;
 }
 
 SourceRange SubscriptDecl::getSourceRange() const {
@@ -4586,9 +4598,12 @@ SourceRange FuncDecl::getSourceRange() const {
     if (!B->isImplicit())
       return { StartLoc, B->getEndLoc() };
   }
+
+  if (this->isAccessor())
+    return StartLoc;
+
   if (getBodyResultTypeLoc().hasLocation() &&
-      getBodyResultTypeLoc().getSourceRange().End.isValid() &&
-      !this->isAccessor())
+      getBodyResultTypeLoc().getSourceRange().End.isValid())
     return { StartLoc, getBodyResultTypeLoc().getSourceRange().End };
   auto LastParamListEndLoc = getParameterLists().back()->getSourceRange().End;
   if (LastParamListEndLoc.isValid())
@@ -4935,17 +4950,14 @@ Type TypeBase::getSwiftNewtypeUnderlyingType() {
     return {};
 
   // Make sure the clang node has swift_newtype attribute
-  if (!structDecl->getClangNode())
-    return {};
-  auto clangNode = structDecl->getClangNode();
-  if (!clangNode.getAsDecl() ||
-      !clangNode.castAsDecl()->getAttr<clang::SwiftNewtypeAttr>())
+  auto clangNode = structDecl->getClangDecl();
+  if (!clangNode || !clangNode->hasAttr<clang::SwiftNewtypeAttr>())
     return {};
 
   // Underlying type is the type of rawValue
   for (auto member : structDecl->getMembers())
     if (auto varDecl = dyn_cast<VarDecl>(member))
-      if (varDecl->getName().str() == "rawValue")
+      if (varDecl->getName() == getASTContext().Id_rawValue)
         return varDecl->getType();
 
   return {};

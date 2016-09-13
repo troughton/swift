@@ -256,6 +256,12 @@ public func expectOptionalEqual${Generic}(
 
 %end
 
+public func expectEqual(
+  _ expected: Any.Type, _ actual: Any.Type, ${TRACE}
+) {
+  expectEqualTest(expected, actual, ${trace}, showFrame: false) { $0 == $1 }
+}
+
 public func expectLT<T : Comparable>(_ lhs: T, _ rhs: T, ${TRACE}) {
   if !(lhs < rhs) {
     expectationFailure("\(lhs) < \(rhs)", trace: ${trace})
@@ -516,17 +522,17 @@ public func expectFalse(_ actual: Bool, ${TRACE}) {
   }
 }
 
-public func expectEmpty<T>(_ value: T?, ${TRACE}) {
+public func expectNil<T>(_ value: T?, ${TRACE}) {
   if value != nil {
     expectationFailure(
-      "expected optional to be empty\nactual: \"\(value)\"", trace: ${trace})
+      "expected optional to be nil\nactual: \"\(value)\"", trace: ${trace})
   }
 }
 
 @discardableResult
-public func expectNotEmpty<T>(_ value: T?, ${TRACE}) -> T? {
+public func expectNotNil<T>(_ value: T?, ${TRACE}) -> T? {
   if value == nil {
-    expectationFailure("expected optional to be non-empty", trace: ${trace})
+    expectationFailure("expected optional to be non-nil", trace: ${trace})
   }
   return value
 }
@@ -1980,6 +1986,7 @@ public enum TestRunPredicate : CustomStringConvertible {
 public func checkEquatable<Instances : Collection>(
   _ instances: Instances,
   oracle: (Instances.Index, Instances.Index) -> Bool,
+  allowBrokenTransitivity: Bool = false,
   ${TRACE}
 ) where
   Instances.Iterator.Element : Equatable,
@@ -1990,12 +1997,15 @@ public func checkEquatable<Instances : Collection>(
   let indices = Array(instances.indices)
   _checkEquatableImpl(
     Array(instances),
-    oracle: { oracle(indices[$0], indices[$1]) })
+    oracle: { oracle(indices[$0], indices[$1]) },
+    allowBrokenTransitivity: allowBrokenTransitivity,
+    ${trace})
 }
 
 internal func _checkEquatableImpl<Instance : Equatable>(
   _ instances: [Instance],
   oracle: (Int, Int) -> Bool,
+  allowBrokenTransitivity: Bool = false,
   ${TRACE}
 ) {
   // For each index (which corresponds to an instance being tested) track the
@@ -2014,36 +2024,44 @@ internal func _checkEquatableImpl<Instance : Equatable>(
       let predictedXY = oracle(i, j)
       expectEqual(
         predictedXY, oracle(j, i),
-        "bad oracle: broken symmetry between indices \(i), \(j)")
+        "bad oracle: broken symmetry between indices \(i), \(j)",
+        stackTrace: ${stackTrace})
 
       let isEqualXY = x == y
       expectEqual(
         predictedXY, isEqualXY,
-        "lhs (at index \(i)): \(x)\nrhs (at index \(j)): \(y)",
+        (predictedXY
+           ? "expected equal, found not equal\n"
+           : "expected not equal, found equal\n") +
+        "lhs (at index \(i)): \(String(reflecting: x))\n" +
+        "rhs (at index \(j)): \(String(reflecting: y))",
         stackTrace: ${stackTrace})
 
       // Not-equal is an inverse of equal.
       expectNotEqual(
         isEqualXY, x != y,
-        "lhs (at index \(i)): \(x)\nrhs (at index \(j)): \(y)",
+        "lhs (at index \(i)): \(String(reflecting: x))\nrhs (at index \(j)): \(String(reflecting: y))",
         stackTrace: ${stackTrace})
 
-      // Check transitivity of the predicate represented by the oracle.
-      // If we are adding the instance `j` into an equivalence set, check that
-      // it is equal to every other instance in the set.
-      if predictedXY && i < j && transitivityScoreboard[i].value.insert(j).inserted {
-        if transitivityScoreboard[i].value.count == 1 {
-          transitivityScoreboard[i].value.insert(i)
+      if !allowBrokenTransitivity {
+        // Check transitivity of the predicate represented by the oracle.
+        // If we are adding the instance `j` into an equivalence set, check that
+        // it is equal to every other instance in the set.
+        if predictedXY && i < j && transitivityScoreboard[i].value.insert(j).inserted {
+          if transitivityScoreboard[i].value.count == 1 {
+            transitivityScoreboard[i].value.insert(i)
+          }
+          for k in transitivityScoreboard[i].value {
+            expectTrue(
+              oracle(j, k),
+              "bad oracle: broken transitivity at indices \(i), \(j), \(k)",
+              stackTrace: ${stackTrace})
+              // No need to check equality between actual values, we will check
+              // them with the checks above.
+          }
+          precondition(transitivityScoreboard[j].value.isEmpty)
+          transitivityScoreboard[j] = transitivityScoreboard[i]
         }
-        for k in transitivityScoreboard[i].value {
-          expectTrue(
-            oracle(j, k),
-            "bad oracle: broken transitivity at indices \(i), \(j), \(k)")
-            // No need to check equality between actual values, we will check
-            // them with the checks above.
-        }
-        precondition(transitivityScoreboard[j].value.isEmpty)
-        transitivityScoreboard[j] = transitivityScoreboard[i]
       }
     }
   }
@@ -2064,15 +2082,20 @@ public func checkEquatable<T : Equatable>(
 public func checkHashable<Instances : Collection>(
   _ instances: Instances,
   equalityOracle: (Instances.Index, Instances.Index) -> Bool,
+  allowBrokenTransitivity: Bool = false,
   ${TRACE}
 ) where
   Instances.Iterator.Element : Hashable,
   // FIXME(compiler limitation): these constraints should be applied to
   // associated types of Collection.
   Instances.Indices.Iterator.Element == Instances.Index {
-  
-  checkEquatable(instances, oracle: equalityOracle, ${trace})
-  
+
+  checkEquatable(
+    instances,
+    oracle: equalityOracle,
+    allowBrokenTransitivity: allowBrokenTransitivity,
+    ${trace})
+
   for i in instances.indices {
     let x = instances[i]
     for j in instances.indices {
@@ -2169,11 +2192,28 @@ public func checkComparable<Instances : Collection>(
   for i in instances.indices {
     let x = instances[i]
 
-    expectFalse(x < x, ${trace})
-    expectFalse(x > x, ${trace})
-    expectTrue(x <= x, ${trace})
-    expectTrue(x >= x, ${trace})
-    
+    expectFalse(
+      x < x,
+      "found 'x < x'\n" +
+      "at index \(i): \(String(reflecting: x))",
+      stackTrace: ${stackTrace})
+
+    expectFalse(
+      x > x,
+      "found 'x > x'\n" +
+      "at index \(i): \(String(reflecting: x))",
+      stackTrace: ${stackTrace})
+
+    expectTrue(x <= x,
+      "found 'x <= x' to be false\n" +
+      "at index \(i): \(String(reflecting: x))",
+      stackTrace: ${stackTrace})
+
+    expectTrue(x >= x,
+      "found 'x >= x' to be false\n" +
+      "at index \(i): \(String(reflecting: x))",
+      stackTrace: ${stackTrace})
+
     for j in instances.indices where i != j {
       let y = instances[j]
       
@@ -2185,11 +2225,30 @@ public func checkComparable<Instances : Collection>(
         + "(\(String(reflecting: i)), \(String(reflecting: j)))",
         stackTrace: ${stackTrace})
       
-      expectEqual(expected.isLT(), x < y, ${trace})
-      expectEqual(expected.isLE(), x <= y, ${trace})
-      expectEqual(expected.isGE(), x >= y, ${trace})
-      expectEqual(expected.isGT(), x > y, ${trace})
-      
+      expectEqual(expected.isLT(), x < y,
+        "x < y\n" +
+        "lhs (at index \(i)): \(String(reflecting: x))\n" +
+        "rhs (at index \(j)): \(String(reflecting: y))",
+        stackTrace: ${stackTrace})
+
+      expectEqual(expected.isLE(), x <= y,
+        "x <= y\n" +
+        "lhs (at index \(i)): \(String(reflecting: x))\n" +
+        "rhs (at index \(j)): \(String(reflecting: y))",
+        stackTrace: ${stackTrace})
+
+      expectEqual(expected.isGE(), x >= y,
+        "x >= y\n" +
+        "lhs (at index \(i)): \(String(reflecting: x))\n" +
+        "rhs (at index \(j)): \(String(reflecting: y))",
+        stackTrace: ${stackTrace})
+
+      expectEqual(expected.isGT(), x > y,
+        "x > y\n" +
+        "lhs (at index \(i)): \(String(reflecting: x))\n" +
+        "rhs (at index \(j)): \(String(reflecting: y))",
+        stackTrace: ${stackTrace})
+
       for k in instances.indices {
         let expected2 = oracle(j, k)
         if expected == expected2 {

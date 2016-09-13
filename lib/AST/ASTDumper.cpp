@@ -19,6 +19,7 @@
 #include "swift/AST/ASTPrinter.h"
 #include "swift/AST/ASTVisitor.h"
 #include "swift/AST/ForeignErrorConvention.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/TypeVisitor.h"
 #include "swift/Basic/STLExtras.h"
@@ -726,6 +727,7 @@ namespace {
     void visitSubscriptDecl(SubscriptDecl *SD) {
       printCommon(SD, "subscript_decl");
       OS << " storage_kind=" << getStorageKindName(SD->getStorageKind());
+      OS << " element=" << SD->getElementType()->getCanonicalType();
       printAccessors(SD);
       OS << ')';
     }
@@ -830,7 +832,7 @@ namespace {
       
       if (auto init = P->getDefaultValue()) {
         OS << " expression=\n";
-        printRec(init->getExpr());
+        printRec(init);
       }
       
       OS << ')';
@@ -1935,8 +1937,6 @@ public:
   }
   void visitCollectionUpcastConversionExpr(CollectionUpcastConversionExpr *E) {
     printCommon(E, "collection_upcast_expr");
-    if (E->bridgesToObjC())
-      OS << " bridges_to_objc";
     OS << '\n';
     printRec(E->getSubExpr());
     if (auto keyConversion = E->getKeyConversion()) {
@@ -2211,11 +2211,6 @@ public:
     printRec(E->getElseExpr());
     OS << ')';
   }
-  void visitDefaultValueExpr(DefaultValueExpr *E) {
-    printCommon(E, "default_value_expr") << ' ';
-    printRec(E->getSubExpr());
-    OS << ')';
-  }
   void visitAssignExpr(AssignExpr *E) {
     OS.indent(Indent) << "(assign_expr\n";
     printRec(E->getDest());
@@ -2476,7 +2471,13 @@ public:
     printRec(T->getBase());
     OS << ')';
   }
-  
+
+  void visitProtocolTypeRepr(ProtocolTypeRepr *T) {
+    printCommon(T, "type_protocol") << '\n';
+    printRec(T->getBase());
+    OS << ')';
+  }
+
   void visitInOutTypeRepr(InOutTypeRepr *T) {
     printCommon(T, "type_inout") << '\n';
     printRec(T->getBase());
@@ -3086,4 +3087,12 @@ void TypeBase::dump(raw_ostream &os, unsigned indent) const {
   // Make sure to print type variables.
   llvm::SaveAndRestore<bool> X(ctx.LangOpts.DebugConstraintSolver, true);
   Type(const_cast<TypeBase *>(this)).dump(os, indent);
+}
+
+void GenericEnvironment::dump() const {
+  llvm::errs() << "Generic environment:\n";
+  for (auto pair : getInterfaceToArchetypeMap()) {
+    pair.first->dump();
+    pair.second->dump();
+  }
 }

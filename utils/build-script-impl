@@ -57,12 +57,12 @@ KNOWN_SETTINGS=(
     lldb-no-debugserver         ""               "delete debugserver after building it, and don't try to codesign it"
     lldb-use-system-debugserver ""               "don't try to codesign debugserver, and use the system's debugserver instead"
     llvm-build-type             "Debug"          "the CMake build variant for LLVM and Clang (Debug, RelWithDebInfo, Release, MinSizeRel).  Defaults to Debug."
-    llvm-enable-assertions      "1"              "enable assertions in LLVM and Clang"
     swift-build-type            "Debug"          "the CMake build variant for Swift"
     swift-enable-assertions     "1"              "enable assertions in Swift"
     swift-analyze-code-coverage "not-merged"     "Code coverage analysis mode for Swift (false, not-merged, merged). Defaults to false if the argument is not present, and not-merged if the argument is present without a modifier."
     swift-tools-enable-lto      ""               "enable LTO compilation of Swift tools. *NOTE* This does not include the swift standard library and runtime. Must be set to one of 'thin' or 'full'"
     llvm-enable-lto             ""               "Must be set to one of 'thin' or 'full'"
+    llvm-enable-modules         "0"              "enable building llvm using modules"
     swift-tools-num-parallel-lto-link-jobs ""    "The number of parallel link jobs to use when compiling swift tools"
     llvm-num-parallel-lto-link-jobs ""           "The number of parallel link jobs to use when compiling llvm"
     swift-stdlib-build-type     "Debug"          "the CMake build variant for Swift"
@@ -237,7 +237,6 @@ KNOWN_SETTINGS=(
     user-config-args            ""               "**Renamed to --extra-cmake-options**: User-supplied arguments to cmake when used to do configuration."
     only-execute                       "all"     "Only execute the named action (see implementation)"
     llvm-lit-args                      ""        "If set, override the lit args passed to LLVM"
-    llvm-targets-to-build              "X86;ARM;AArch64;PowerPC;SystemZ" "The code generators that LLVM should build"
     build-toolchain-only               ""        "If set, only build the necessary tools to build an external toolchain"
 )
 
@@ -328,83 +327,6 @@ function is_swift_lto_enabled() {
     fi
 }
 
-# Compute the cmake flags related to disabling llvm tools as a result of our
-# needs for testing LLVM/Swift.
-function compute_cmake_llvm_tool_disable_flags() {
-    if [[ $(false_true "${LLVM_INCLUDE_TESTS}") == "FALSE" ]]; then
-        return
-    fi
-
-    local OUTPUT=()
-    local EXTRA_LLVM_CMAKE_OPTIONS=(
-        # Do not include LLVM tests.
-        -DLLVM_INCLUDE_TESTS:BOOL=NO
-        -DCLANG_INCLUDE_TESTS:BOOL=NO
-    )
-
-    # Disable LLVM Tools that Swift does not use for testing.
-    local LLVM_TOOLS_TO_DISABLE=(
-        BUGPOINT BUGPOINT_PASSES GOLD LLI LLVM_AS_FUZZER LLVM_C_TEST
-        LLVM_CXXDUMP LLVM_DIFF LLVM_DIS LLVM_DWP LLVM_EXTRACT LLVM_GO
-        LLVM_JITLISTENER LLVM_LTO LLVM_MC LLVM_MC_FUZZER LLVM_MCMARKUP
-        LLVM_PDBDUMP LLVM_READOBJ LLVM_RTDYLD LLVM_SHLIB LLVM_SIZE LLVM_SPLIT
-        LLVM_STRESS LLVM_SYMBOLIZER MSBUILD OBJ2YAML OPT SANCOV SANSTATS
-        VERIFY_USELISTORDER XCODE_TOOLCHAIN YAML2OBJ
-    )
-
-    # Disable Clang Tools that Swift does not use for testing.
-    local CLANG_TOOLS_TO_DISABLE=(
-        CLANG_CHECK DIAGTOOL SCAN_BUILD SCAN_VIEW CLANG_FORMAT
-    )
-
-    # If in addition we are asked to not generate targets for swift tests,
-    # then we can disable the building of even more of LLVM.
-    if [[ $(false_true "${SWIFT_INCLUDE_TESTS}") == "TRUE" ]]; then
-        EXTRA_LLVM_CMAKE_OPTIONS+=(
-            # We do not need gtest/FileCheck and friends since we are not
-            # running any tests.
-            -DLLVM_INCLUDE_UTILS:BOOL=NO
-        )
-
-        # Disable the rest of the LLVM tools. We do not need any of them.
-        LLVM_TOOLS_TO_DISABLE+=(
-            DSYMUTIL LLC LLVM_AR LLVM_AS LLVM_BCANALYZER LLVM_COV
-            LLVM_DWARFDUMP LLVM_LINK LLVM_NM LLVM_OBJDUMP LLVM_PROFDATA
-        )
-
-        # Disable the rest of the Clang tools. We do not need them.
-        CLANG_TOOLS_TO_DISABLE+=(
-            ARCMT_TEST C_ARCMT_TEST C_INDEX_TEST
-        )
-
-        # If in addition, we are not building compiler-rt, then we do not
-        # even need to build clang.
-        #
-        # *NOTE* This may change once we start building the standard library
-        # *with the just built clang.
-        if [[ $(true_false "${SKIP_BUILD_COMPILER_RT}") == "TRUE" ]]; then
-            CLANG_TOOLS_TO_DISABLE+=(
-                DRIVER
-            )
-        fi
-    fi
-
-    for arg in "${EXTRA_LLVM_CMAKE_ARGS[@]}"; do
-        OUTPUT+=( ${arg} )
-    done
-    for tool in "${LLVM_TOOLS_TO_DISABLE[@]}"; do
-        OUTPUT+=(
-            -DLLVM_TOOL_${tool}_BUILD:BOOL=NO
-        )
-    done
-    for tool in "${CLANG_TOOLS_TO_DISABLE[@]}"; do
-        OUTPUT+=(
-            -DCLANG_TOOL_${tool}_BUILD:BOOL=NO
-        )
-    done
-    echo "${OUTPUT[@]}"
-}
-
 # Support for performing isolated actions.
 #
 # This is part of refactoring more work to be done or controllable via
@@ -454,6 +376,7 @@ function set_build_options_for_host() {
     llvm_cmake_options=()
     swift_cmake_options=()
     cmark_cmake_options=()
+    lldb_cmake_options=()
     swiftpm_bootstrap_options=()
     SWIFT_HOST_VARIANT=
     SWIFT_HOST_VARIANT_SDK=
@@ -712,6 +635,7 @@ function set_build_options_for_host() {
                 -DCOMPILER_RT_ENABLE_WATCHOS:BOOL=FALSE
                 -DCOMPILER_RT_ENABLE_TVOS:BOOL=FALSE
                 -DSANITIZER_MIN_OSX_VERSION="${cmake_osx_deployment_target}"
+                -DLLVM_ENABLE_MODULES:BOOL="$(true_false ${LLVM_ENABLE_MODULES})"
             )
             if [[ $(is_llvm_lto_enabled) == "TRUE" ]]; then
                 if [[ $(cmake_needs_to_specify_standard_computed_defaults) == "TRUE" ]]; then
@@ -784,6 +708,9 @@ function set_build_options_for_host() {
         )
         swift_cmake_options+=(
             -DSWIFT_HOST_TRIPLE:STRING="${SWIFT_HOST_TRIPLE}"
+        )
+        lldb_cmake_options+=(
+            -DLLVM_HOST_TRIPLE:STRING="${SWIFT_HOST_TRIPLE}"
         )
     fi
     swift_cmake_options+=(
@@ -1054,7 +981,7 @@ function make_relative_symlink() {
     local SOURCE=$1
     local TARGET=$2
     local TARGET_DIR=$(dirname $2)
-    local RELATIVE_SOURCE=$(python -c "import os.path; print(os.path.relpath(\""${SOURCE}"\", \""${TARGET_DIR}"\"))")
+    local RELATIVE_SOURCE=$(python -c "import os.path; print(os.path.relpath(\"${SOURCE}\", \"${TARGET_DIR}\"))")
     call ln -sf "${RELATIVE_SOURCE}" "${TARGET}"
 }
 
@@ -1797,53 +1724,12 @@ for host in "${ALL_HOSTS[@]}"; do
         fi
     fi
 
-    case "${COMPILER_VENDOR}" in
-        none)
-            ;;
-        apple)
-            llvm_cmake_options=(
-                "${llvm_cmake_options[@]}"
-                -DCLANG_VENDOR=Apple
-                -DCLANG_VENDOR_UTI=com.apple.compilers.llvm.clang
-                -DPACKAGE_VERSION="${CLANG_USER_VISIBLE_VERSION}"
-            )
-            swift_cmake_options=(
-                "${swift_cmake_options[@]}"
-                -DSWIFT_VENDOR=Apple
-                -DSWIFT_VENDOR_UTI=com.apple.compilers.llvm.swift
-                -DSWIFT_VERSION="${SWIFT_USER_VISIBLE_VERSION}"
-                -DSWIFT_COMPILER_VERSION="${SWIFT_COMPILER_VERSION}"
-            )
-            ;;
-        *)
-            echo "unknown compiler vendor"
-            exit 1
-            ;;
-    esac
-
     llvm_cmake_options=(
         "${llvm_cmake_options[@]}"
         -DCMAKE_INSTALL_PREFIX:PATH="$(get_host_install_prefix ${host})"
         -DINTERNAL_INSTALL_PREFIX="local"
     )
 
-    if [[ "${CLANG_COMPILER_VERSION}" ]] ; then
-        llvm_cmake_options=(
-            "${llvm_cmake_options[@]}"
-            -DCLANG_REPOSITORY_STRING="clang-${CLANG_COMPILER_VERSION}"
-        )
-        swift_cmake_options=(
-            "${swift_cmake_options[@]}"
-            -DCLANG_COMPILER_VERSION="${CLANG_COMPILER_VERSION}"
-            -DSWIFT_COMPILER_VERSION="${SWIFT_COMPILER_VERSION}"
-        )
-    fi
-    if [[ "${SWIFT_COMPILER_VERSION}" ]] ; then
-        swift_cmake_options=(
-            "${swift_cmake_options[@]}"
-            -DSWIFT_COMPILER_VERSION="${SWIFT_COMPILER_VERSION}"
-        )
-    fi
     if [[ "${DARWIN_TOOLCHAIN_VERSION}" ]] ; then
         swift_cmake_options=(
             "${swift_cmake_options[@]}"
@@ -1962,9 +1848,7 @@ for host in "${ALL_HOSTS[@]}"; do
                     -DCMAKE_C_FLAGS="$(llvm_c_flags ${host})"
                     -DCMAKE_CXX_FLAGS="$(llvm_c_flags ${host})"
                     -DCMAKE_BUILD_TYPE:STRING="${LLVM_BUILD_TYPE}"
-                    -DLLVM_ENABLE_ASSERTIONS:BOOL=$(true_false "${LLVM_ENABLE_ASSERTIONS}")
                     -DLLVM_TOOL_SWIFT_BUILD:BOOL=NO
-                    -DLLVM_TARGETS_TO_BUILD="${LLVM_TARGETS_TO_BUILD}"
                     -DLLVM_INCLUDE_DOCS:BOOL=TRUE
                     -DLLVM_ENABLE_LTO:STRING="${LLVM_ENABLE_LTO}"
                     "${llvm_cmake_options[@]}"
@@ -2188,6 +2072,12 @@ for host in "${ALL_HOSTS[@]}"; do
                 swift_build_dir=$(build_directory ${host} swift)
 
                 # Add any lldb extra cmake arguments here.
+
+                cmake_options=(
+                    "${cmake_options[@]}"
+                    "${lldb_cmake_options[@]}"
+                    )
+
                 if [ ! -z "${LLDB_EXTRA_CMAKE_ARGS}" ]; then
                     cmake_options=(
                         "${cmake_options[@]}"
@@ -2211,6 +2101,7 @@ for host in "${ALL_HOSTS[@]}"; do
                         cmake_options=(
                             "${cmake_options[@]}"
                             -DCMAKE_BUILD_TYPE:STRING="${LLDB_BUILD_TYPE}"
+                            -DLLDB_SWIFTC:PATH="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             -DCMAKE_INSTALL_PREFIX:PATH="$(get_host_install_prefix ${host})"
                             -DLLDB_PATH_TO_LLVM_SOURCE:PATH="${LLVM_SOURCE_DIR}"
                             -DLLDB_PATH_TO_CLANG_SOURCE:PATH="${CLANG_SOURCE_DIR}"
@@ -2219,7 +2110,6 @@ for host in "${ALL_HOSTS[@]}"; do
                             -DLLDB_PATH_TO_CLANG_BUILD:PATH="${llvm_build_dir}"
                             -DLLDB_PATH_TO_SWIFT_BUILD:PATH="${swift_build_dir}"
                             -DLLDB_PATH_TO_CMARK_BUILD:PATH="${cmark_build_dir}"
-                            -DLLDB_PATH_TO_SWIFTC:PATH="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             -DLLDB_IS_BUILDBOT_BUILD="${LLDB_IS_BUILDBOT_BUILD}"
                             -DLLDB_BUILD_DATE:STRING="\"${LLDB_BUILD_DATE}\""
                             -DLLDB_ALLOW_STATIC_BINDINGS=1
@@ -2229,6 +2119,7 @@ for host in "${ALL_HOSTS[@]}"; do
                         cmake_options=(
                             "${cmake_options[@]}"
                             -DCMAKE_BUILD_TYPE:STRING="${LLDB_BUILD_TYPE}"
+                            -DLLDB_SWIFTC:PATH="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             -DCMAKE_INSTALL_PREFIX:PATH="$(get_host_install_prefix ${host})"
                             -DLLDB_PATH_TO_LLVM_SOURCE:PATH="${LLVM_SOURCE_DIR}"
                             -DLLDB_PATH_TO_CLANG_SOURCE:PATH="${CLANG_SOURCE_DIR}"
@@ -2237,7 +2128,6 @@ for host in "${ALL_HOSTS[@]}"; do
                             -DLLDB_PATH_TO_CLANG_BUILD:PATH="${llvm_build_dir}"
                             -DLLDB_PATH_TO_SWIFT_BUILD:PATH="${swift_build_dir}"
                             -DLLDB_PATH_TO_CMARK_BUILD:PATH="${cmark_build_dir}"
-                            -DLLDB_PATH_TO_SWIFTC:PATH="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             -DLLDB_IS_BUILDBOT_BUILD="${LLDB_IS_BUILDBOT_BUILD}"
                             -DLLDB_BUILD_DATE:STRING="\"${LLDB_BUILD_DATE}\""
                             -DLLDB_ALLOW_STATIC_BINDINGS=1
@@ -2247,6 +2137,7 @@ for host in "${ALL_HOSTS[@]}"; do
                         cmake_options=(
                             "${cmake_options[@]}"
                             -DCMAKE_BUILD_TYPE:STRING="${LLDB_BUILD_TYPE}"
+                            -DLLDB_SWIFTC:PATH="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             -DCMAKE_INSTALL_PREFIX:PATH="$(get_host_install_prefix ${host})"
                             -DLLDB_PATH_TO_LLVM_SOURCE:PATH="${LLVM_SOURCE_DIR}"
                             -DLLDB_PATH_TO_CLANG_SOURCE:PATH="${CLANG_SOURCE_DIR}"
@@ -2255,7 +2146,6 @@ for host in "${ALL_HOSTS[@]}"; do
                             -DLLDB_PATH_TO_CLANG_BUILD:PATH="${llvm_build_dir}"
                             -DLLDB_PATH_TO_SWIFT_BUILD:PATH="${swift_build_dir}"
                             -DLLDB_PATH_TO_CMARK_BUILD:PATH="${cmark_build_dir}"
-                            -DLLDB_PATH_TO_SWIFTC:PATH="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             -DLLDB_IS_BUILDBOT_BUILD="${LLDB_IS_BUILDBOT_BUILD}"
                             -DLLDB_BUILD_DATE:STRING="\"${LLDB_BUILD_DATE}\""
                             -DLLDB_ALLOW_STATIC_BINDINGS=1
@@ -2271,7 +2161,6 @@ for host in "${ALL_HOSTS[@]}"; do
                             LLDB_PATH_TO_CLANG_BUILD="${llvm_build_dir}"
                             LLDB_PATH_TO_SWIFT_BUILD="${swift_build_dir}"
                             LLDB_PATH_TO_CMARK_BUILD="${cmark_build_dir}"
-                            LLDB_PATH_TO_SWIFTC="$(build_directory ${LOCAL_HOST} swift)/bin/swiftc"
                             LLDB_IS_BUILDBOT_BUILD="${LLDB_IS_BUILDBOT_BUILD}"
                             LLDB_BUILD_DATE="\"${LLDB_BUILD_DATE}\""
                             SYMROOT="${lldb_build_dir}"
@@ -2408,7 +2297,8 @@ for host in "${ALL_HOSTS[@]}"; do
                 SWIFTC_BIN="$(build_directory_bin ${LOCAL_HOST} swift)/swiftc"
                 LLVM_BIN="$(build_directory_bin ${LOCAL_HOST} llvm)"
 
-                if [[ ! -f "${LIBDISPATCH_BUILD_DIR}"/config.status ]]; then
+                if [[ "${RECONFIGURE}" || ! -f "${LIBDISPATCH_BUILD_DIR}"/config.status ]]; then
+                    echo "Reconfiguring libdispatch"
                     # First time building; need to run autotools and configure
                     if [[ "$LIBDISPATCH_BUILD_TYPE" == "Release" ]] ; then
                         dispatch_build_variant_arg="release"
@@ -2425,7 +2315,8 @@ for host in "${ALL_HOSTS[@]}"; do
                             "${LIBDISPATCH_SOURCE_DIR}"/configure --with-swift-toolchain="${SWIFT_BUILD_PATH}" \
                             --with-build-variant=$dispatch_build_variant_arg \
                             --prefix="$(get_host_install_destdir ${host})$(get_host_install_prefix ${host})"
-
+                else
+                    echo "Skipping reconfiguration of libdispatch"
                 fi
                 with_pushd "${LIBDISPATCH_BUILD_DIR}" \
                     call make
@@ -2724,7 +2615,7 @@ for host in "${ALL_HOSTS[@]}"; do
                 LIBDISPATCH_BUILD_DIR=$(build_directory ${host} ${product})
                 echo "--- Running tests for ${product} ---"
                 with_pushd "${LIBDISPATCH_BUILD_DIR}" \
-                    call make check
+                    call env VERBOSE=1 make check
                 echo "--- Finished tests for ${product} ---"
                 continue
                 ;;
@@ -2749,7 +2640,7 @@ for host in "${ALL_HOSTS[@]}"; do
 
         trap "tests_busted ${product} ''" ERR
         build_dir=$(build_directory ${host} ${product})
-        build_cmd=("${CMAKE}" --build "${build_dir}" $(cmake_config_opt ${product}) -- ${BUILD_ARGS})
+        build_cmd=("${CMAKE}" --build "${build_dir}" $(cmake_config_opt ${product}) -- "${BUILD_ARGS[@]}")
 
         if [[ "${executable_target}" != "" ]]; then
             echo "--- Building tests for ${product} ---"

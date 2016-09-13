@@ -957,15 +957,10 @@ void ConstraintSystem::openGeneric(
        bool skipProtocolSelfConstraint,
        ConstraintLocatorBuilder locator,
        llvm::DenseMap<CanType, TypeVariableType *> &replacements) {
-  // Use the minimized constraints; we can re-derive solutions for all the
-  // implied constraints.
-  auto minimized =
-    signature->getCanonicalManglingSignature(*DC->getParentModule());
-
   openGeneric(innerDC,
               outerDC,
-              minimized->getGenericParams(),
-              minimized->getRequirements(),
+              signature->getGenericParams(),
+              signature->getRequirements(),
               skipProtocolSelfConstraint,
               locator,
               replacements);
@@ -1195,6 +1190,16 @@ ConstraintSystem::getTypeOfMemberReference(
   if (baseObjTy->is<ModuleType>()) {
     return getTypeOfReference(value, isTypeReference, /*isSpecialized=*/false,
                               functionRefKind, locator, base);
+  }
+
+  // Don't open existentials when accessing typealias members of
+  // protocols.
+  if (auto *alias = dyn_cast<TypeAliasDecl>(value)) {
+    if (baseObjTy->isExistentialType()) {
+      auto memberTy = alias->getUnderlyingType();
+      auto openedType = FunctionType::get(baseObjTy, memberTy);
+      return { openedType, memberTy };
+    }
   }
 
   // Handle associated type lookup as a special case, horribly.

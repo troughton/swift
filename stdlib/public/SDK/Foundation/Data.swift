@@ -669,7 +669,7 @@ public struct Data : ReferenceConvertible, Equatable, Hashable, RandomAccessColl
         public mutating func next() -> UInt8? {
             guard _idx < _endIdx else { return nil }
             defer { _idx += 1 }
-            let bufferSize = MemoryLayout._ofInstance(_buffer).size
+            let bufferSize = MemoryLayout.size(ofValue: _buffer)
             return withUnsafeMutablePointer(to: &_buffer) { ptr_ in
                 let ptr = UnsafeMutableRawPointer(ptr_).assumingMemoryBound(to: UInt8.self)
                 let bufferIdx = _idx % bufferSize
@@ -735,10 +735,10 @@ extension Data : CustomStringConvertible, CustomDebugStringConvertible, CustomRe
 
 extension Data {
     @available(*, unavailable, renamed: "copyBytes(to:count:)")
-    public func getBytes(_ buffer: UnsafeMutablePointer<Swift.Void>, length: Int) { }
+  public func getBytes<UnsafeMutablePointerVoid: _Pointer>(_ buffer: UnsafeMutablePointerVoid, length: Int) { }
 
     @available(*, unavailable, renamed: "copyBytes(to:from:)")
-    public func getBytes(_ buffer: UnsafeMutablePointer<Swift.Void>, range: NSRange) { }
+    public func getBytes<UnsafeMutablePointerVoid: _Pointer>(_ buffer: UnsafeMutablePointerVoid, range: NSRange) { }
 }
 
 /// Provides bridging functionality for struct Data to class NSData and vice-versa.

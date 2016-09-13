@@ -133,9 +133,8 @@ extension GenericClass {
   func usesGenericParamG(_ x: T) {
     _ = T.self // expected-note{{used here}}
   }
-  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
-  func usesGenericParamH(_ x: T) {
-    _ = x as Any // expected-note{{used here}}
+  func doesntUseGenericParamH(_ x: T) {
+    _ = x as Any
   }
   // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
   func usesGenericParamI(_ y: T.Type) {
@@ -181,14 +180,13 @@ extension AnimalContainer {
     _ = #selector(y.create)
   }
 
-  // TODO: 'Any' bridging should not require reifying generic params.
-  func doesntUseGenericParam2(_ x: T, _ y: T.Type) { // expected-error{{cannot access the class's generic parameters}}
+  func doesntUseGenericParam2(_ x: T, _ y: T.Type) {
     let a = x.another()
     _ = a.another()
     _ = x.another().another()
 
     _ = type(of: x).create().another()
-    _ = type(of: x).init(noise: x).another() // expected-note{{here}}
+    _ = type(of: x).init(noise: x).another()
     _ = y.create().another()
     _ = y.init(noise: x).another()
     _ = y.init(noise: x.another()).another()
@@ -212,6 +210,44 @@ extension AnimalContainer {
     y.apexPredator = x
   }
 
+  func doesntUseGenericParam5(y: T) {
+    var x = y
+    x = y
+    _ = x
+  }
+  func doesntUseGenericParam6(y: T?) {
+    var x = y
+    x = y
+    _ = x
+  }
+
+  // Doesn't use 'T', since dynamic casting to an ObjC generic class doesn't
+  // check its generic parameters
+  func doesntUseGenericParam7() {
+    _ = (self as AnyObject) as! GenericClass<T>
+    _ = (self as AnyObject) as? GenericClass<T>
+    _ = (self as AnyObject) as! AnimalContainer<T>
+    _ = (self as AnyObject) as? AnimalContainer<T>
+    _ = (self as AnyObject) is AnimalContainer<T>
+    _ = (self as AnyObject) is AnimalContainer<T>
+  }
+
+  // Dynamic casting to the generic parameter would require its generic params,
+  // though
+  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
+  func usesGenericParamZ1() {
+    _ = (self as AnyObject) as! T //expected-note{{here}}
+  }
+  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
+  func usesGenericParamZ2() {
+    _ = (self as AnyObject) as? T //expected-note{{here}}
+  }
+  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
+  func usesGenericParamZ3() {
+    _ = (self as AnyObject) is T //expected-note{{here}}
+  }
+
+
   // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
   func usesGenericParamA(_ x: T) {
     _ = T(noise: x) // expected-note{{used here}}
@@ -227,6 +263,14 @@ extension AnimalContainer {
   // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
   func usesGenericParamD(_ x: T) {
     T.apexPredator = x // expected-note{{used here}}
+  }
+
+  // rdar://problem/27796375 -- allocating init entry points for ObjC
+  // initializers are generated as true Swift generics, so reify type
+  // parameters.
+  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
+  func usesGenericParamE(_ x: T) {
+    _ = GenericClass(thing: x) // expected-note{{used here}}
   }
 
   func checkThatMethodsAreObjC() {
@@ -246,14 +290,26 @@ extension AnimalContainer {
 }
 
 extension PettableContainer {
-  // TODO: Any erasure shouldn't use generic parameter metadata.
-  func doesntUseGenericParam(_ x: T, _ y: T.Type) { // expected-error{{cannot access the class's generic parameters}}
-    _ = type(of: x).init(fur: x).other() // expected-note{{here}}
+  func doesntUseGenericParam(_ x: T, _ y: T.Type) {
+    // TODO: rdar://problem/27796375--allocating entry points are emitted as
+    // true generics.
+    // _ = type(of: x).init(fur: x).other()
     _ = type(of: x).adopt().other()
-    _ = y.init(fur: x).other()
+    // _ = y.init(fur: x).other()
     _ = y.adopt().other()
     x.pet()
     x.pet(with: x)
+  }
+
+  // TODO: rdar://problem/27796375--allocating entry points are emitted as
+  // true generics.
+  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
+  func usesGenericParamZ1(_ x: T, _ y: T.Type) {
+    _ = type(of: x).init(fur: x).other() // expected-note{{used here}}
+  }
+  // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}
+  func usesGenericParamZ2(_ x: T, _ y: T.Type) {
+    _ = y.init(fur: x).other() // expected-note{{used here}}
   }
 
   // expected-error@+1{{extension of a generic Objective-C class cannot access the class's generic parameters}}

@@ -26,6 +26,10 @@
 namespace swift {
 
 class ArchetypeBuilder;
+class ProtocolConformanceRef;
+class ProtocolType;
+class Substitution;
+class SubstitutionMap;
 
 /// Iterator that walks the generic parameter types declared in a generic
 /// signature and their dependent members.
@@ -163,39 +167,45 @@ public:
     assert(Mem);
     return Mem;
   }
-  
-  /// Build a substitution map from a vector of Substitutions that correspond to
-  /// the generic parameters in this generic signature. The order of primary
-  /// archetypes in the substitution vector must match the order of generic
-  /// parameters in getGenericParams().
-  TypeSubstitutionMap getSubstitutionMap(ArrayRef<Substitution> args) const;
-  
+
+  /// Build an interface type substitution map from a vector of Substitutions
+  /// that correspond to the generic parameters in this generic signature.
+  SubstitutionMap getSubstitutionMap(ArrayRef<Substitution> args) const;
+
+  /// Same as above, but updates an existing map.
+  void getSubstitutionMap(ArrayRef<Substitution> args,
+                          SubstitutionMap &subMap) const;
+
+  using LookupConformanceFn =
+      llvm::function_ref<ProtocolConformanceRef(CanType, Type, ProtocolType *)>;
+
+  /// Build an array of substitutions from an interface type substitution map,
+  /// using the given function to look up conformances.
+  void getSubstitutions(ModuleDecl &mod,
+                        const TypeSubstitutionMap &subMap,
+                        LookupConformanceFn lookupConformance,
+                        SmallVectorImpl<Substitution> &result) const;
+
+  /// Build an array of substitutions from an interface type substitution map,
+  /// using the given function to look up conformances.
+  void getSubstitutions(ModuleDecl &mod,
+                        const SubstitutionMap &subMap,
+                        SmallVectorImpl<Substitution> &result) const;
+
   /// Return a range that iterates through first all of the generic parameters
   /// of the signature, followed by all of their recursive member types exposed
   /// through protocol requirements.
-  ///
-  /// The member types are presented in the
-  /// same order as GenericParamList::getAllArchetypes would present for an
-  /// equivalent GenericParamList.
   GenericSignatureWitnessIterator getAllDependentTypes() const {
     return GenericSignatureWitnessIterator(getRequirements());
   }
 
-  /// Determines whether this ASTContext is canonical.
+  /// Determines whether this GenericSignature is canonical.
   bool isCanonical() const;
   
   ASTContext &getASTContext() const;
   
   /// Canonicalize the components of a generic signature.
   CanGenericSignature getCanonicalSignature() const;
-  
-  /// Canonicalize a generic signature down to its essential requirements,
-  /// for mangling purposes.
-  ///
-  /// TODO: This is what getCanonicalSignature() ought to do, but currently
-  /// cannot due to implementation dependencies on 'getAllDependentTypes'
-  /// order matching 'getAllArchetypes' order of a generic param list.
-  CanGenericSignature getCanonicalManglingSignature(ModuleDecl &M) const;
 
   /// Uniquing for the ASTContext.
   void Profile(llvm::FoldingSetNodeID &ID) {
