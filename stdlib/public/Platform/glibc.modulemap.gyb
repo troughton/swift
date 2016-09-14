@@ -356,10 +356,14 @@ module SwiftGlibc [system] {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/select.h"
         export *
       }
+
+% if CMAKE_SDK in ["LINUX", "FREEBSD"]:
       module sendfile {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/sendfile.h"
         export *
       }
+% end
+
       module socket {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/socket.h"
         export *
