@@ -41,10 +41,10 @@ Download sources
   git clone https://github.com/tinysun212/swift-clang-cygwin.git clang
   git clone https://github.com/tinysun212/swift-corelibs-foundation.git swift-corelibs-foundation
   git clone https://github.com/tinysun212/swift-corelibs-xctest.git swift-corelibs-xctest
+  git clone https://github.com/tinysun212/swift-llbuild.git llbuild
+  git clone https://github.com/tinysun212/swift-package-manager.git swiftpm
   git clone https://github.com/apple/swift-cmark.git cmark
   git clone https://github.com/ninja-build/ninja.git
-  // llbuild
-  // swiftpm
 
   # You should replace the YYYYMMDD to proper value. 
   cd swift; git checkout swift-cygwin-YYYYMMDD ; cd ..
@@ -99,7 +99,7 @@ Build Swift Package Manager
   # Ensure the Foundation and XCTest is installed
   
   # Add path to swift compiler
-  export PATH=$PATH:/cygdrive/c/Work/swift_msvc/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
+  export PATH=$PATH:$WORK_DIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
 
   cd $WORK_DIR/swift
   utils/build-script -R --swiftpm --llbuild --skip-build-foundation --skip-build-llvm --skip-build-libdispatch -j 3
@@ -112,4 +112,7 @@ Install Swift Package Manager
   cp -p swift-build.exe swift-package.exe swift-test.exe $WORK_DIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
   cd $WORK_DIR/build/Ninja-ReleaseAssert/swiftpm-cygwin-x86_64/.bootstrap/lib/swift
   cp -rp pm $WORK_DIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/lib/swift
+  
+  cd $WORK_DIR/build/Ninja-ReleaseAssert/llbuild-cygwin-x86_64/bin
+  cp -p swift-build-tool.exe $WORK_DIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
 ```
