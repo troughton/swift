@@ -2,14 +2,16 @@
 Install cygwin64 2.6.0
 ----------------------
 ```
- Devel/clang              3.8.1-1 
+ Devel/automake           9-1
+      /clang              3.8.1-1 
       /cmake              3.6.2-1
       /gcc-core           5.4.0-1
       /gcc-g++            5.4.0-1
       /git                2.8.3-1
       /pkg-config         0.29.1-1
       /swig               3.0.7-1
-  Libs/libedit-devel      20130712-1
+  Libs/libcurl-devel      7.50.3-1
+      /libedit-devel      20130712-1
       /libiconv-devel     1.14-3
       /libicu-devel       57.1-1
       /libncurses-devel   6.0-7.20160806
