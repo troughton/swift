@@ -118,3 +118,10 @@ Install Swift Package Manager
   cd $WORK_DIR/build/Ninja-ReleaseAssert/llbuild-cygwin-x86_64/bin
   cp -p swift-build-tool.exe $WORK_DIR/build/Ninja-ReleaseAssert/swift-cygwin-x86_64/bin
 ```
+
+Build LLDB
+----------
+```
+  cd $WORK_DIR
+  lldb/scripts/build-swift-cmake.py --release
+```
