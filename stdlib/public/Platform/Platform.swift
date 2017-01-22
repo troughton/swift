@@ -122,7 +122,49 @@ public var stderr : UnsafeMutablePointer<FILE> {
     __stderrp = newValue
   }
 }
+#elseif CYGWIN
+public var stdin : UnsafeMutablePointer<__FILE>! {
+    get {
+		if let reent = __getreent() {
+		    return reent.pointee._stdin
+		}
+		return nil
+	}
+	set {
+		if let reent = __getreent() {
+		    reent.pointee._stdin = newValue
+		}
+	}
+}
+public var stdout : UnsafeMutablePointer<__FILE>! {
+    get {
+		if let reent = __getreent() {
+		    return reent.pointee._stdout
+		}
+		return nil
+	}
+	set {
+		if let reent = __getreent() {
+		    reent.pointee._stdout = newValue
+		}
+	}
+}
+public var stderr : UnsafeMutablePointer<__FILE>! {
+    get {
+		if let reent = __getreent() {
+		    return reent.pointee._stderr
+		}
+		return nil
+	}
+	set {
+		if let reent = __getreent() {
+		    reent.pointee._stderr = newValue
+		}
+	}
+}
+#endif
 
+#if os(OSX) || os(iOS) || os(watchOS) || os(tvOS) || os(FreeBSD) || os(PS4)
 public func dprintf(_ fd: Int, _ format: UnsafePointer<Int8>, _ args: CVarArg...) -> Int32 {
   return withVaList(args) { va_args in
     vdprintf(Int32(fd), format, va_args)
