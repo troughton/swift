@@ -2,15 +2,19 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "swift/Frontend/Frontend.h"
+
+#if __APPLE__
+# include "AppleHostVersionDetection.h"
+#endif
 
 #include "swift/Strings.h"
 #include "swift/AST/DiagnosticsFrontend.h"
@@ -76,6 +80,8 @@ SourceFileKind CompilerInvocation::getSourceFileKind() const {
   case InputFileKind::IFK_LLVM_IR:
     llvm_unreachable("Trying to convert from unsupported InputFileKind");
   }
+
+  llvm_unreachable("Unhandled InputFileKind in switch.");
 }
 
 // This is a separate function so that it shows up in stack traces.
@@ -173,6 +179,8 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
   Opts.PrintStats |= Args.hasArg(OPT_print_stats);
   Opts.PrintClangStats |= Args.hasArg(OPT_print_clang_stats);
   Opts.DebugTimeFunctionBodies |= Args.hasArg(OPT_debug_time_function_bodies);
+  Opts.DebugTimeExpressionTypeChecking |=
+    Args.hasArg(OPT_debug_time_expression_type_checking);
   Opts.DebugTimeCompilation |= Args.hasArg(OPT_debug_time_compilation);
 
   if (const Arg *A = Args.getLastArg(OPT_warn_long_function_bodies)) {
@@ -190,6 +198,9 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     Opts.PlaygroundTransform = false;
   Opts.PlaygroundHighPerformance |=
     Args.hasArg(OPT_playground_high_performance);
+
+  // This can be enabled independently of the playground transform.
+  Opts.PCMacro |= Args.hasArg(OPT_pc_macro);
 
   if (const Arg *A = Args.getLastArg(OPT_help, OPT_help_hidden)) {
     if (A->getOption().matches(OPT_help)) {
@@ -247,8 +258,12 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Action = FrontendOptions::EmitSIB;
     } else if (Opt.matches(OPT_emit_sibgen)) {
       Action = FrontendOptions::EmitSIBGen;
+    } else if (Opt.matches(OPT_emit_pch)) {
+      Action = FrontendOptions::EmitPCH;
     } else if (Opt.matches(OPT_parse)) {
       Action = FrontendOptions::Parse;
+    } else if (Opt.matches(OPT_typecheck)) {
+      Action = FrontendOptions::Typecheck;
     } else if (Opt.matches(OPT_dump_parse)) {
       Action = FrontendOptions::DumpParse;
     } else if (Opt.matches(OPT_dump_ast)) {
@@ -319,7 +334,8 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     // treat the input as SIL.
     StringRef Input(Opts.InputFilenames[0]);
     TreatAsSIL = llvm::sys::path::extension(Input).endswith(SIL_EXTENSION);
-  } else if (Opts.PrimaryInput.hasValue() && Opts.PrimaryInput->isFilename()) {
+  } else if (!TreatAsSIL && Opts.PrimaryInput.hasValue() &&
+             Opts.PrimaryInput->isFilename()) {
     // If we have a primary input and it's a filename with extension "sil",
     // treat the input as SIL.
     StringRef Input(Opts.InputFilenames[Opts.PrimaryInput->Index]);
@@ -459,6 +475,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       break;
 
     case FrontendOptions::Parse:
+    case FrontendOptions::Typecheck:
     case FrontendOptions::DumpParse:
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
@@ -467,6 +484,10 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::DumpTypeRefinementContexts:
       // Textual modes.
       Opts.setSingleOutputFilename("-");
+      break;
+
+    case FrontendOptions::EmitPCH:
+      Suffix = PCH_EXTENSION;
       break;
 
     case FrontendOptions::EmitSILGen:
@@ -660,7 +681,9 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Diags.diagnose(SourceLoc(), diag::error_mode_cannot_emit_dependencies);
       return true;
     case FrontendOptions::Parse:
+    case FrontendOptions::Typecheck:
     case FrontendOptions::EmitModuleOnly:
+    case FrontendOptions::EmitPCH:
     case FrontendOptions::EmitSILGen:
     case FrontendOptions::EmitSIL:
     case FrontendOptions::EmitSIBGen:
@@ -680,6 +703,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
     case FrontendOptions::PrintAST:
+    case FrontendOptions::EmitPCH:
     case FrontendOptions::DumpScopeMaps:
     case FrontendOptions::DumpTypeRefinementContexts:
     case FrontendOptions::Immediate:
@@ -687,6 +711,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Diags.diagnose(SourceLoc(), diag::error_mode_cannot_emit_header);
       return true;
     case FrontendOptions::Parse:
+    case FrontendOptions::Typecheck:
     case FrontendOptions::EmitModuleOnly:
     case FrontendOptions::EmitSILGen:
     case FrontendOptions::EmitSIL:
@@ -705,10 +730,12 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     switch (Opts.RequestedAction) {
     case FrontendOptions::NoneAction:
     case FrontendOptions::Parse:
+    case FrontendOptions::Typecheck:
     case FrontendOptions::DumpParse:
     case FrontendOptions::DumpInterfaceHash:
     case FrontendOptions::DumpAST:
     case FrontendOptions::PrintAST:
+    case FrontendOptions::EmitPCH:
     case FrontendOptions::DumpScopeMaps:
     case FrontendOptions::DumpTypeRefinementContexts:
     case FrontendOptions::EmitSILGen:
@@ -741,7 +768,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
   Opts.ImportUnderlyingModule |= Args.hasArg(OPT_import_underlying_module);
   Opts.SILSerializeAll |= Args.hasArg(OPT_sil_serialize_all);
 
-  if (const Arg *A = Args.getLastArg(OPT_import_objc_header)) {
+  if (const Arg *A = Args.getLastArgNoClaim(OPT_import_objc_header)) {
     Opts.ImplicitObjCHeaderPath = A->getValue();
     Opts.SerializeBridgingHeader |=
       !Opts.PrimaryInput && !Opts.ModuleOutputPath.empty();
@@ -760,10 +787,41 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
   return false;
 }
 
+static void diagnoseSwiftVersion(Optional<version::Version> &vers, Arg *verArg,
+                                 ArgList &Args, DiagnosticEngine &diags) {
+  // General invalid version error
+  diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                 verArg->getAsString(Args), verArg->getValue());
+
+  // Check for an unneeded minor version, otherwise just list valid versions
+  if (vers.hasValue() && !vers.getValue().empty() &&
+      vers.getValue().asMajorVersion().isValidEffectiveLanguageVersion()) {
+    diags.diagnose(SourceLoc(), diag::note_swift_version_major,
+                   vers.getValue()[0]);
+  } else {
+    // Note valid versions instead
+    auto validVers = version::Version::getValidEffectiveVersions();
+    auto versStr =
+        "'" + llvm::join(validVers.begin(), validVers.end(), "', '") + "'";
+    diags.diagnose(SourceLoc(), diag::note_valid_swift_versions, versStr);
+  }
+}
+
 static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
                           DiagnosticEngine &Diags,
                           const FrontendOptions &FrontendOpts) {
   using namespace options;
+
+  if (auto A = Args.getLastArg(OPT_swift_version)) {
+    auto vers = version::Version::parseVersionString(
+      A->getValue(), SourceLoc(), &Diags);
+    if (vers.hasValue() &&
+        vers.getValue().isValidEffectiveLanguageVersion()) {
+      Opts.EffectiveLanguageVersion = vers.getValue();
+    } else {
+      diagnoseSwiftVersion(vers, A, Args, Diags);
+    }
+  }
 
   Opts.AttachCommentsToDecls |= Args.hasArg(OPT_dump_api_path);
 
@@ -772,8 +830,8 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableExperimentalPropertyBehaviors |=
     Args.hasArg(OPT_enable_experimental_property_behaviors);
 
-  Opts.EnableExperimentalNestedGenericTypes |=
-    Args.hasArg(OPT_enable_experimental_nested_generic_types);
+  Opts.EnableClassResilience |=
+    Args.hasArg(OPT_enable_class_resilience);
 
   Opts.DisableAvailabilityChecking |=
       Args.hasArg(OPT_disable_availability_checking);
@@ -785,6 +843,8 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     Opts.EnableAccessControl
       = A->getOption().matches(OPT_enable_access_control);
   }
+
+  Opts.DisableTypoCorrection |= Args.hasArg(OPT_disable_typo_correction);
 
   Opts.CodeCompleteInitsInPostfixExpr |=
       Args.hasArg(OPT_code_complete_inits_in_postfix_expr);
@@ -859,6 +919,21 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     Target = llvm::Triple(A->getValue());
     TargetArg = A->getValue();
   }
+#if __APPLE__
+  else if (FrontendOpts.actionIsImmediate()) {
+    clang::VersionTuple currentOSVersion = inferAppleHostOSVersion();
+    if (currentOSVersion.getMajor() != 0) {
+      llvm::Triple::OSType currentOS = Target.getOS();
+      if (currentOS == llvm::Triple::Darwin)
+        currentOS = llvm::Triple::MacOSX;
+
+      SmallString<16> newOSBuf;
+      llvm::raw_svector_ostream newOS(newOSBuf);
+      newOS << llvm::Triple::getOSTypeName(currentOS) << currentOSVersion;
+      Target.setOSName(newOS.str());
+    }
+  }
+#endif
 
   Opts.EnableObjCInterop = Target.isOSDarwin();
   if (auto A = Args.getLastArg(OPT_enable_objc_interop,
@@ -920,8 +995,11 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
 
   if (Args.hasArg(OPT_embed_bitcode))
     Opts.Mode = ClangImporterOptions::Modes::EmbedBitcode;
-
+  if (auto *A = Args.getLastArg(OPT_import_objc_header))
+    Opts.BridgingHeader = A->getValue();
   Opts.DisableSwiftBridgeAttr |= Args.hasArg(OPT_disable_swift_bridge_attr);
+
+  Opts.DisableModulesValidateSystemHeaders |= Args.hasArg(OPT_disable_modules_validate_system_headers);
 
   return false;
 }
@@ -981,7 +1059,10 @@ static bool ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
                                 DiagnosticEngine &Diags) {
   using namespace options;
 
-  Opts.VerifyDiagnostics |= Args.hasArg(OPT_verify);
+  if (Args.hasArg(OPT_verify))
+    Opts.VerifyMode = DiagnosticOptions::Verify;
+  if (Args.hasArg(OPT_verify_apply_fixes))
+    Opts.VerifyMode = DiagnosticOptions::VerifyAndApplyFixes;
   Opts.SkipDiagnosticPasses |= Args.hasArg(OPT_disable_diagnostic_passes);
   Opts.ShowDiagnosticsAfterFatalError |=
     Args.hasArg(OPT_show_diagnostics_after_fatal);
@@ -991,7 +1072,7 @@ static bool ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
   Opts.WarningsAsErrors |= Args.hasArg(OPT_warnings_as_errors);
 
   assert(!(Opts.WarningsAsErrors && Opts.SuppressWarnings) &&
-         "conflicting arguments; should of been caught by driver");
+         "conflicting arguments; should have been caught by driver");
 
   return false;
 }
@@ -1069,6 +1150,10 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
     }
   }
 
+  if (Args.getLastArg(OPT_AssumeSingleThreaded)) {
+    Opts.AssumeSingleThreaded = true;
+  }
+
   // Parse the assert configuration identifier.
   if (const Arg *A = Args.getLastArg(OPT_AssertConfig)) {
     StringRef Configuration = A->getValue();
@@ -1112,6 +1197,11 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
   Opts.EmitProfileCoverageMapping |= Args.hasArg(OPT_profile_coverage_mapping);
   Opts.EnableGuaranteedClosureContexts |=
     Args.hasArg(OPT_enable_guaranteed_closure_contexts);
+  Opts.DisableSILPartialApply |=
+    Args.hasArg(OPT_disable_sil_partial_apply);
+  Opts.EnableSILOwnership |= Args.hasArg(OPT_enable_sil_ownership);
+  Opts.AssumeUnqualifiedOwnershipWhenParsing
+    |= Args.hasArg(OPT_assume_parsing_unqualified_ownership_sil);
 
   if (Args.hasArg(OPT_debug_on_sil)) {
     // Derive the name of the SIL file for debugging from

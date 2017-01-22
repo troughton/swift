@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 ///
@@ -319,11 +319,11 @@ private:
   /// Type Expansion Analysis.
   TypeExpansionAnalysis *TE;
 
+  /// Epilogue release analysis.
+  EpilogueARCFunctionInfo *EAFI;
+
   /// The allocator we are using.
   llvm::SpecificBumpPtrAllocator<BlockState> &BPA;
-
-  /// The epilogue release matcher we are using.
-  ConsumedArgToEpilogueReleaseMatcher &ERM;
 
   /// Map every basic block to its location state.
   llvm::SmallDenseMap<SILBasicBlock *, BlockState *> BBToLocState;
@@ -426,9 +426,9 @@ public:
   /// Constructor.
   DSEContext(SILFunction *F, SILModule *M, SILPassManager *PM,
              AliasAnalysis *AA, TypeExpansionAnalysis *TE,
-             llvm::SpecificBumpPtrAllocator<BlockState> &BPA,
-             ConsumedArgToEpilogueReleaseMatcher &ERM)
-    : Mod(M), F(F), PM(PM), AA(AA), TE(TE), BPA(BPA), ERM(ERM) {}
+             EpilogueARCFunctionInfo *EAFI,
+             llvm::SpecificBumpPtrAllocator<BlockState> &BPA) 
+    : Mod(M), F(F), PM(PM), AA(AA), TE(TE), EAFI(EAFI), BPA(BPA) {}
 
   /// Entry point for dead store elimination.
   bool run();
@@ -438,9 +438,6 @@ public:
 
   /// Returns the location vault of the current function.
   std::vector<LSLocation> &getLocationVault() { return LocationVault; }
-
-  /// Returns the epilogue release matcher we are using.
-  ConsumedArgToEpilogueReleaseMatcher &getERM() const { return ERM; }
 
   /// Use a set of ad hoc rules to tell whether we should run a pessimistic
   /// one iteration data flow on the function.
@@ -593,7 +590,7 @@ void DSEContext::processBasicBlockForGenKillSet(SILBasicBlock *BB) {
   }
 
   // Handle SILArgument for base invalidation.
-  ArrayRef<SILArgument *> Args = BB->getBBArgs();
+  ArrayRef<SILArgument *> Args = BB->getArguments();
   for (auto &X : Args) {
     invalidateBase(X, BBState, DSEKind::BuildGenKillSet);
   }
@@ -636,7 +633,7 @@ void DSEContext::processBasicBlockForDSE(SILBasicBlock *BB, bool Optimistic) {
   }
 
   // Handle SILArgument for base invalidation.
-  ArrayRef<SILArgument *> Args = BB->getBBArgs();
+  ArrayRef<SILArgument *> Args = BB->getArguments();
   for (auto &X : Args) {
     invalidateBase(X, S, DSEKind::BuildGenKillSet);
   }
@@ -1053,7 +1050,7 @@ void DSEContext::processUnknownReadInstForDSE(SILInstruction *I) {
 void DSEContext::processUnknownReadInst(SILInstruction *I, DSEKind Kind) {
   // If this is a release on a guaranteed parameter, it can not call deinit,
   // which might read or write memory.
-  if (isIntermediateRelease(I, ERM))
+  if (isIntermediateRelease(I, EAFI))
     return;
 
   // Are we building genset and killset.
@@ -1118,7 +1115,7 @@ void DSEContext::runIterativeDSE() {
     SILBasicBlock *BB = WorkList.pop_back_val();
     HandledBBs.erase(BB);
     if (processBasicBlockWithGenKillSet(BB)) {
-      for (auto X : BB->getPreds()) {
+      for (auto X : BB->getPredecessorBlocks()) {
         // We do not push basic block into the worklist if its already 
         // in the worklist.
         if (HandledBBs.find(X) != HandledBBs.end())
@@ -1197,7 +1194,8 @@ bool DSEContext::run() {
       SILInstruction *Inst = cast<SILInstruction>(I->first);
       auto *IT = &*std::next(Inst->getIterator());
       SILBuilderWithScope Builder(IT);
-      Builder.createStore(Inst->getLoc(), I->second, Inst);
+      Builder.createStore(Inst->getLoc(), I->second, Inst,
+                          StoreOwnershipQualifier::Unqualified);
     }
     // Delete the dead stores.
     for (auto &I : getBlockState(&BB)->DeadStores) {
@@ -1228,15 +1226,12 @@ public:
 
     auto *AA = PM->getAnalysis<AliasAnalysis>();
     auto *TE = PM->getAnalysis<TypeExpansionAnalysis>();
-    auto *RCFI = PM->getAnalysis<RCIdentityAnalysis>()->get(F);
+    auto *EAFI = PM->getAnalysis<EpilogueARCAnalysis>()->get(F);
 
     // The allocator we are using.
     llvm::SpecificBumpPtrAllocator<BlockState> BPA;
 
-    // The epilogue release matcher we are using.
-    ConsumedArgToEpilogueReleaseMatcher ERM(RCFI, F);
-
-    DSEContext DSE(F, &F->getModule(), PM, AA, TE, BPA, ERM);
+    DSEContext DSE(F, &F->getModule(), PM, AA, TE, EAFI, BPA);
     if (DSE.run()) {
       invalidateAnalysis(SILAnalysis::InvalidationKind::Instructions);
     }

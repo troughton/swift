@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 // FIXME: ExistentialCollection needs to be supported before this will work
@@ -215,7 +215,7 @@ public struct Mirror {
     ancestorRepresentation: AncestorRepresentation = .generated
   ) where
     C.Iterator.Element == Child,
-    // FIXME(ABI)(compiler limitation): these constraints should be applied to
+    // FIXME(ABI)#47 (Associated Types with where clauses): these constraints should be applied to
     // associated types of Collection.
     C.SubSequence : Collection,
     C.SubSequence.Iterator.Element == Child,
@@ -276,7 +276,7 @@ public struct Mirror {
     displayStyle: DisplayStyle? = nil,
     ancestorRepresentation: AncestorRepresentation = .generated
   ) where
-    // FIXME(ABI)(compiler limitation): these constraints should be applied to
+    // FIXME(ABI)#48 (Associated Types with where clauses): these constraints should be applied to
     // associated types of Collection.
     C.SubSequence : Collection,
     C.SubSequence.SubSequence == C.SubSequence,
@@ -289,9 +289,10 @@ public struct Mirror {
     self._makeSuperclassMirror = Mirror._superclassIterator(
       subject, ancestorRepresentation)
       
-    self.children = Children(
+    let lazyChildren =
       unlabeledChildren.lazy.map { Child(label: nil, value: $0) }
-    )
+    self.children = Children(lazyChildren)
+
     self.displayStyle = displayStyle
     self._defaultDescendantRepresentation
       = subject is CustomLeafReflectable ? .suppressed : .generated
@@ -385,7 +386,7 @@ public protocol CustomLeafReflectable : CustomReflectable {}
 ///
 /// Do not declare new conformances to this protocol; they will not
 /// work as expected.
-// FIXME(ABI): this protocol should be "non-open" and you shouldn't be able to
+// FIXME(ABI)#49 (Sealed Protocols): this protocol should be "non-open" and you shouldn't be able to
 // create conformances.
 public protocol MirrorPath {}
 extension IntMax : MirrorPath {}
@@ -715,8 +716,8 @@ public protocol CustomPlaygroundQuickLookable {
 }
 
 
-// A workaround for <rdar://problem/25971264>
-// FIXME(ABI)
+// A workaround for <rdar://problem/26182650>
+// FIXME(ABI)#50 (Dynamic Dispatch for Class Extensions) though not if it moves out of stdlib.
 public protocol _DefaultCustomPlaygroundQuickLookable {
   var _defaultCustomPlaygroundQuickLook: PlaygroundQuickLook { get }
 }
@@ -747,7 +748,7 @@ public protocol _DefaultCustomPlaygroundQuickLookable {
 /// `DictionaryLiteral`. In particular, to find the value matching a key, you
 /// must search through every element of the collection. The call to
 /// `index(where:)` in the following example must traverse the whole
-/// collection to make sure that no element matches the given predicate:
+/// collection to find the element that matches the predicate:
 ///
 ///     let runner = "Marlies Gohr"
 ///     if let index = recordTimes.index(where: { $0.0 == runner }) {
@@ -816,7 +817,7 @@ extension DictionaryLiteral : RandomAccessCollection {
   /// `startIndex`.
   public var endIndex: Int { return _elements.endIndex }
 
-  // FIXME: a typealias is needed to prevent <rdar://20248032>
+  // FIXME(ABI)#174 (Type checker): a typealias is needed to prevent <rdar://20248032>
   /// The element type of a `DictionaryLiteral`: a tuple containing an
   /// individual key-value pair.
   public typealias Element = (key: Key, value: Value)

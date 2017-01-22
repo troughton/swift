@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -61,6 +61,8 @@ def emit_fixits_path
 def verify : Flag<["-"], "verify">,
   HelpText<"Verify diagnostics against expected-{error|warning|note} "
            "annotations">;
+def verify_apply_fixes : Flag<["-"], "verify-apply-fixes">,
+  HelpText<"Like -verify, but updates the original source file">;
 
 def show_diagnostics_after_fatal : Flag<["-"], "show-diagnostics-after-fatal">,
   HelpText<"Keep emitting subsequent diagnostics after a fatal error">;
@@ -114,6 +116,9 @@ def serialize_debugging_options : Flag<["-"], "serialize-debugging-options">,
 def autolink_library : Separate<["-"], "autolink-library">,
   HelpText<"Add dependent library">, Flags<[FrontendOption]>;
 
+def disable_typo_correction : Flag<["-"], "disable-typo-correction">,
+  HelpText<"Disable typo correction">;
+
 } // end let Flags = [FrontendOption, NoDriverOption]
 
 def debug_crash_Group : OptionGroup<"<automatic crashing options>">;
@@ -142,6 +147,8 @@ def debug_time_compilation : Flag<["-"], "debug-time-compilation">,
   HelpText<"Prints the time taken by each compilation phase">;
 def debug_time_function_bodies : Flag<["-"], "debug-time-function-bodies">,
   HelpText<"Dumps the time it takes to type-check each function body">;
+def debug_time_expression_type_checking : Flag<["-"], "debug-time-expression-type-checking">,
+  HelpText<"Dumps the time it takes to type-check each expression">;
 
 def debug_assert_immediately : Flag<["-"], "debug-assert-immediately">,
   DebugCrashOpt, HelpText<"Force an assertion failure immediately">;
@@ -161,8 +168,11 @@ def disable_arc_opts : Flag<["-"], "disable-arc-opts">,
 def enable_guaranteed_closure_contexts : Flag<["-"], "enable-guaranteed-closure-contexts">,
   HelpText<"Use @guaranteed convention for closure context">;
 
+def disable_sil_partial_apply : Flag<["-"], "disable-sil-partial-apply">,
+  HelpText<"Disable use of partial_apply in SIL generation">;
+
 def remove_runtime_asserts : Flag<["-"], "remove-runtime-asserts">,
-HelpText<"Remove runtime asserts.">;
+  HelpText<"Remove runtime asserts.">;
 
 def disable_access_control : Flag<["-"], "disable-access-control">,
   HelpText<"Don't respect access control restrictions">;
@@ -219,16 +229,24 @@ def disable_sil_linking : Flag<["-"], "disable-sil-linking">,
 def dump_clang_diagnostics : Flag<["-"], "dump-clang-diagnostics">,
   HelpText<"Dump Clang diagnostics to stderr">;
 
+def disable_modules_validate_system_headers : Flag<["-"], "disable-modules-validate-system-headers">,
+  HelpText<"Disable validating system headers in the Clang importer">;
+
 def emit_verbose_sil : Flag<["-"], "emit-verbose-sil">,
   HelpText<"Emit locations during SIL emission">;
+
+def emit_pch : Flag<["-"], "emit-pch">,
+  HelpText<"Emit PCH for imported Objective-C header file">, ModeOpt;
+
+def enable_sil_ownership : Flag<["-"], "enable-sil-ownership">,
+  HelpText<"Enable the SIL Ownership Model">;
+
+def assume_parsing_unqualified_ownership_sil : Flag<["-"], "assume-parsing-unqualified-ownership-sil">,
+  HelpText<"Assume unqualified SIL ownership when parsing SIL">;
 
 def enable_experimental_property_behaviors :
   Flag<["-"], "enable-experimental-property-behaviors">,
   HelpText<"Enable experimental property behaviors">;
-
-def enable_experimental_nested_generic_types :
-  Flag<["-"], "enable-experimental-nested-generic-types">,
-  HelpText<"Enable experimental support for nested generic types">;
 
 def disable_availability_checking : Flag<["-"],
   "disable-availability-checking">,
@@ -264,6 +282,9 @@ def playground_high_performance : Flag<["-"], "playground-high-performance">,
 
 def disable_playground_transform : Flag<["-"], "disable-playground-transform">,
   HelpText<"Disable playground transformation">;
+
+def pc_macro : Flag<["-"], "pc-macro">,
+  HelpText<"Apply the 'program counter simulation' macro">;
 
 def use_jit : Flag<["-"], "use-jit">,
   HelpText<"Register Objective-C classes as if the JIT were in use">;
@@ -328,6 +349,10 @@ def dump_api_path : Separate<["-"], "dump-api-path">,
 def enable_resilience : Flag<["-"], "enable-resilience">,
    HelpText<"Compile the module to export resilient interfaces for all "
             "public declarations by default">;
+
+def enable_class_resilience : Flag<["-"], "enable-class-resilience">,
+   HelpText<"Compile the module to export resilient interfaces for all "
+            "public classes by default (doesn't work yet)">;
 
 def group_info_path : Separate<["-"], "group-info-path">,
   HelpText<"The path to collect the group information of the compiled module">;

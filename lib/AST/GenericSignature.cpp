@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -16,6 +16,7 @@
 
 #include "swift/AST/GenericSignature.h"
 #include "swift/AST/ASTContext.h"
+#include "swift/AST/ArchetypeBuilder.h"
 #include "swift/AST/Decl.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/Types.h"
@@ -58,6 +59,45 @@ GenericSignature::getInnermostGenericParams() const {
   return params;
 }
 
+std::string GenericSignature::gatherGenericParamBindingsText(
+    ArrayRef<Type> types, const TypeSubstitutionMap &substitutions) const {
+  llvm::SmallPtrSet<GenericTypeParamType *, 2> knownGenericParams;
+  for (auto type : types) {
+    type.visit([&](Type type) {
+      if (auto gp = type->getAs<GenericTypeParamType>()) {
+        knownGenericParams.insert(
+            gp->getCanonicalType()->castTo<GenericTypeParamType>());
+      }
+    });
+  }
+
+  if (knownGenericParams.empty())
+    return "";
+
+  SmallString<128> result;
+  for (auto gp : this->getGenericParams()) {
+    auto canonGP = gp->getCanonicalType()->castTo<GenericTypeParamType>();
+    if (!knownGenericParams.count(canonGP))
+      continue;
+
+    if (result.empty())
+      result += " [with ";
+    else
+      result += ", ";
+    result += gp->getName().str();
+    result += " = ";
+
+    auto found = substitutions.find(canonGP);
+    if (found == substitutions.end())
+      return "";
+
+    result += found->second.getString();
+  }
+
+  result += "]";
+  return result.str().str();
+}
+
 ASTContext &GenericSignature::getASTContext(
                                 ArrayRef<swift::GenericTypeParamType *> params,
                                 ArrayRef<swift::Requirement> requirements) {
@@ -97,9 +137,15 @@ CanGenericSignature GenericSignature::getCanonical(
   SmallVector<Requirement, 8> canonicalRequirements;
   canonicalRequirements.reserve(requirements.size());
   for (auto &reqt : requirements) {
-    canonicalRequirements.push_back(Requirement(reqt.getKind(),
-                              reqt.getFirstType()->getCanonicalType(),
-                              reqt.getSecondType().getCanonicalTypeOrNull()));
+    if (reqt.getKind() != RequirementKind::Layout) {
+      auto secondTy = reqt.getSecondType();
+      canonicalRequirements.push_back(
+          Requirement(reqt.getKind(), reqt.getFirstType()->getCanonicalType(),
+                      secondTy ? secondTy->getCanonicalType() : CanType()));
+    } else
+      canonicalRequirements.push_back(
+          Requirement(reqt.getKind(), reqt.getFirstType()->getCanonicalType(),
+                      reqt.getLayoutConstraint()));
   }
   auto canSig = get(canonicalParams, canonicalRequirements,
                     /*isKnownCanonical=*/true);
@@ -152,97 +198,223 @@ GenericSignature::getSubstitutionMap(ArrayRef<Substitution> subs) const {
   return result;
 }
 
+bool GenericSignature::enumeratePairedRequirements(
+               llvm::function_ref<bool(Type, ArrayRef<Requirement>)> fn) const {
+  // We'll be walking through the list of requirements.
+  ArrayRef<Requirement> reqs = getRequirements();
+  unsigned curReqIdx = 0, numReqs = reqs.size();
+
+  // ... and walking through the list of generic parameters.
+  ArrayRef<GenericTypeParamType *> genericParams = getGenericParams();
+  unsigned curGenericParamIdx = 0, numGenericParams = genericParams.size();
+
+  /// Local function to 'catch up' to the next dependent type we're going to
+  /// visit, calling the function for each of the generic parameters in the
+  /// generic parameter list prior to this parameter.
+  auto enumerateGenericParamsUpToDependentType = [&](CanType depTy) -> bool {
+    // Figure out where we should stop when enumerating generic parameters.
+    unsigned stopDepth, stopIndex;
+    if (auto gp = dyn_cast_or_null<GenericTypeParamType>(depTy)) {
+      stopDepth = gp->getDepth();
+      stopIndex = gp->getIndex();
+    } else {
+      stopDepth = genericParams.back()->getDepth() + 1;
+      stopIndex = 0;
+    }
+
+    // Enumerate generic parameters up to the stopping point, calling the
+    // callback function for each one
+    while (curGenericParamIdx != numGenericParams) {
+      auto curGenericParam = genericParams[curGenericParamIdx];
+
+      // If the current generic parameter is before our stopping point, call
+      // the function.
+      if (curGenericParam->getDepth() < stopDepth ||
+          (curGenericParam->getDepth() == stopDepth &&
+           curGenericParam->getIndex() < stopIndex)) {
+        if (fn(curGenericParam, { })) return true;
+        ++curGenericParamIdx;
+        continue;
+      }
+
+      // If the current generic parameter is at our stopping point, we're
+      // done.
+      if (curGenericParam->getDepth() == stopDepth &&
+          curGenericParam->getIndex() == stopIndex) {
+        ++curGenericParamIdx;
+        return false;
+      }
+
+      // Otherwise, there's nothing to do.
+      break;
+    }
+
+    return false;
+  };
+
+  // Walk over all of the requirements.
+  while (curReqIdx != numReqs) {
+    // "Catch up" by enumerating generic parameters up to this dependent type.
+    CanType depTy = reqs[curReqIdx].getFirstType()->getCanonicalType();
+    if (enumerateGenericParamsUpToDependentType(depTy)) return true;
+
+    // Utility to skip over non-conformance constraints that apply to this
+    // type.
+    bool sawSameTypeConstraint = false;
+    auto skipNonConformanceConstraints = [&] {
+      while (curReqIdx != numReqs &&
+             reqs[curReqIdx].getKind() != RequirementKind::Conformance &&
+             reqs[curReqIdx].getFirstType()->getCanonicalType() == depTy) {
+        // Record whether we saw a same-type constraint mentioning this type.
+        if (reqs[curReqIdx].getKind() == RequirementKind::SameType)
+          sawSameTypeConstraint = true;
+
+        ++curReqIdx;
+      }
+    };
+
+    // First, skip past any non-conformance constraints on this type.
+    skipNonConformanceConstraints();
+
+    // Collect all of the conformance constraints for this dependent type.
+    unsigned startIdx = curReqIdx;
+    unsigned endIdx = curReqIdx;
+    while (curReqIdx != numReqs &&
+           reqs[curReqIdx].getKind() == RequirementKind::Conformance &&
+           reqs[curReqIdx].getFirstType()->getCanonicalType() == depTy) {
+      ++curReqIdx;
+      endIdx = curReqIdx;
+    }
+
+    // Skip any trailing non-conformance constraints.
+    skipNonConformanceConstraints();
+
+    // If there were any conformance constraints, or we have a generic
+    // parameter we can't skip, invoke the callback.
+    if ((startIdx != endIdx ||
+         (isa<GenericTypeParamType>(depTy) && !sawSameTypeConstraint)) &&
+        fn(depTy, reqs.slice(startIdx, endIdx-startIdx)))
+      return true;
+  }
+
+  // Catch up on any remaining generic parameters.
+  return enumerateGenericParamsUpToDependentType(CanType());
+}
+
 void
 GenericSignature::getSubstitutionMap(ArrayRef<Substitution> subs,
                                      SubstitutionMap &result) const {
   // An empty parameter list gives an empty map.
   if (subs.empty())
-    assert(getGenericParams().empty());
+    assert(getGenericParams().empty() || areAllParamsConcrete());
 
   for (auto depTy : getAllDependentTypes()) {
     auto sub = subs.front();
     subs = subs.slice(1);
 
     auto canTy = depTy->getCanonicalType();
-    result.addSubstitution(canTy, sub.getReplacement());
-    result.addConformances(canTy, sub.getConformances());
+    if (isa<SubstitutableType>(canTy))
+      result.addSubstitution(cast<SubstitutableType>(canTy),
+                             sub.getReplacement());
+    for (auto conformance : sub.getConformances())
+      result.addConformance(canTy, conformance);
   }
 
-  // TODO: same-type constraints
+  for (auto reqt : getRequirements()) {
+    if (reqt.getKind() != RequirementKind::SameType)
+      continue;
+
+    auto first = reqt.getFirstType();
+    auto second = reqt.getSecondType();
+
+    if (!first->isTypeParameter() || !second->isTypeParameter())
+      continue;
+
+    if (auto *firstMemTy = first->getAs<DependentMemberType>()) {
+      result.addParent(second->getCanonicalType(),
+                       firstMemTy->getBase()->getCanonicalType(),
+                       firstMemTy->getAssocType());
+    }
+
+    if (auto *secondMemTy = second->getAs<DependentMemberType>()) {
+      result.addParent(first->getCanonicalType(),
+                       secondMemTy->getBase()->getCanonicalType(),
+                       secondMemTy->getAssocType());
+    }
+  }
 
   assert(subs.empty() && "did not use all substitutions?!");
 }
 
-void GenericSignature::
-getSubstitutions(ModuleDecl &mod,
-                 const TypeSubstitutionMap &subs,
-                 GenericSignature::LookupConformanceFn lookupConformance,
-                 SmallVectorImpl<Substitution> &result) const {
-  auto &ctx = getASTContext();
+SmallVector<Type, 4> GenericSignature::getAllDependentTypes() const {
+  SmallVector<Type, 4> result;
+  enumeratePairedRequirements([&](Type type, ArrayRef<Requirement>) {
+    result.push_back(type);
+    return false;
+  });
 
-  Type currentReplacement;
-  SmallVector<ProtocolConformanceRef, 4> currentConformances;
-
-  for (const auto &req : getRequirements()) {
-    auto depTy = req.getFirstType()->getCanonicalType();
-
-    switch (req.getKind()) {
-    case RequirementKind::Conformance: {
-      // Get the conformance and record it.
-      auto protoType = req.getSecondType()->castTo<ProtocolType>();
-      currentConformances.push_back(
-          lookupConformance(depTy, currentReplacement, protoType));
-      break;
-    }
-
-    case RequirementKind::Superclass:
-      // Superclass requirements aren't recorded in substitutions.
-      break;
-
-    case RequirementKind::SameType:
-      // Same-type requirements aren't recorded in substitutions.
-      break;
-
-    case RequirementKind::WitnessMarker:
-      // Flush the current conformances.
-      if (currentReplacement) {
-        result.push_back({
-          currentReplacement,
-          ctx.AllocateCopy(currentConformances)
-        });
-        currentConformances.clear();
-      }
-
-      // Each witness marker starts a new substitution.
-      currentReplacement = req.getFirstType().subst(&mod, subs, SubstOptions());
-      if (!currentReplacement)
-        currentReplacement = ErrorType::get(ctx);
-
-      break;
-    }
-  }
-
-  // Flush the final conformances.
-  if (currentReplacement) {
-    result.push_back({
-      currentReplacement,
-      ctx.AllocateCopy(currentConformances),
-    });
-    currentConformances.clear();
-  }
+  return result;
 }
 
 void GenericSignature::
-getSubstitutions(ModuleDecl &mod,
-                 const SubstitutionMap &subMap,
+getSubstitutions(const TypeSubstitutionMap &subs,
+                 GenericSignature::LookupConformanceFn lookupConformance,
+                 SmallVectorImpl<Substitution> &result) const {
+  getSubstitutions(QueryTypeSubstitutionMap{subs}, lookupConformance,
+                   result);
+}
+
+void GenericSignature::
+getSubstitutions(TypeSubstitutionFn subs,
+                 GenericSignature::LookupConformanceFn lookupConformance,
+                 SmallVectorImpl<Substitution> &result) const {
+
+  // Enumerate all of the requirements that require substitution.
+  enumeratePairedRequirements([&](Type depTy, ArrayRef<Requirement> reqs) {
+    auto &ctx = getASTContext();
+
+    // Compute the replacement type.
+    Type currentReplacement = depTy.subst(subs, lookupConformance);
+    if (!currentReplacement)
+      currentReplacement = ErrorType::get(depTy);
+
+    // Collect the conformances.
+    SmallVector<ProtocolConformanceRef, 4> currentConformances;
+    for (auto req: reqs) {
+      assert(req.getKind() == RequirementKind::Conformance);
+      auto protoType = req.getSecondType()->castTo<ProtocolType>();
+      if (auto conformance = lookupConformance(depTy->getCanonicalType(),
+                                               currentReplacement,
+                                               protoType)) {
+        currentConformances.push_back(*conformance);
+      } else {
+        if (!currentReplacement->hasError())
+          currentReplacement = ErrorType::get(currentReplacement);
+        currentConformances.push_back(
+                                  ProtocolConformanceRef(protoType->getDecl()));
+      }
+    }
+
+    // Add it to the final substitution list.
+    result.push_back({
+      currentReplacement,
+      ctx.AllocateCopy(currentConformances)
+    });
+
+    return false;
+  });
+}
+
+void GenericSignature::
+getSubstitutions(const SubstitutionMap &subMap,
                  SmallVectorImpl<Substitution> &result) const {
   auto lookupConformanceFn =
       [&](CanType original, Type replacement, ProtocolType *protoType)
-          -> ProtocolConformanceRef {
-    return *subMap.lookupConformance(original, protoType->getDecl());
-  };
+      -> Optional<ProtocolConformanceRef> {
+        return subMap.lookupConformance(original, protoType->getDecl());
+      };
 
-  getSubstitutions(mod, subMap.getMap(), lookupConformanceFn, result);
+  getSubstitutions(subMap.getMap(), lookupConformanceFn, result);
 }
 
 bool GenericSignature::requiresClass(Type type, ModuleDecl &mod) {
@@ -335,6 +507,18 @@ Type GenericSignature::getConcreteType(Type type, ModuleDecl &mod) {
   return pa->getConcreteType();
 }
 
+LayoutConstraint GenericSignature::getLayoutConstraint(Type type,
+                                                       ModuleDecl &mod) {
+  if (!type->isTypeParameter()) return LayoutConstraint();
+
+  auto &builder = *getArchetypeBuilder(mod);
+  auto pa = builder.resolveArchetype(type);
+  if (!pa) return LayoutConstraint();
+
+  pa = pa->getRepresentative();
+  return pa->getLayout();
+}
+
 Type GenericSignature::getRepresentative(Type type, ModuleDecl &mod) {
   assert(type->isTypeParameter());
   auto &builder = *getArchetypeBuilder(mod);
@@ -343,11 +527,11 @@ Type GenericSignature::getRepresentative(Type type, ModuleDecl &mod) {
   auto rep = pa->getRepresentative();
   if (rep->isConcreteType()) return rep->getConcreteType();
   if (pa == rep) {
-    assert(rep->getDependentType(builder, /*allowUnresolved*/ false)
-              ->getCanonicalType() == type->getCanonicalType());
+    assert(rep->getDependentType(getGenericParams(), /*allowUnresolved*/ false)
+              ->isEqual(type));
     return type;
   }
-  return rep->getDependentType(builder, /*allowUnresolved*/ false);
+  return rep->getDependentType(getGenericParams(), /*allowUnresolved*/ false);
 }
 
 bool GenericSignature::areSameTypeParameterInContext(Type type1, Type type2,
@@ -384,6 +568,20 @@ bool GenericSignature::isCanonicalTypeInContext(Type type, ModuleDecl &mod) {
     return true;
 
   auto &builder = *getArchetypeBuilder(mod);
+  return isCanonicalTypeInContext(type, builder);
+}
+
+bool GenericSignature::isCanonicalTypeInContext(Type type,
+                                                ArchetypeBuilder &builder) {
+  // If the type isn't independently canonical, it's certainly not canonical
+  // in this context.
+  if (!type->isCanonical())
+    return false;
+
+  // All the contextual canonicality rules apply to type parameters, so if the
+  // type doesn't involve any type parameters, it's already canonical.
+  if (!type->hasTypeParameter())
+    return true;
 
   // Look for non-canonical type parameters.
   return !type.findIf([&](Type component) -> bool {
@@ -397,7 +595,41 @@ bool GenericSignature::isCanonicalTypeInContext(Type type, ModuleDecl &mod) {
   });
 }
 
-CanType GenericSignature::getCanonicalTypeInContext(Type type, ModuleDecl &mod) {
+CanType GenericSignature::getCanonicalTypeInContext(Type type,
+                                                    ArchetypeBuilder &builder) {
+  type = type->getCanonicalType();
+
+  // All the contextual canonicality rules apply to type parameters, so if the
+  // type doesn't involve any type parameters, it's already canonical.
+  if (!type->hasTypeParameter())
+    return CanType(type);
+
+  // Replace non-canonical type parameters.
+  type = type.transformRec([&](TypeBase *component) -> Optional<Type> {
+    if (!isa<GenericTypeParamType>(component) &&
+        !isa<DependentMemberType>(component))
+      return None;
+
+    // Resolve the potential archetype.  This can be null in nested generic
+    // types, which we can't immediately canonicalize.
+    auto pa = builder.resolveArchetype(Type(component));
+    if (!pa) return None;
+
+    auto rep = pa->getArchetypeAnchor();
+    if (rep->isConcreteType()) {
+      return getCanonicalTypeInContext(rep->getConcreteType(), builder);
+    }
+
+    return rep->getDependentType(getGenericParams(), /*allowUnresolved*/ false);
+  });
+  
+  auto result = type->getCanonicalType();
+  assert(isCanonicalTypeInContext(result, builder));
+  return result;
+}
+
+CanType GenericSignature::getCanonicalTypeInContext(Type type,
+                                                    ModuleDecl &mod) {
   type = type->getCanonicalType();
 
   // All the contextual canonicality rules apply to type parameters, so if the
@@ -406,25 +638,32 @@ CanType GenericSignature::getCanonicalTypeInContext(Type type, ModuleDecl &mod) 
     return CanType(type);
 
   auto &builder = *getArchetypeBuilder(mod);
+  return getCanonicalTypeInContext(type, builder);
+}
 
-  // Replace non-canonical type parameters.
-  type = type.transform([&](Type component) -> Type {
-    if (!component->isTypeParameter()) return component;
+GenericEnvironment *CanGenericSignature::getGenericEnvironment(
+                                                     ModuleDecl &module) const {
+  // Archetype builders are stored on the ASTContext.
+  return module.getASTContext().getOrCreateCanonicalGenericEnvironment(
+           module.getASTContext().getOrCreateArchetypeBuilder(*this, &module));
+}
 
-    // Resolve the potential archetype.  This can be null in nested generic
-    // types, which we can't immediately canonicalize.
-    auto pa = builder.resolveArchetype(component);
-    if (!pa) return component;
+unsigned GenericParamKey::findIndexIn(
+                  llvm::ArrayRef<GenericTypeParamType *> genericParams) const {
+  // For depth 0, we have random access. We perform the extra checking so that
+  // we can return
+  if (Depth == 0 && Index < genericParams.size() &&
+      genericParams[Index] == *this)
+    return Index;
 
-    auto rep = pa->getArchetypeAnchor();
-    if (rep->isConcreteType()) {
-      return getCanonicalTypeInContext(rep->getConcreteType(), mod);
-    } else {
-      return rep->getDependentType(builder, /*allowUnresolved*/ false);
-    }
-  });
+  // At other depths, perform a binary search.
+  unsigned result =
+      std::lower_bound(genericParams.begin(), genericParams.end(), *this,
+                       Ordering())
+        - genericParams.begin();
+  if (result < genericParams.size() && genericParams[result] == *this)
+    return result;
 
-  auto result = type->getCanonicalType();
-  assert(isCanonicalTypeInContext(result, mod));
-  return result;
+  // We didn't find the parameter we were looking for.
+  return genericParams.size();
 }

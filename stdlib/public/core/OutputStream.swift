@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -270,16 +270,24 @@ internal func _adHocPrint_unlocked<T, TargetStream : TextOutputStream>(
       case .tuple:
         target.write("(")
         var first = true
-        for (_, value) in mirror.children {
+        for (label, value) in mirror.children {
           if first {
             first = false
           } else {
             target.write(", ")
           }
+
+          if let label = label {
+            if !label.isEmpty && label[label.startIndex] != "." {
+              target.write(label)
+              target.write(": ")
+            }
+          }
+
           _debugPrint_unlocked(value, &target)
         }
         target.write(")")
-      case .`struct`:
+      case .struct:
         printTypeName(mirror.subjectType)
         target.write("(")
         var first = true
@@ -296,7 +304,7 @@ internal func _adHocPrint_unlocked<T, TargetStream : TextOutputStream>(
           }
         }
         target.write(")")
-      case .`enum`:
+      case .enum:
         if let cString = _getEnumCaseName(value),
             let caseName = String(validatingUTF8: cString) {
           // Write the qualified type name in debugPrint.
@@ -310,7 +318,7 @@ internal func _adHocPrint_unlocked<T, TargetStream : TextOutputStream>(
           printTypeName(mirror.subjectType)
         }
         if let (_, value) = mirror.children.first {
-          if (Mirror(reflecting: value).displayStyle == .tuple) {
+          if Mirror(reflecting: value).displayStyle == .tuple {
             _debugPrint_unlocked(value, &target)
           } else {
             target.write("(")

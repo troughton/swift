@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -173,7 +173,7 @@ public func _bridgeAnyObjectToAny(_ possiblyNullObject: AnyObject?) -> Any {
   if let nonnullObject = possiblyNullObject {
     return nonnullObject // AnyObject-in-Any
   }
-  return possiblyNullObject // AnyObject?-in-Any
+  return possiblyNullObject as Any
 }
 
 /// Convert `x` from its Objective-C representation to its Swift
@@ -369,7 +369,7 @@ public struct AutoreleasingUnsafeMutablePointer<Pointee /* TODO : class */>
     /// Retrieve the value the pointer points to.
     @_transparent get {
       // We can do a strong load normally.
-      return unsafeBitCast(self, to: UnsafeMutablePointer<Pointee>.self).pointee
+      return UnsafePointer(self).pointee
     }
     /// Set the value the pointer points to, copying over the previous value.
     ///
@@ -469,15 +469,20 @@ public struct AutoreleasingUnsafeMutablePointer<Pointee /* TODO : class */>
 }
 
 extension UnsafeMutableRawPointer {
-  /// Convert from `AutoreleasingUnsafeMutablePointer`.
+  /// Creates a new raw pointer from an `AutoreleasingUnsafeMutablePointer`
+  /// instance.
+  ///
+  /// - Parameter other: The pointer to convert.
   @_transparent
   public init<T>(_ other: AutoreleasingUnsafeMutablePointer<T>) {
     _rawValue = other._rawValue
   }
 
-  /// Convert other `AutoreleasingUnsafeMutablePointer`.
+  /// Creates a new raw pointer from an `AutoreleasingUnsafeMutablePointer`
+  /// instance.
   ///
-  /// Returns nil if `other` is nil.
+  /// - Parameter other: The pointer to convert. If `other` is `nil`, the
+  ///   result is `nil`.
   @_transparent
   public init?<T>(_ other: AutoreleasingUnsafeMutablePointer<T>?) {
     guard let unwrapped = other else { return nil }
@@ -486,15 +491,20 @@ extension UnsafeMutableRawPointer {
 }
 
 extension UnsafeRawPointer {
-  /// Convert other `AutoreleasingUnsafeMutablePointer`.
+  /// Creates a new raw pointer from an `AutoreleasingUnsafeMutablePointer`
+  /// instance.
+  ///
+  /// - Parameter other: The pointer to convert.
   @_transparent
   public init<T>(_ other: AutoreleasingUnsafeMutablePointer<T>) {
     _rawValue = other._rawValue
   }
 
-  /// Convert other `AutoreleasingUnsafeMutablePointer`.
+  /// Creates a new raw pointer from an `AutoreleasingUnsafeMutablePointer`
+  /// instance.
   ///
-  /// Returns nil if `other` is nil.
+  /// - Parameter other: The pointer to convert. If `other` is `nil`, the
+  ///   result is `nil`.
   @_transparent
   public init?<T>(_ other: AutoreleasingUnsafeMutablePointer<T>?) {
     guard let unwrapped = other else { return nil }
@@ -517,7 +527,6 @@ public func == <Pointee>(
   return Bool(Builtin.cmp_eq_RawPointer(lhs._rawValue, rhs._rawValue))
 }
 
-@_fixed_layout
 internal struct _CocoaFastEnumerationStackBuf {
   // Clang uses 16 pointers.  So do we.
   internal var _item0: UnsafeRawPointer?
@@ -578,6 +587,18 @@ extension AutoreleasingUnsafeMutablePointer {
   public init() {
     Builtin.unreachable()
   }
+}
+
+/// Get the ObjC type encoding for a type as a pointer to a C string.
+///
+/// This is used by the Foundation overlays. The compiler will error if the
+/// passed-in type is generic or not representable in Objective-C
+@_transparent
+public func _getObjCTypeEncoding<T>(_ type: T.Type) -> UnsafePointer<Int8> {
+  // This must be `@_transparent` because `Builtin.getObjCTypeEncoding` is
+  // only supported by the compiler for concrete types that are representable
+  // in ObjC.
+  return UnsafePointer(Builtin.getObjCTypeEncoding(type))
 }
 
 #endif

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,6 +30,10 @@ using namespace swift;
 using namespace Lowering;
 
 static bool isUnmappedDecl(Decl *D) {
+  if (auto *AFD = dyn_cast<AbstractFunctionDecl>(D))
+    if (!AFD->getBody())
+      return true;
+
   if (isa<ConstructorDecl>(D) || isa<DestructorDecl>(D))
     return false;
 
@@ -52,8 +56,8 @@ static void walkFunctionForProfiling(AbstractFunctionDecl *Root,
 
   // We treat class initializers as part of the constructor for profiling.
   if (auto *CD = dyn_cast<ConstructorDecl>(Root)) {
-    Type DT = CD->getDeclContext()->getDeclaredTypeInContext();
-    auto *NominalType = DT->getNominalOrBoundGenericNominal();
+    auto *NominalType = CD->getDeclContext()
+        ->getAsNominalTypeOrNominalTypeExtensionContext();
     for (auto *Member : NominalType->getMembers()) {
       // Find pattern binding declarations that have initializers.
       if (auto *PBD = dyn_cast<PatternBindingDecl>(Member))
@@ -222,6 +226,8 @@ public:
     case Kind::Ref:
       return LHS->expand(Builder, Counters);
     }
+
+    llvm_unreachable("Unhandled Kind in switch.");
   }
 };
 
@@ -646,7 +652,7 @@ public:
     if (isa<AutoClosureExpr>(E)) {
       // Autoclosures look strange if there isn't a region, since it looks like
       // control flow starts partway through an expression. For now we skip
-      // these so we don't get odd behaviour in default arguments and the like,
+      // these so we don't get odd behavior in default arguments and the like,
       // but in the future we should consider creating appropriate regions for
       // those expressions.
       if (!RegionStack.empty())
@@ -690,6 +696,8 @@ getEquivalentPGOLinkage(FormalLinkage Linkage) {
   case FormalLinkage::Private:
     return llvm::GlobalValue::PrivateLinkage;
   }
+
+  llvm_unreachable("Unhandled FormalLinkage in switch.");
 }
 
 void SILGenProfiling::assignRegionCounters(Decl *Root) {

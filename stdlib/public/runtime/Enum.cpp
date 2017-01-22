@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -102,7 +102,8 @@ swift::swift_initEnumValueWitnessTableSinglePayload(ValueWitnessTable *vwtable,
     .withExtraInhabitants(unusedExtraInhabitants > 0)
     .withEnumWitnesses(true)
     .withInlineStorage(ValueWitnessTable::isValueInline(size, align));
-  vwtable->stride = llvm::alignTo(size, align);
+  auto rawStride = llvm::alignTo(size, align);
+  vwtable->stride = rawStride == 0 ? 1 : rawStride;
   
   // Substitute in better common value witnesses if we have them.
   // If the payload type is a single-refcounted pointer, and the enum has
@@ -114,9 +115,9 @@ swift::swift_initEnumValueWitnessTableSinglePayload(ValueWitnessTable *vwtable,
 #if OPTIONAL_OBJECT_OPTIMIZATION
   auto payloadVWT = payload->getValueWitnesses();
   if (emptyCases == 1
-      && (payloadVWT == &_TWVBo
+      && (payloadVWT == &VALUE_WITNESS_SYM(Bo)
 #if SWIFT_OBJC_INTEROP
-          || payloadVWT == &_TWVBO
+          || payloadVWT == &VALUE_WITNESS_SYM(BO)
 #endif
           )) {
 #define COPY_PAYLOAD_WITNESS(NAME) vwtable->NAME = payloadVWT->NAME;
@@ -310,7 +311,8 @@ swift::swift_initEnumMetadataMultiPayload(ValueWitnessTable *vwtable,
     .withEnumWitnesses(true)
     .withInlineStorage(ValueWitnessTable::isValueInline(totalSize, alignMask+1))
     ;
-  vwtable->stride = (totalSize + alignMask) & ~alignMask;
+  auto rawStride = (totalSize + alignMask) & ~alignMask;
+  vwtable->stride = rawStride == 0 ? 1 : rawStride;
   
   installCommonValueWitnesses(vwtable);
 }
@@ -320,7 +322,7 @@ struct MultiPayloadLayout {
   size_t payloadSize;
   size_t numTagBytes;
 };
-}
+} // end anonymous namespace
 
 static MultiPayloadLayout getMultiPayloadLayout(const EnumMetadata *enumType) {
   size_t payloadSize = enumType->getPayloadSize();

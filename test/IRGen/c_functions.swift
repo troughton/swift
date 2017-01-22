@@ -1,5 +1,5 @@
 // RUN: rm -rf %t && mkdir -p %t
-// RUN: %target-swift-frontend -import-objc-header %S/Inputs/c_functions.h -primary-file %s -emit-ir | %FileCheck %s
+// RUN: %target-swift-frontend -assume-parsing-unqualified-ownership-sil -import-objc-header %S/Inputs/c_functions.h -primary-file %s -emit-ir | %FileCheck %s
 
 // This is deliberately not a SIL test so that we can test SILGen too.
 
@@ -9,4 +9,6 @@ func testOverloaded() {
   overloaded()
   // CHECK: call void @_Z10overloadedi(i32{{( signext)?}} 42)
   overloaded(42)
+  // CHECK: call void @{{.*}}test_my_log
+  test_my_log()
 } // CHECK: {{^}$}}

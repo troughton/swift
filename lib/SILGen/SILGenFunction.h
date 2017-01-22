@@ -2,20 +2,21 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef SILGENFUNCTION_H
-#define SILGENFUNCTION_H
+#ifndef SWIFT_SILGEN_SILGENFUNCTION_H
+#define SWIFT_SILGEN_SILGENFUNCTION_H
 
-#include "SILGen.h"
-#include "JumpDest.h"
 #include "Initialization.h"
+#include "JumpDest.h"
+#include "SILGen.h"
+#include "SILGenBuilder.h"
 #include "swift/AST/AnyFunctionRef.h"
 #include "swift/SIL/SILBuilder.h"
 #include "llvm/ADT/PointerIntPair.h"
@@ -175,89 +176,6 @@ enum class FunctionSection : bool {
   Postmatter,
 };
 
-/// A subclass of SILBuilder that tracks used protocol conformances.
-class SILGenBuilder : public SILBuilder {
-  SILGenModule &SGM;
-public:
-  SILGenBuilder(SILGenFunction &gen);
-  SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB);
-  SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
-                SmallVectorImpl<SILInstruction *> *insertedInsts);
-  SILGenBuilder(SILGenFunction &gen, SILBasicBlock *insertBB,
-                SILInstruction *insertInst);
-
-  SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB)
-      : SILGenBuilder(gen, &*insertBB) {}
-  SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
-                SmallVectorImpl<SILInstruction *> *insertedInsts)
-      : SILGenBuilder(gen, &*insertBB, insertedInsts) {}
-  SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
-                SILInstruction *insertInst)
-      : SILGenBuilder(gen, &*insertBB, insertInst) {}
-  SILGenBuilder(SILGenFunction &gen, SILFunction::iterator insertBB,
-                SILBasicBlock::iterator insertInst)
-      : SILGenBuilder(gen, &*insertBB, &*insertInst) {}
-
-  // Metatype instructions use the conformances necessary to instantiate the
-  // type.
-  
-  MetatypeInst *createMetatype(SILLocation Loc, SILType Metatype);
-
-  // Generic apply instructions use the conformances necessary to form the call.
-
-  using SILBuilder::createApply;
-
-  ApplyInst *createApply(SILLocation Loc, SILValue Fn,
-                         SILType SubstFnTy,
-                         SILType Result,
-                         ArrayRef<Substitution> Subs,
-                         ArrayRef<SILValue> Args);
-
-
-  TryApplyInst *createTryApply(SILLocation loc, SILValue fn,
-                               SILType substFnTy,
-                               ArrayRef<Substitution> subs,
-                               ArrayRef<SILValue> args,
-                               SILBasicBlock *normalBB,
-                               SILBasicBlock *errorBB);
-
-  PartialApplyInst *createPartialApply(SILLocation Loc, SILValue Fn,
-                                       SILType SubstFnTy,
-                                       ArrayRef<Substitution> Subs,
-                                       ArrayRef<SILValue> Args,
-                                       SILType ClosureTy);
-
-  BuiltinInst *createBuiltin(SILLocation Loc, Identifier Name,
-                             SILType ResultTy, ArrayRef<Substitution> Subs,
-                             ArrayRef<SILValue> Args);
-
-  // Existential containers use the conformances needed by the existential
-  // box.
-
-  InitExistentialAddrInst *
-  createInitExistentialAddr(SILLocation Loc,
-                            SILValue Existential,
-                            CanType FormalConcreteType,
-                            SILType LoweredConcreteType,
-                            ArrayRef<ProtocolConformanceRef> Conformances);
-
-  InitExistentialMetatypeInst *
-  createInitExistentialMetatype(SILLocation loc, SILValue metatype,
-                                SILType existentialType,
-                                ArrayRef<ProtocolConformanceRef> conformances);
-  
-  InitExistentialRefInst *
-  createInitExistentialRef(SILLocation Loc, SILType ExistentialType,
-                           CanType FormalConcreteType,
-                           SILValue Concrete,
-                           ArrayRef<ProtocolConformanceRef> Conformances);
-
-  AllocExistentialBoxInst *createAllocExistentialBox(SILLocation Loc,
-                                 SILType ExistentialType,
-                                 CanType ConcreteType,
-                                 ArrayRef<ProtocolConformanceRef> Conformances);
-};
-
 /// Parameter to \c SILGenFunction::emitCaptures that indicates what the
 /// capture parameters are being emitted for.
 enum class CaptureEmission {
@@ -319,7 +237,7 @@ public:
   ///
   /// (This field must precede B because B's initializer calls
   /// createBasicBlock().)
-  SILBasicBlock *StartOfPostmatter = nullptr;
+  SILFunction::iterator StartOfPostmatter;
 
   /// The current section of the function that we're emitting code in.
   ///
@@ -328,12 +246,12 @@ public:
   /// normal code sequence.
   ///
   /// If the current function section is Ordinary, and
-  /// StartOfPostmatter is non-null, the current insertion block
-  /// should be ordered before that.
-  ///  
+  /// StartOfPostmatter does not point to the function end, the current
+  /// insertion block should be ordered before that.
+  ///
   /// If the current function section is Postmatter, StartOfPostmatter
-  /// is non-null and the current insertion block is ordered after
-  /// that (inclusive).
+  /// does not point to the function end and the current insertion block is
+  /// ordered after that (inclusive).
   ///
   /// (This field must precede B because B's initializer calls
   /// createBasicBlock().)
@@ -347,10 +265,9 @@ public:
 
   /// \brief Is emission currently within an inout conversion?
   bool InInOutConversionScope = false;
-  
-  /// B - The SILGenBuilder used to construct the SILFunction.  It is
-  /// what maintains the notion of the current block being emitted
-  /// into.
+
+  /// The SILGenBuilder used to construct the SILFunction.  It is what maintains
+  /// the notion of the current block being emitted into.
   SILGenBuilder B;
 
   SILOpenedArchetypesTracker OpenedArchetypesTracker;
@@ -455,10 +372,8 @@ public:
 
   /// True if 'return' without an operand or falling off the end of the current
   /// function is valid.
-  bool allowsVoidReturn() const {
-    return ReturnDest.getBlock()->bbarg_empty();
-  }
-  
+  bool allowsVoidReturn() const { return ReturnDest.getBlock()->args_empty(); }
+
   /// This location, when set, is used as an override location for magic
   /// identifier expansion (e.g. #file).  This allows default argument
   /// expansion to report the location of the call, instead of the location
@@ -651,6 +566,7 @@ public:
   /// \param inputSubstType Formal AST type of base class method
   /// \param outputSubstType Formal AST type of derived class method
   void emitVTableThunk(SILDeclRef derived,
+                       SILFunction *implFn,
                        AbstractionPattern inputOrigType,
                        CanAnyFunctionType inputSubstType,
                        CanAnyFunctionType outputSubstType);
@@ -709,14 +625,18 @@ public:
   //===--------------------------------------------------------------------===//
   // Memory management
   //===--------------------------------------------------------------------===//
-  
+
+  /// Emit debug info for the artificial error inout argument.
+  void emitErrorArgument(SILLocation Loc, unsigned ArgNo);
+
   /// emitProlog - Generates prolog code to allocate and clean up mutable
   /// storage for closure captures and local arguments.
   void emitProlog(AnyFunctionRef TheClosure,
-                  ArrayRef<ParameterList*> paramPatterns, Type resultType);
+                  ArrayRef<ParameterList *> paramPatterns, Type resultType,
+                  bool throws);
   /// returns the number of variables in paramPatterns.
-  unsigned emitProlog(ArrayRef<ParameterList*> paramPatterns,
-                      Type resultType, DeclContext *DeclCtx);
+  unsigned emitProlog(ArrayRef<ParameterList *> paramPatterns, Type resultType,
+                      DeclContext *DeclCtx, bool throws);
 
   /// Create SILArguments in the entry block that bind all the values
   /// of the given pattern suitably for being forwarded.
@@ -1122,6 +1042,9 @@ public:
                                 SILValue buffer, SILValue callbackStorage);
   bool maybeEmitMaterializeForSetThunk(ProtocolConformance *conformance,
                                        SILLinkage linkage,
+                                       Type selfInterfaceType,
+                                       Type selfType,
+                                       GenericEnvironment *genericEnv,
                                        FuncDecl *requirement,
                                        FuncDecl *witness,
                                        ArrayRef<Substitution> witnessSubs);
@@ -1146,7 +1069,30 @@ public:
   ManagedValue emitManagedRetain(SILLocation loc, SILValue v);
   ManagedValue emitManagedRetain(SILLocation loc, SILValue v,
                                  const TypeLowering &lowering);
-  
+
+  ManagedValue emitManagedLoadCopy(SILLocation loc, SILValue v);
+  ManagedValue emitManagedLoadCopy(SILLocation loc, SILValue v,
+                                   const TypeLowering &lowering);
+
+  ManagedValue emitManagedStoreBorrow(SILLocation loc, SILValue v,
+                                      SILValue addr);
+  ManagedValue emitManagedStoreBorrow(SILLocation loc, SILValue v,
+                                      SILValue addr,
+                                      const TypeLowering &lowering);
+
+  ManagedValue emitManagedLoadBorrow(SILLocation loc, SILValue v);
+  ManagedValue emitManagedLoadBorrow(SILLocation loc, SILValue v,
+                                     const TypeLowering &lowering);
+
+  ManagedValue emitManagedBeginBorrow(SILLocation loc, SILValue v,
+                                      const TypeLowering &lowering);
+  ManagedValue emitManagedBeginBorrow(SILLocation loc, SILValue v);
+
+  ManagedValue emitManagedBorrowedRValueWithCleanup(SILValue original,
+                                                    SILValue borrowedValue);
+  ManagedValue emitManagedBorrowedRValueWithCleanup(
+      SILValue original, SILValue borrowedValue, const TypeLowering &lowering);
+
   ManagedValue emitManagedRValueWithCleanup(SILValue v);
   ManagedValue emitManagedRValueWithCleanup(SILValue v,
                                             const TypeLowering &lowering);
@@ -1202,6 +1148,12 @@ public:
   SILValue emitMetatypeOfValue(SILLocation loc, Expr *baseExpr);
   
   void emitReturnExpr(SILLocation loc, Expr *ret);
+
+  RValue emitAnyHashableErasure(SILLocation loc,
+                                ManagedValue value,
+                                Type type,
+                                ProtocolConformanceRef conformance,
+                                SGFContext C);
 
   /// Turn a consumable managed value into a +1 managed value.
   ManagedValue getManagedValue(SILLocation loc,
@@ -1432,9 +1384,8 @@ public:
                                        SILValue foreignErrorSlot,
                                  const ForeignErrorConvention &foreignError);
 
-  void emitForeignErrorBlock(SILLocation loc,
-                             SILBasicBlock *errorBB,
-                             ManagedValue errorSlot);
+  void emitForeignErrorBlock(SILLocation loc, SILBasicBlock *errorBB,
+                             Optional<ManagedValue> errorSlot);
 
   void emitForeignErrorCheck(SILLocation loc,
                              SmallVectorImpl<ManagedValue> &directResults,
@@ -1499,7 +1450,9 @@ public:
   CanSILFunctionType buildThunkType(ManagedValue fn,
                                     CanSILFunctionType expectedType,
                                     CanSILFunctionType &substFnType,
-                                    SmallVectorImpl<Substitution> &subs);
+                                    GenericEnvironment *&genericEnv,
+                                    SubstitutionMap &contextSubMap,
+                                    SubstitutionMap &interfaceSubMap);
 
   //===--------------------------------------------------------------------===//
   // Declarations
@@ -1509,7 +1462,6 @@ public:
     llvm_unreachable("Not yet implemented");
   }
 
-  void visitNominalTypeDecl(NominalTypeDecl *D);
   void visitFuncDecl(FuncDecl *D);
   void visitPatternBindingDecl(PatternBindingDecl *D);
 
@@ -1518,6 +1470,10 @@ public:
   std::unique_ptr<Initialization>
   emitPatternBindingInitialization(Pattern *P, JumpDest failureDest);
     
+  void visitNominalTypeDecl(NominalTypeDecl *D) {
+    // No lowering support needed.
+  }
+
   void visitTypeAliasDecl(TypeAliasDecl *D) {
     // No lowering support needed.
   }
@@ -1581,6 +1537,11 @@ public:
                                               CanType concreteFormalType,
                                               ExistentialRepresentation repr);
 
+  /// Enter a cleanup to emit an EndBorrow stating that \p borrowed (the
+  /// borrowed entity) is no longer borrowed from \p original, the original
+  /// value.
+  CleanupHandle enterEndBorrowCleanup(SILValue original, SILValue borrowed);
+
   /// Evaluate an Expr as an lvalue.
   LValue emitLValue(Expr *E, AccessKind accessKind);
 
@@ -1624,7 +1585,8 @@ public:
     : SGF(SGF), SavedIP(SGF.B.getInsertionBB()),
       SavedSection(SGF.CurFunctionSection) {
     FunctionSection section = (optSection ? *optSection : SavedSection);
-    assert((section != FunctionSection::Postmatter || SGF.StartOfPostmatter) &&
+    assert((section != FunctionSection::Postmatter ||
+            SGF.StartOfPostmatter != SGF.F.end()) &&
            "trying to move to postmatter without a registered start "
            "of postmatter?");
 

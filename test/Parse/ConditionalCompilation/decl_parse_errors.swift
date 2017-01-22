@@ -1,4 +1,4 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 public
 #if FOO // expected-error {{expected declaration}}
@@ -27,14 +27,14 @@ lazy
 var val3: Int = 0;
 #line
 
-class C { // expected-note 3 {{in declaration of 'C'}}
+class C { // expected-note 2 {{in declaration of 'C'}} expected-note {{to match this opening '{'}}
 
 #if os(iOS)
 	func foo() {}
-} // expected-error{{expected declaration}} expected-error{{expected #else or #endif at end of conditional compilation block}}
+} // expected-error{{expected declaration}}
 #else
 	func bar() {}
 	func baz() {}
-} // expected-error{{expected #else or #endif at end of conditional compilation block}} expected-error {{expected declaration}}
+} // expected-error{{expected declaration}}
 #endif
-// expected-error@+1{{expected declaration}}
+// expected-error@+1{{expected '}' in class}}

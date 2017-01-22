@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -78,10 +78,11 @@ public:
     /// These are dropped when building the GenericSignature.
     Redundant,
 
-    /// The requirement came from an outer scope.
-    /// FIXME: eliminate this in favor of keeping requirement sources in 
-    /// GenericSignatures, at least non-canonical ones?
-    OuterScope,
+    /// The requirement is redundant due to the superclass conforming to one
+    /// of the protocols.
+    ///
+    /// These are dropped when building the GenericSignature.
+    Inherited,
   };
 
   RequirementSource(Kind kind, SourceLoc loc) : StoredKind(kind), Loc(loc) { }
@@ -116,11 +117,13 @@ public:
   /// type or some type derived from it.
   class PotentialArchetype;
 
+  using RequirementRHS =
+      llvm::PointerUnion3<Type, PotentialArchetype *, LayoutConstraint>;
+
 private:
   class InferRequirementsWalker;
   friend class InferRequirementsWalker;
 
-  ModuleDecl &Mod;
   ASTContext &Context;
   DiagnosticEngine &Diags;
   struct Implementation;
@@ -186,10 +189,10 @@ private:
 public:
   /// Construct a new archetype builder.
   ///
-  /// \param mod The module in which the builder will create archetypes.
-  ///
-  /// \param diags The diagnostics entity to use.
-  ArchetypeBuilder(ModuleDecl &mod, DiagnosticEngine &diags);
+  /// \param lookupConformance Conformance-lookup routine that will be used
+  /// to satisfy conformance requirements for concrete types.
+  explicit ArchetypeBuilder(ASTContext &ctx,
+                            std::function<GenericFunction> lookupConformance);
 
   ArchetypeBuilder(ArchetypeBuilder &&);
   ~ArchetypeBuilder();
@@ -197,8 +200,8 @@ public:
   /// Retrieve the AST context.
   ASTContext &getASTContext() const { return Context; }
 
-  /// Retrieve the module.
-  ModuleDecl &getModule() const { return Mod; }
+  /// Retrieve the conformance-lookup function used by this archetype builder.
+  std::function<GenericFunction> getLookupConformanceFn() const;
 
   /// Retrieve the lazy resolver, if there is one.
   LazyResolver *getLazyResolver() const;
@@ -211,13 +214,11 @@ public:
   void enumerateRequirements(llvm::function_ref<
                       void (RequirementKind kind,
                             PotentialArchetype *archetype,
-                            llvm::PointerUnion<Type, PotentialArchetype *> type,
+                            RequirementRHS constraint,
                             RequirementSource source)> f);
-  
 
 private:
   PotentialArchetype *addGenericParameter(GenericTypeParamType *GenericParam,
-                                          ProtocolDecl *RootProtocol,
                                           Identifier ParamName);
 
 public:
@@ -244,31 +245,19 @@ public:
   /// Adding an already-checked requirement cannot fail. This is used to
   /// re-inject requirements from outer contexts.
   void addRequirement(const Requirement &req, RequirementSource source);
-  
+
+  bool addLayoutRequirement(PotentialArchetype *PAT,
+                            LayoutConstraint Layout,
+                            RequirementSource Source);
+
   /// \brief Add all of a generic signature's parameters and requirements.
-  ///
-  /// FIXME: Requirements from the generic signature are treated as coming from
-  /// an outer scope. Setting \c treatRequirementsAsExplicit to true disables
-  /// this behavior.
-  void addGenericSignature(GenericSignature *sig,
-                           GenericEnvironment *genericEnv,
-                           bool treatRequirementsAsExplicit = false);
+  void addGenericSignature(GenericSignature *sig);
 
-  /// \brief Get a generic signature based on the provided complete list
-  /// of generic parameter types.
-  ///
-  /// \returns a generic signature built from the provided list of
-  ///          generic parameter types.
-  GenericSignature *
-  getGenericSignature(ArrayRef<GenericTypeParamType *> genericParamsTypes);
+  /// \brief Build the generic signature.
+  GenericSignature *getGenericSignature();
 
-  /// \brief Get a generic context based on the complete list of generic
-  /// parameter types.
-  ///
-  /// \returns a generic context built from the provided list of
-  ///          generic parameter types.
-  GenericEnvironment *getGenericEnvironment(
-      ArrayRef<GenericTypeParamType *> genericParamsTypes);
+  /// \brief Build the generic environment.
+  GenericEnvironment *getGenericEnvironment(GenericSignature *signature);
 
   /// Infer requirements from the given type, recursively.
   ///
@@ -282,9 +271,7 @@ public:
   /// where \c Dictionary requires that its key type be \c Hashable,
   /// the requirement \c K : Hashable is inferred from the parameter type,
   /// because the type \c Dictionary<K,V> cannot be formed without it.
-  ///
-  /// \returns true if an error occurred, false otherwise.
-  bool inferRequirements(TypeLoc type, GenericParamList *genericParams);
+  void inferRequirements(TypeLoc type, GenericParamList *genericParams);
 
   /// Infer requirements from the given pattern, recursively.
   ///
@@ -298,15 +285,19 @@ public:
   /// where \c Dictionary requires that its key type be \c Hashable,
   /// the requirement \c K : Hashable is inferred from the parameter type,
   /// because the type \c Dictionary<K,V> cannot be formed without it.
-  ///
-  /// \returns true if an error occurred, false otherwise.
-  bool inferRequirements(ParameterList *params,GenericParamList *genericParams);
+  void inferRequirements(ParameterList *params,GenericParamList *genericParams);
 
   /// Finalize the set of requirements, performing any remaining checking
   /// required before generating archetypes.
   ///
-  /// \returns true if an error occurs, false otherwise.
-  bool finalize(SourceLoc loc);
+  /// \param allowConcreteGenericParams If true, allow generic parameters to
+  /// be made concrete.
+  void finalize(SourceLoc loc, bool allowConcreteGenericParams=false);
+
+  /// Diagnose any remaining renames.
+  ///
+  /// \returns \c true if there were any remaining renames to diagnose.
+  bool diagnoseRemainingRenames(SourceLoc loc);
 
   /// \brief Resolve the given type to the potential archetype it names.
   ///
@@ -319,37 +310,6 @@ public:
   /// For any type that cannot refer to an archetype, this routine returns null.
   PotentialArchetype *resolveArchetype(Type type);
 
-  /// \brief Resolve the given dependent type using our context archetypes.
-  ///
-  /// Given an arbitrary type, this will substitute dependent type parameters
-  /// structurally with their corresponding archetypes and resolve dependent
-  /// member types to the appropriate associated types.
-  Type substDependentType(Type type);
-  
-  /// \brief Retrieve the archetype that corresponds to the given generic
-  /// parameter.
-  ArchetypeType *getArchetype(GenericTypeParamDecl *GenericParam);
-
-  /// Map an interface type to a contextual type.
-  static Type mapTypeIntoContext(const DeclContext *dc, Type type);
-
-  /// Map an interface type to a contextual type.
-  static Type mapTypeIntoContext(ModuleDecl *M,
-                                 GenericEnvironment *genericEnv,
-                                 Type type);
-
-  /// Map a contextual type to an interface type.
-  static Type mapTypeOutOfContext(const DeclContext *dc, Type type);
-
-  /// Map a contextual type to an interface type.
-  static Type mapTypeOutOfContext(ModuleDecl *M,
-                                  GenericEnvironment *genericEnv,
-                                  Type type);
-
-  using SameTypeRequirement
-    = std::pair<PotentialArchetype *,
-                PointerUnion<Type, PotentialArchetype*>>;
-
   /// \brief Dump all of the requirements, both specified and inferred.
   LLVM_ATTRIBUTE_DEPRECATED(
       void dump(),
@@ -357,18 +317,6 @@ public:
 
   /// Dump all of the requirements to the given output stream.
   void dump(llvm::raw_ostream &out);
-
-  // In SILFunction.cpp:
-  
-  /// \brief Resolve the given dependent type using our context archetypes.
-  ///
-  /// Given an arbitrary type, this will substitute dependent type parameters
-  /// structurally with their corresponding archetypes and resolve dependent
-  /// member types to the appropriate associated types. It will reabstract
-  /// dependent types according to the abstraction level of their associated
-  /// type requirements.
-  SILType substDependentType(SILModule &M,
-                             SILType type);
 };
 
 class ArchetypeBuilder::PotentialArchetype {
@@ -376,9 +324,6 @@ class ArchetypeBuilder::PotentialArchetype {
   /// type) or the generic type parameter type to which this potential
   /// archetype corresponds.
   llvm::PointerUnion<PotentialArchetype*, GenericTypeParamType*> ParentOrParam;
-
-  /// The root protocol with which this potential archetype is associated.
-  ProtocolDecl *RootProtocol = nullptr;
 
   /// \brief The name of this potential archetype or, for an
   /// associated type, the declaration of the associated type to which
@@ -403,6 +348,12 @@ class ArchetypeBuilder::PotentialArchetype {
   /// \brief The list of protocols to which this archetype will conform.
   llvm::MapVector<ProtocolDecl *, RequirementSource> ConformsTo;
 
+  /// \brief The layout constraint of this archetype, if specified.
+  LayoutConstraint Layout;
+
+  /// The source of the layout constraint requirement.
+  Optional<RequirementSource> LayoutSource;
+
   /// \brief The set of nested types of this archetype.
   ///
   /// For a given nested type name, there may be multiple potential archetypes
@@ -411,9 +362,9 @@ class ArchetypeBuilder::PotentialArchetype {
   llvm::MapVector<Identifier, llvm::TinyPtrVector<PotentialArchetype *>>
     NestedTypes;
 
-  /// \brief The actual archetype, once it has been assigned, or the concrete
-  /// type that the parameter was same-type constrained to.
-  ArchetypeType::NestedType ArchetypeOrConcreteType;
+  /// The concrete type to which a this potential archetype has been
+  /// constrained.
+  Type ConcreteType;
 
   /// \brief Recursively conforms to itself.
   unsigned IsRecursive : 1;
@@ -421,10 +372,6 @@ class ArchetypeBuilder::PotentialArchetype {
   /// Whether this potential archetype is invalid, e.g., because it could not
   /// be resolved.
   unsigned Invalid : 1;
-
-  /// Whether we are currently substituting into the concrete type of
-  /// this potential archetype.
-  unsigned SubstitutingConcreteType : 1;
 
   /// Whether we have detected recursion during the substitution of
   /// the concrete type.
@@ -434,8 +381,12 @@ class ArchetypeBuilder::PotentialArchetype {
   /// the superclass type.
   unsigned RecursiveSuperclassType : 1;
 
-  /// Whether we have renamed this (nested) type due to typo correction.
-  unsigned Renamed : 1;
+  /// Whether we have diagnosed a rename.
+  unsigned DiagnosedRename : 1;
+
+  /// If we have renamed this (nested) type due to typo correction,
+  /// the old name.
+  Identifier OrigName;
 
   /// The equivalence class of this potential archetype.
   llvm::TinyPtrVector<PotentialArchetype *> EquivalenceClass;
@@ -444,9 +395,9 @@ class ArchetypeBuilder::PotentialArchetype {
   /// associated type.
   PotentialArchetype(PotentialArchetype *Parent, Identifier Name)
     : ParentOrParam(Parent), NameOrAssociatedType(Name), Representative(this),
-      IsRecursive(false), Invalid(false), SubstitutingConcreteType(false),
+      IsRecursive(false), Invalid(false),
       RecursiveConcreteType(false), RecursiveSuperclassType(false),
-      Renamed(false)
+      DiagnosedRename(false)
   { 
     assert(Parent != nullptr && "Not an associated type?");
     EquivalenceClass.push_back(this);
@@ -456,9 +407,9 @@ class ArchetypeBuilder::PotentialArchetype {
   PotentialArchetype(PotentialArchetype *Parent, AssociatedTypeDecl *AssocType)
     : ParentOrParam(Parent), NameOrAssociatedType(AssocType), 
       Representative(this), IsRecursive(false), Invalid(false),
-      SubstitutingConcreteType(false), RecursiveConcreteType(false),
-      RecursiveSuperclassType(false), Renamed(false)
-  { 
+      RecursiveConcreteType(false),
+      RecursiveSuperclassType(false), DiagnosedRename(false)
+  {
     assert(Parent != nullptr && "Not an associated type?");
     EquivalenceClass.push_back(this);
   }
@@ -467,8 +418,8 @@ class ArchetypeBuilder::PotentialArchetype {
   PotentialArchetype(PotentialArchetype *Parent, TypeAliasDecl *TypeAlias)
     : ParentOrParam(Parent), NameOrAssociatedType(TypeAlias),
       Representative(this), IsRecursive(false), Invalid(false),
-      SubstitutingConcreteType(false), RecursiveConcreteType(false),
-      RecursiveSuperclassType(false), Renamed(false)
+      RecursiveConcreteType(false),
+      RecursiveSuperclassType(false), DiagnosedRename(false)
   {
     assert(Parent != nullptr && "Not an associated type?");
     EquivalenceClass.push_back(this);
@@ -476,19 +427,33 @@ class ArchetypeBuilder::PotentialArchetype {
 
   /// \brief Construct a new potential archetype for a generic parameter.
   PotentialArchetype(GenericTypeParamType *GenericParam, 
-                     ProtocolDecl *RootProtocol,
                      Identifier Name)
-    : ParentOrParam(GenericParam), RootProtocol(RootProtocol), 
+    : ParentOrParam(GenericParam),
       NameOrAssociatedType(Name), Representative(this), IsRecursive(false),
-      Invalid(false), SubstitutingConcreteType(false),
+      Invalid(false),
       RecursiveConcreteType(false), RecursiveSuperclassType(false),
-      Renamed(false)
+      DiagnosedRename(false)
   {
     EquivalenceClass.push_back(this);
   }
 
   /// \brief Recursively build the full name.
   void buildFullName(bool forDebug, SmallVectorImpl<char> &result) const;
+
+  /// Retrieve the generic parameter at the root of this potential archetype.
+  GenericTypeParamType *getRootParam() const {
+    if (auto parent = getParent())
+      return parent->getRootParam();
+
+    return getGenericParam();
+  }
+
+  /// \brief Retrieve the representative for this archetype, performing
+  /// path compression on the way.
+  PotentialArchetype *getRepresentative();
+
+  friend class ArchetypeBuilder;
+  friend class GenericSignature;
 
 public:
   ~PotentialArchetype();
@@ -508,14 +473,6 @@ public:
     return ParentOrParam.dyn_cast<PotentialArchetype *>(); 
   }
 
-  /// Retrieve the generic parameter at the root of this potential archetype.
-  GenericTypeParamType *getRootParam() const {
-    if (auto parent = getParent())
-      return parent->getRootParam();
-
-    return getGenericParam();
-  }
-
   /// Retrieve the associated type to which this potential archetype
   /// has been resolved.
   AssociatedTypeDecl *getResolvedAssociatedType() const {
@@ -529,10 +486,31 @@ public:
 
   /// Retrieve the generic type parameter for this potential
   /// archetype, if it corresponds to a generic parameter.
+  ///
+  /// FIXME: We should weaken this to just a depth/index key.
   GenericTypeParamType *getGenericParam() const {
     return ParentOrParam.dyn_cast<GenericTypeParamType *>(); 
   }
-  
+
+  /// Determine whether this is a generic parameter.
+  bool isGenericParam() const {
+    return ParentOrParam.is<GenericTypeParamType *>();
+  }
+
+  /// Retrieve the generic parameter key for a potential archetype that
+  /// represents this potential archetype.
+  ///
+  /// \pre \c isGenericParam()
+  GenericParamKey getGenericParamKey() const {
+    return getGenericParam();
+  }
+
+  /// Retrieve the generic parameter key for the generic parameter at the
+  /// root of this potential archetype.
+  GenericParamKey getRootGenericParamKey() const {
+    return getRootParam();
+  }
+
   /// Retrieve the type alias.
   TypeAliasDecl *getTypeAliasDecl() const {
     return NameOrAssociatedType.dyn_cast<TypeAliasDecl *>();
@@ -547,7 +525,8 @@ public:
   /// Add a conformance to this potential archetype.
   ///
   /// \returns true if the conformance was new, false if it already existed.
-  bool addConformance(ProtocolDecl *proto, const RequirementSource &source,
+  bool addConformance(ProtocolDecl *proto, bool updateExistingSource,
+                      const RequirementSource &source,
                       ArchetypeBuilder &builder);
 
   /// Retrieve the superclass of this archetype.
@@ -558,6 +537,14 @@ public:
     return *SuperclassSource;
   } 
 
+  /// Retrieve the layout constraint of this archetype.
+  LayoutConstraint getLayout() const { return Layout; }
+
+  /// Retrieve the requirement source for the layout constraint requirement.
+  const RequirementSource &getLayoutSource() const {
+    return *LayoutSource;
+  }
+
   /// Retrieve the set of nested types.
   const llvm::MapVector<Identifier, llvm::TinyPtrVector<PotentialArchetype *>> &
   getNestedTypes() const{
@@ -567,10 +554,6 @@ public:
   /// \brief Determine the nesting depth of this potential archetype, e.g.,
   /// the number of associated type references.
   unsigned getNestingDepth() const;
-
-  /// \brief Retrieve the representative for this archetype, performing
-  /// path compression on the way.
-  PotentialArchetype *getRepresentative();
 
   /// Retrieve the equivalence class containing this potential archetype.
   ArrayRef<PotentialArchetype *> getEquivalenceClass() {
@@ -591,13 +574,26 @@ public:
   PotentialArchetype *getNestedType(Identifier Name,
                                     ArchetypeBuilder &builder);
 
+  /// \brief Retrieve (or create) a nested type with a known associated type.
+  PotentialArchetype *getNestedType(AssociatedTypeDecl *assocType,
+                                    ArchetypeBuilder &builder);
+
   /// \brief Retrieve (or build) the type corresponding to the potential
-  /// archetype.
-  ArchetypeType::NestedType getType(ArchetypeBuilder &builder);
+  /// archetype within the given generic environment.
+  Type getTypeInContext(ArchetypeBuilder &builder,
+                        GenericEnvironment *genericEnv);
 
   /// Retrieve the dependent type that describes this potential
   /// archetype.
-  Type getDependentType(ArchetypeBuilder &builder, bool allowUnresolved);
+  ///
+  /// \param genericParams The set of generic parameters to use in the resulting
+  /// dependent type.
+  ///
+  /// \param allowUnresolved If true, allow the result to contain
+  /// \c DependentMemberType types with a name but no specific associated
+  /// type.
+  Type getDependentType(ArrayRef<GenericTypeParamType *> genericParams,
+                        bool allowUnresolved);
 
   /// True if the potential archetype has been bound by a concrete type
   /// constraint.
@@ -605,15 +601,14 @@ public:
     if (Representative != this)
       return Representative->isConcreteType();
 
-    return ArchetypeOrConcreteType.isConcreteType();
+    return static_cast<bool>(ConcreteType);
   }
   
   /// Get the concrete type this potential archetype is constrained to.
   Type getConcreteType() const {
-    assert(isConcreteType());
     if (Representative != this)
       return Representative->getConcreteType();
-    return ArchetypeOrConcreteType.getAsConcreteType();
+    return ConcreteType;
   }
 
   void setIsRecursive() { IsRecursive = true; }
@@ -625,14 +620,25 @@ public:
 
   /// Determine whether this archetype was renamed due to typo
   /// correction. If so, \c getName() retrieves the new name.
-  bool wasRenamed() const { return Renamed; }
+  bool wasRenamed() const { return !OrigName.empty(); }
 
-  /// Note that this potential archetype was renamed (due to typo
-  /// correction), providing the new name.
-  void setRenamed(Identifier newName) {
-    NameOrAssociatedType = newName;
-    Renamed = true;
+  /// Note that this potential archetype was is going to be renamed (due to typo
+  /// correction), saving the old name.
+  void saveNameForRenaming() {
+    OrigName = getName();
   }
+
+  /// For a renamed potential archetype, retrieve the original name.
+  Identifier getOriginalName() const {
+    assert(wasRenamed());
+    return OrigName;
+  }
+
+  /// Whether we already diagnosed this rename.
+  bool alreadyDiagnosedRename() const { return DiagnosedRename; }
+
+  /// Note that we already diagnosed this rename.
+  void setAlreadyDiagnosedRename() { DiagnosedRename = true; }
 
   /// Whether this potential archetype makes a better archetype anchor than
   /// the given archetype anchor.

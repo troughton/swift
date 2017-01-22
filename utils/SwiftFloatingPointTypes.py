@@ -2,11 +2,11 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
-# See http://swift.org/LICENSE.txt for license information
-# See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+# See https://swift.org/LICENSE.txt for license information
+# See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 
 
 # returns (lower, upper) exclusive bounds for the integer values
@@ -49,11 +49,3 @@ def floating_point_bits_to_type():
 
 def all_floating_point_types():
     return floating_point_bits_to_type().values()
-
-
-# Bit counts for all floating point types.
-#
-# 80-bit floating point types are only permitted on x86 architectures. This
-# restriction is handled via #if's in the generated code.
-def all_floating_point_bits():
-    return floating_point_bits_to_type().keys()

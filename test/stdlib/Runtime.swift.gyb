@@ -348,6 +348,7 @@ class SomeSubclass : SomeClass {}
 
 protocol SomeProtocol {}
 class SomeConformingClass : SomeProtocol {}
+class SomeConformingSubclass : SomeConformingClass {}
 
 Runtime.test("typeByName") {
   expectTrue(_typeByName("a.SomeClass") == SomeClass.self)
@@ -433,12 +434,60 @@ Runtime.test("casting AnyObject to class metatypes") {
     var a: Any = SomeClass()
     expectTrue(a as? Any.Type == nil)
     expectTrue(a as? AnyClass == nil)
-    
+
     a = SomeClass.self
     expectTrue(a as? Any.Type == SomeClass.self)
     expectTrue(a as? AnyClass == SomeClass.self)
     expectTrue(a as? SomeClass.Type == SomeClass.self)
   }
+}
+
+func wantonlyWrapInAny<T>(_ x: T) -> Any {
+  return x
+}
+
+// Because `type(of: x)` and `T.self` have the same type `T.Type` in
+// a <T>(x: T) context, both operations must produce the concrete protocol
+// type value when `T` is bound to an existential type `P`.
+func castWithAbstractionBarrier<T>(_ x: T) -> (
+  staticWithConcreteType: T.Type,
+  dynamicWithConcreteType: T.Type,
+  staticWithErasedType: Any.Type,
+  dynamicWithErasedType: Any.Type,
+  dynamicExistentialWithErasedType: Any.Type,
+  dynamicDoubleWrappedExistentialWithErasedType: Any.Type
+) {
+  return (
+    staticWithConcreteType: T.self,
+    dynamicWithConcreteType: type(of: x),
+    staticWithErasedType: T.self,
+    dynamicWithErasedType: type(of: x),
+    dynamicExistentialWithErasedType: type(of: x as Any),
+    dynamicDoubleWrappedExistentialWithErasedType:
+      type(of: wantonlyWrapInAny(wantonlyWrapInAny(x)))
+  )
+}
+
+Runtime.test("abstraction barrier on casting generic param bound to existential") {
+  let c: SomeConformingClass = SomeConformingSubclass()
+  let x: SomeProtocol = c
+  let (staticWithConcreteType,
+       dynamicWithConcreteType,
+       staticWithErasedType,
+       dynamicWithErasedType,
+       dynamicExistentialWithErasedType,
+       dynamicDoubleWrappedExistentialWithErasedType)
+    = castWithAbstractionBarrier(x)
+
+  expectTrue(staticWithConcreteType == SomeProtocol.self)
+  expectTrue(dynamicWithConcreteType == SomeProtocol.self)
+  expectTrue(staticWithErasedType == SomeProtocol.self)
+  expectTrue(dynamicWithErasedType == SomeProtocol.self)
+
+  // type(of: x as Any) can be a proper existential type cast
+  expectTrue(dynamicExistentialWithErasedType == SomeConformingSubclass.self)
+  expectTrue(dynamicDoubleWrappedExistentialWithErasedType
+               == SomeConformingSubclass.self)
 }
 
 class Malkovich: Malkovichable {
@@ -907,8 +956,8 @@ Reflection.test("Enum/IndirectGeneric/DefaultMirror") {
   expectEqual("\(y)", "Bar(\"twenty-two\")")
 
   let list = List.Cons(first: 0, rest: .Cons(first: 1, rest: .Nil))
-  expectEqual("\(list)",
-              "Cons(0, a.List<Swift.Int>.Cons(1, a.List<Swift.Int>.Nil))")
+  expectEqual("Cons(first: 0, rest: a.List<Swift.Int>.Cons(first: 1, rest: a.List<Swift.Int>.Nil))",
+    "\(list)")
 }
 
 class Brilliant : CustomReflectable {
@@ -1407,8 +1456,8 @@ Reflection.test("Double") {
   }
 }
 
-// A struct type and class type whose NominalTypeDescriptor.FieldNames 
-// data is exactly eight bytes long. FieldNames data of exactly 
+// A struct type and class type whose NominalTypeDescriptor.FieldNames
+// data is exactly eight bytes long. FieldNames data of exactly
 // 4 or 8 or 16 bytes was once miscompiled on arm64.
 struct EightByteFieldNamesStruct {
   let abcdef = 42

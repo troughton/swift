@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -168,7 +168,7 @@ printTypeInterface(ModuleDecl *M, Type Ty, ASTPrinter &Printer,
   }
   Ty = Ty->getRValueType();
   if (auto ND = Ty->getNominalOrBoundGenericNominal()) {
-    PrintOptions Options = PrintOptions::printTypeInterface(Ty.getPointer(), M);
+    PrintOptions Options = PrintOptions::printTypeInterface(Ty.getPointer());
     ND->print(Printer, Options);
     printTypeNameToString(Ty, TypeName);
     return false;
@@ -185,7 +185,7 @@ printTypeInterface(ModuleDecl *M, StringRef TypeUSR, ASTPrinter &Printer,
                             Printer, TypeName, Error);
 }
 
-void swift::ide::printModuleInterface(Module *M, Optional<StringRef> Group,
+void swift::ide::printModuleInterface(ModuleDecl *M, Optional<StringRef> Group,
                                       ModuleTraversalOptions TraversalOptions,
                                       ASTPrinter &Printer,
                                       const PrintOptions &Options,
@@ -210,7 +210,7 @@ static void adjustPrintOptions(PrintOptions &AdjustedOptions) {
 }
 
 ArrayRef<StringRef>
-swift::ide::collectModuleGroups(Module *M, std::vector<StringRef> &Scratch) {
+swift::ide::collectModuleGroups(ModuleDecl *M, std::vector<StringRef> &Scratch) {
   for (auto File : M->getFiles()) {
     File->collectAllGroups(Scratch);
   }
@@ -255,7 +255,7 @@ swift::ide::findGroupNameForUSR(ModuleDecl *M, StringRef USR) {
 }
 
 void swift::ide::printSubmoduleInterface(
-       Module *M,
+       ModuleDecl *M,
        ArrayRef<StringRef> FullModuleName,
        ArrayRef<StringRef> GroupNames,
        ModuleTraversalOptions TraversalOptions,
@@ -573,13 +573,10 @@ void swift::ide::printSubmoduleInterface(
                 AdjustedOptions.BracketOptions = {ET.first, false,
                                         Decls.back().first == ET.first, true};
                 if (ET.second)
-                  AdjustedOptions.
-                    initArchetypeTransformerForSynthesizedExtensions(NTD,
-                                                               pAnalyzer.get());
+                  AdjustedOptions.initForSynthesizedExtension(NTD);
                 ET.first->print(Printer, AdjustedOptions);
                 if (ET.second)
-                  AdjustedOptions.
-                    clearArchetypeTransformerForSynthesizedExtensions();
+                  AdjustedOptions.clearSynthesizedExtension();
                 if (AdjustedOptions.BracketOptions.shouldCloseExtension(ET.first))
                   Printer << "\n";
               }
@@ -606,13 +603,10 @@ void swift::ide::printSubmoduleInterface(
                 if (AdjustedOptions.BracketOptions.shouldOpenExtension(ET.first))
                   Printer << "\n";
                 if (ET.second)
-                  AdjustedOptions.
-                    initArchetypeTransformerForSynthesizedExtensions(NTD,
-                                                               pAnalyzer.get());
+                  AdjustedOptions.initForSynthesizedExtension(NTD);
                 ET.first->print(Printer, AdjustedOptions);
                 if (ET.second)
-                  AdjustedOptions.
-                    clearArchetypeTransformerForSynthesizedExtensions();
+                  AdjustedOptions.clearSynthesizedExtension();
                 if (AdjustedOptions.BracketOptions.shouldCloseExtension(ET.first))
                   Printer << "\n";
             }

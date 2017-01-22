@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -29,13 +29,13 @@ static unsigned getAnyMetatypeDepth(CanType type) {
 }
 
 static bool
-mayBridgeToObjectiveC(Module *M, CanType T) {
+mayBridgeToObjectiveC(ModuleDecl *M, CanType T) {
   // FIXME: Disable when we don't support Objective-C interoperability?
   return true;
 }
 
 static bool
-mustBridgeToSwiftValueBox(Module *M, CanType T) {
+mustBridgeToSwiftValueBox(ModuleDecl *M, CanType T) {
   // If the target type is either an unknown dynamic type, or statically
   // known to bridge, the cast may succeed.
   if (T->hasArchetype())
@@ -44,10 +44,11 @@ mustBridgeToSwiftValueBox(Module *M, CanType T) {
   if (T->isAnyExistentialType())
     return false;
 
-  // getBridgedToObjC() might return a null-type for bridged foundation types
-  // during compiling the standard library. Exclude this case here.
+  // getBridgedToObjC() might return a null-type for some types
+  // whose bridging implementation is allowed to live elsewhere. Exclude this
+  // case here.
   if (auto N = T->getAnyNominal())
-    if (M->getASTContext().isStandardLibraryTypeBridgedInFoundation(N))
+    if (M->getASTContext().isTypeBridgedInExternalModule(N))
       return false;
 
   return !M->getASTContext().getBridgedToObjC(M, T);
@@ -187,7 +188,7 @@ classifyDynamicCastFromProtocol(ModuleDecl *M, CanType source, CanType target,
 
 /// Returns the existential type associated with the Hashable
 /// protocol, if it can be found.
-static CanType getHashableExistentialType(Module *M) {
+static CanType getHashableExistentialType(ModuleDecl *M) {
   auto hashable =
     M->getASTContext().getProtocol(KnownProtocolKind::Hashable);
   if (!hashable) return CanType();
@@ -195,7 +196,7 @@ static CanType getHashableExistentialType(Module *M) {
 }
 
 /// Check if a given type conforms to _BridgedToObjectiveC protocol.
-bool swift::isObjectiveCBridgeable(Module *M, CanType Ty) {
+bool swift::isObjectiveCBridgeable(ModuleDecl *M, CanType Ty) {
   // Retrieve the _BridgedToObjectiveC protocol.
   auto bridgedProto =
       M->getASTContext().getProtocol(KnownProtocolKind::ObjectiveCBridgeable);
@@ -210,7 +211,7 @@ bool swift::isObjectiveCBridgeable(Module *M, CanType Ty) {
 }
 
 /// Check if a given type conforms to _Error protocol.
-bool swift::isError(Module *M, CanType Ty) {
+bool swift::isError(ModuleDecl *M, CanType Ty) {
   // Retrieve the Error protocol.
   auto errorTypeProto =
       M->getASTContext().getProtocol(KnownProtocolKind::Error);
@@ -261,7 +262,7 @@ classifyClassHierarchyCast(CanType source, CanType target) {
   return DynamicCastFeasibility::WillFail;
 }
 
-static CanType getNSBridgedClassOfCFClass(Module *M, CanType type) {
+CanType swift::getNSBridgedClassOfCFClass(ModuleDecl *M, CanType type) {
   if (auto classDecl = type->getClassOrBoundGenericClass()) {
     if (classDecl->getForeignClassKind() == ClassDecl::ForeignKind::CFType) {
       if (auto bridgedAttr =
@@ -277,7 +278,7 @@ static CanType getNSBridgedClassOfCFClass(Module *M, CanType type) {
   return CanType();
 }
 
-static bool isCFBridgingConversion(Module *M, SILType sourceType,
+static bool isCFBridgingConversion(ModuleDecl *M, SILType sourceType,
                                    SILType targetType) {
   return (sourceType.getSwiftRValueType() ==
             getNSBridgedClassOfCFClass(M, targetType.getSwiftRValueType()) ||
@@ -287,7 +288,7 @@ static bool isCFBridgingConversion(Module *M, SILType sourceType,
 
 /// Try to classify the dynamic-cast relationship between two types.
 DynamicCastFeasibility
-swift::classifyDynamicCast(Module *M,
+swift::classifyDynamicCast(ModuleDecl *M,
                            CanType source,
                            CanType target,
                            bool isSourceTypeExact,
@@ -481,6 +482,40 @@ swift::classifyDynamicCast(Module *M,
     }
   }
 
+  // Tuple casts.
+  if (auto sourceTuple = dyn_cast<TupleType>(source)) {
+    if (auto targetTuple = dyn_cast<TupleType>(target)) {
+      // # of elements must coincide.
+      if (sourceTuple->getNumElements() != targetTuple->getNumElements())
+        return DynamicCastFeasibility::WillFail;
+
+      DynamicCastFeasibility result = DynamicCastFeasibility::WillSucceed;
+      for (unsigned i : range(sourceTuple->getNumElements())) {
+        const auto &sourceElt = sourceTuple->getElement(i);
+        const auto &targetElt = targetTuple->getElement(i);
+
+        // If both have names and the names mismatch, the cast will fail.
+        if (sourceElt.hasName() && targetElt.hasName() &&
+            sourceElt.getName() != targetElt.getName())
+          return DynamicCastFeasibility::WillFail;
+
+        // Combine the result of prior elements with this element type.
+        result = std::max(result,
+                          classifyDynamicCast(M,
+                            sourceElt.getType()->getCanonicalType(),
+                            targetElt.getType()->getCanonicalType(),
+                            isSourceTypeExact,
+                            isWholeModuleOpts));
+
+        // If this element failed, we're done.
+        if (result == DynamicCastFeasibility::WillFail)
+          break;
+      }
+
+      return result;
+    }
+  }
+
   // Class casts.
   auto sourceClass = source.getClassOrBoundGenericClass();
   auto targetClass = target.getClassOrBoundGenericClass();
@@ -575,8 +610,6 @@ swift::classifyDynamicCast(Module *M,
   // succeed.
   if (target->is<AnyMetatypeType>()) return DynamicCastFeasibility::WillFail;
 
-  // FIXME: tuple conversions?
-
   // FIXME: Be more careful with bridging conversions from
   // NSArray, NSDictionary and NSSet as they may fail?
 
@@ -604,7 +637,7 @@ swift::classifyDynamicCast(Module *M,
       // If the bridged ObjC type is known, check if
       // source type can be cast into it.
       return classifyDynamicCast(M, source,
-          ObjCTy.getCanonicalTypeOrNull(),
+          ObjCTy->getCanonicalType(),
           /* isSourceTypeExact */ false, isWholeModuleOpts);
     }
     return DynamicCastFeasibility::MaySucceed;
@@ -617,7 +650,7 @@ swift::classifyDynamicCast(Module *M,
       // If the bridged ObjC type is known, check if
       // this type can be cast into target type.
       return classifyDynamicCast(M,
-          ObjCTy.getCanonicalTypeOrNull(),
+          ObjCTy->getCanonicalType(),
           target,
           /* isSourceTypeExact */ false, isWholeModuleOpts);
     }
@@ -725,9 +758,9 @@ namespace {
     SILModule &M;
     ASTContext &Ctx;
     SILLocation Loc;
-    Module *SwiftModule;
+    ModuleDecl *SwiftModule;
   public:
-    CastEmitter(SILBuilder &B, Module *swiftModule, SILLocation loc)
+    CastEmitter(SILBuilder &B, ModuleDecl *swiftModule, SILLocation loc)
       : B(B), M(B.getModule()), Ctx(M.getASTContext()), Loc(loc),
         SwiftModule(swiftModule) {}
 
@@ -748,7 +781,7 @@ namespace {
     SILValue getOwnedScalar(Source source, const TypeLowering &srcTL) {
       assert(!source.isAddress());
       if (!source.shouldTake())
-        srcTL.emitRetainValue(B, Loc, source.Value);
+        srcTL.emitCopyValue(B, Loc, source.Value);
       return source.Value;
     }
 
@@ -896,8 +929,9 @@ namespace {
           objectSource = Source(sourceAddr, sourceObjectType,
                                 CastConsumptionKind::TakeAlways);
         } else {
-          SILValue sourceObjectValue =
-            new (M) SILArgument(someBB, loweredSourceObjectType);
+          // switch enum always start as @owned.
+          SILValue sourceObjectValue = someBB->createPHIArgument(
+              loweredSourceObjectType, ValueOwnershipKind::Owned);
           objectSource = Source(sourceObjectValue, sourceObjectType,
                                 source.Consumption);
         }
@@ -935,7 +969,8 @@ namespace {
       if (target.isAddress()) {
         return target.asAddressSource();
       } else {
-        SILValue result = new (M) SILArgument(contBB, target.LoweredType);
+        SILValue result = contBB->createPHIArgument(target.LoweredType,
+                                                    ValueOwnershipKind::Owned);
         return target.asScalarSource(result);
       }
     }
@@ -991,11 +1026,11 @@ namespace {
       }
     }
   };
-}
+} // end anonymous namespace
 
 /// Emit an unconditional scalar cast that's known to succeed.
 SILValue
-swift::emitSuccessfulScalarUnconditionalCast(SILBuilder &B, Module *M,
+swift::emitSuccessfulScalarUnconditionalCast(SILBuilder &B, ModuleDecl *M,
                                              SILLocation loc, SILValue value,
                                              SILType loweredTargetType,
                                              CanType sourceType,
@@ -1027,7 +1062,7 @@ swift::emitSuccessfulScalarUnconditionalCast(SILBuilder &B, Module *M,
   return result.Value;
 }
 
-bool swift::emitSuccessfulIndirectUnconditionalCast(SILBuilder &B, Module *M,
+bool swift::emitSuccessfulIndirectUnconditionalCast(SILBuilder &B, ModuleDecl *M,
                                                     SILLocation loc,
                                                CastConsumptionKind consumption,
                                                     SILValue src,
@@ -1145,7 +1180,7 @@ bool swift::canUseScalarCheckedCastInstructions(SILModule &M,
 /// Carry out the operations required for an indirect conditional cast
 /// using a scalar cast operation.
 void swift::
-emitIndirectConditionalCastWithScalar(SILBuilder &B, Module *M,
+emitIndirectConditionalCastWithScalar(SILBuilder &B, ModuleDecl *M,
                                       SILLocation loc,
                                       CastConsumptionKind consumption,
                                       SILValue src, CanType sourceType,
@@ -1181,10 +1216,10 @@ emitIndirectConditionalCastWithScalar(SILBuilder &B, Module *M,
   // Emit the success block.
   B.setInsertionPoint(scalarSuccBB); {
     auto &targetTL = B.getModule().Types.getTypeLowering(targetValueType);
-    SILValue succValue =
-      new (B.getModule()) SILArgument(scalarSuccBB, targetValueType);
+    SILValue succValue = scalarSuccBB->createPHIArgument(
+        targetValueType, ValueOwnershipKind::Owned);
     if (!shouldTakeOnSuccess(consumption))
-      targetTL.emitRetainValue(B, loc, succValue);
+      targetTL.emitCopyValue(B, loc, succValue);
     targetTL.emitStoreOfCopy(B, loc, succValue, dest, IsInitialization);
     B.createBranch(loc, indirectSuccBB);
   }
@@ -1192,7 +1227,7 @@ emitIndirectConditionalCastWithScalar(SILBuilder &B, Module *M,
   // Emit the failure block.
   if (shouldDestroyOnFailure(consumption)) {
     B.setInsertionPoint(scalarFailBB);
-    srcTL.emitReleaseValue(B, loc, srcValue);
+    srcTL.emitDestroyValue(B, loc, srcValue);
     B.createBranch(loc, indirectFailBB);
   }
 }

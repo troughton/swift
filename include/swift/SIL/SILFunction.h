@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -38,22 +38,54 @@ enum IsTransparent_t { IsNotTransparent, IsTransparent };
 enum Inline_t { InlineDefault, NoInline, AlwaysInline };
 enum IsThunk_t { IsNotThunk, IsThunk, IsReabstractionThunk };
 
-class SILSpecializeAttr final :
-    private llvm::TrailingObjects<SILSpecializeAttr, Substitution> {
-  friend TrailingObjects;
-
-  unsigned numSubs;
-  
-  SILSpecializeAttr(ArrayRef<Substitution> subs);
-
+class SILSpecializeAttr final {
+  friend SILFunction;
 public:
-  static SILSpecializeAttr *create(SILModule &M, ArrayRef<Substitution> subs);
+  enum class SpecializationKind {
+    Full,
+    Partial
+  };
 
-  ArrayRef<Substitution> getSubstitutions() const {
-    return { getTrailingObjects<Substitution>(), numSubs };
+  static SILSpecializeAttr *create(SILModule &M,
+                                   ArrayRef<Requirement> requirements,
+                                   bool exported, SpecializationKind kind);
+
+  ArrayRef<Requirement> getRequirements() const;
+
+  bool isExported() const {
+    return exported;
   }
-  
+
+  bool isFullSpecialization() const {
+    return kind == SpecializationKind::Full;
+  }
+
+  bool isPartialSpecialization() const {
+    return kind == SpecializationKind::Partial;
+  }
+
+  SpecializationKind getSpecializationKind() const {
+    return kind;
+  }
+
+  SILFunction *getFunction() const {
+    return F;
+  }
+
   void print(llvm::raw_ostream &OS) const;
+
+private:
+  unsigned numRequirements;
+  SpecializationKind kind;
+  bool exported;
+  SILFunction *F;
+
+  SILSpecializeAttr(ArrayRef<Requirement> requirements, bool exported,
+                    SpecializationKind kind);
+
+  Requirement *getRequirementsData() {
+    return reinterpret_cast<Requirement *>(this+1);
+  }
 };
 
 /// SILFunction - A function body that has been lowered to SIL. This consists of
@@ -176,6 +208,13 @@ private:
   ///    method itself. In this case we need to create a vtable stub for it.
   bool Zombie = false;
 
+  /// True if SILOwnership is enabled for this function.
+  ///
+  /// This enables the verifier to easily prove that before the Ownership Model
+  /// Eliminator runs on a function, we only see a non-semantic-arc world and
+  /// after the pass runs, we only see a semantic-arc world.
+  bool HasQualifiedOwnership = true;
+
   SILFunction(SILModule &module, SILLinkage linkage,
               StringRef mangledName, CanSILFunctionType loweredType,
               GenericEnvironment *genericEnv,
@@ -281,6 +320,19 @@ public:
   /// Returns true if this function is dead, but kept in the module's zombie list.
   bool isZombie() const { return Zombie; }
 
+  /// Returns true if this function has qualified ownership instructions in it.
+  bool hasQualifiedOwnership() const { return HasQualifiedOwnership; }
+
+  /// Returns true if this function has unqualified ownership instructions in
+  /// it.
+  bool hasUnqualifiedOwnership() const { return !HasQualifiedOwnership; }
+
+  /// Sets the HasQualifiedOwnership flag to false. This signals to SIL that no
+  /// ownership instructions should be in this function any more.
+  void setUnqualifiedOwnership() {
+    HasQualifiedOwnership = false;
+  }
+
   /// Returns the calling convention used by this entry point.
   SILFunctionTypeRepresentation getRepresentation() const {
     return getLoweredFunctionType()->getRepresentation();
@@ -358,6 +410,8 @@ public:
       case PublicClass:
         if (L == SILLinkage::Private || L == SILLinkage::Hidden)
           return SILLinkage::Public;
+        if (L == SILLinkage::PrivateExternal || L == SILLinkage::HiddenExternal)
+          return SILLinkage::PublicExternal;
         break;
     }
     return L;
@@ -430,9 +484,7 @@ public:
   /// Removes all specialize attributes from this function.
   void clearSpecializeAttrs() { SpecializeAttrSet.clear(); }
 
-  void addSpecializeAttr(SILSpecializeAttr *attr) {
-    SpecializeAttrSet.push_back(attr);
-  }
+  void addSpecializeAttr(SILSpecializeAttr *Attr);
 
   /// \returns True if the function is optimizable (i.e. not marked as no-opt),
   ///          or is raw SIL (so that the mandatory passes still run).
@@ -596,7 +648,11 @@ public:
   SILBasicBlock &front() { return *begin(); }
   const SILBasicBlock &front() const { return *begin(); }
 
+  SILBasicBlock *getEntryBlock() { return &front(); }
+  const SILBasicBlock *getEntryBlock() const { return &front(); }
+
   SILBasicBlock *createBasicBlock();
+  SILBasicBlock *createBasicBlock(SILBasicBlock *After);
 
   /// Splice the body of \p F into this function at end.
   void spliceBody(SILFunction *F) {
@@ -649,29 +705,29 @@ public:
 
   SILArgument *getArgument(unsigned i) {
     assert(!empty() && "Cannot get argument of a function without a body");
-    return begin()->getBBArg(i);
+    return begin()->getArgument(i);
   }
 
   const SILArgument *getArgument(unsigned i) const {
     assert(!empty() && "Cannot get argument of a function without a body");
-    return begin()->getBBArg(i);
+    return begin()->getArgument(i);
   }
 
   ArrayRef<SILArgument *> getArguments() const {
     assert(!empty() && "Cannot get arguments of a function without a body");
-    return begin()->getBBArgs();
+    return begin()->getArguments();
   }
 
   ArrayRef<SILArgument *> getIndirectResults() const {
     assert(!empty() && "Cannot get arguments of a function without a body");
-    return begin()->getBBArgs().slice(0,
-                            getLoweredFunctionType()->getNumIndirectResults());
+    return begin()->getArguments().slice(
+        0, getLoweredFunctionType()->getNumIndirectResults());
   }
 
   ArrayRef<SILArgument *> getArgumentsWithoutIndirectResults() const {
     assert(!empty() && "Cannot get arguments of a function without a body");
-    return begin()->getBBArgs().slice(
-                            getLoweredFunctionType()->getNumIndirectResults());
+    return begin()->getArguments().slice(
+        getLoweredFunctionType()->getNumIndirectResults());
   }
 
   const SILArgument *getSelfArgument() const {
@@ -692,7 +748,7 @@ public:
 
   /// verify - Run the IR verifier to make sure that the SILFunction follows
   /// invariants.
-  void verify(bool SingleFunction=true) const;
+  void verify(bool SingleFunction = true) const;
 
   /// Pretty-print the SILFunction.
   void dump(bool Verbose) const;
@@ -752,18 +808,7 @@ struct ilist_traits<::swift::SILFunction> :
 public ilist_default_traits<::swift::SILFunction> {
   typedef ::swift::SILFunction SILFunction;
 
-private:
-  mutable ilist_half_node<SILFunction> Sentinel;
-
 public:
-  SILFunction *createSentinel() const {
-    return static_cast<SILFunction*>(&Sentinel);
-  }
-  void destroySentinel(SILFunction *) const {}
-
-  SILFunction *provideInitialHead() const { return createSentinel(); }
-  SILFunction *ensureHead(SILFunction*) const { return createSentinel(); }
-  static void noteHead(SILFunction*, SILFunction*) {}
   static void deleteNode(SILFunction *V) { V->~SILFunction(); }
 
 private:

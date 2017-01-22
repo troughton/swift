@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,7 +14,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "swift/AST/ArchetypeBuilder.h"
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/CanTypeVisitor.h"
 #include "swift/AST/Decl.h"
@@ -224,7 +223,7 @@ namespace {
       assert(Types.size() == Values.size());
     }
   };
-}
+} // end anonymous namespace
 
 /// Given an array of polymorphic arguments as might be set up by
 /// GenericArguments, bind the polymorphic parameters.
@@ -236,7 +235,7 @@ static void emitPolymorphicParametersFromArray(IRGenFunction &IGF,
   array = IGF.Builder.CreateElementBitCast(array, IGF.IGM.TypeMetadataPtrTy);
 
   auto getInContext = [&](CanType type) -> CanType {
-    return ArchetypeBuilder::mapTypeIntoContext(typeDecl, type)
+    return typeDecl->mapTypeIntoContext(type)
              ->getCanonicalType();
   };
 
@@ -435,12 +434,7 @@ bool irgen::hasKnownSwiftMetadata(IRGenModule &IGM, ClassDecl *theClass) {
   // is enough to conclusively force us into a slower path.
   // Eventually we might have an attribute here or something based on
   // the deployment target.
-  return hasKnownSwiftImplementation(IGM, theClass);
-}
-
-/// Is the given class known to have an implementation in Swift?
-bool irgen::hasKnownSwiftImplementation(IRGenModule &IGM, ClassDecl *theClass) {
-  return !theClass->hasClangNode();
+  return theClass->hasKnownSwiftImplementation();
 }
 
 /// Is the given method known to be callable by vtable lookup?
@@ -451,7 +445,7 @@ bool irgen::hasKnownVTableEntry(IRGenModule &IGM,
   if (!theClass) {
     return false;
   }
-  return hasKnownSwiftImplementation(IGM, theClass);
+  return theClass->hasKnownSwiftImplementation();
 }
 
 /// Is it basically trivial to access the given metadata?  If so, we don't
@@ -766,12 +760,6 @@ namespace {
       }
     }
 
-    llvm::Value *visitPolymorphicFunctionType(CanPolymorphicFunctionType type) {
-      IGF.unimplemented(SourceLoc(),
-                        "metadata ref for polymorphic function type");
-      return llvm::UndefValue::get(IGF.IGM.TypeMetadataPtrTy);
-    }
-
     llvm::Value *visitGenericFunctionType(CanGenericFunctionType type) {
       IGF.unimplemented(SourceLoc(),
                         "metadata ref for generic function type");
@@ -1039,7 +1027,7 @@ namespace {
       return metatype;
     }
   };
-}
+} // end anonymous namespace
 
 /// Emit a type metadata reference without using an accessor function.
 static llvm::Value *emitDirectTypeMetadataRef(IRGenFunction &IGF,
@@ -1554,7 +1542,31 @@ namespace {
     llvm::Value *visitType(CanType t) {
       return IGF.emitTypeMetadataRef(t);
     }
-      
+
+    llvm::Value *visitBoundGenericEnumType(CanBoundGenericEnumType type) {
+      // Optionals have a lowered payload type, so we recurse here.
+      if (auto objectTy = CanType(type).getAnyOptionalObjectType()) {
+        auto payloadMetadata = visit(objectTy);
+        llvm::Value *args[] = { payloadMetadata };
+        llvm::Type *types[] = { IGF.IGM.TypeMetadataPtrTy };
+
+        // Call the generic metadata accessor function.
+        llvm::Function *accessor =
+            IGF.IGM.getAddrOfGenericTypeMetadataAccessFunction(
+                type->getDecl(), types, NotForDefinition);
+
+        auto result = IGF.Builder.CreateCall(accessor, args);
+        result->setDoesNotThrow();
+        result->addAttribute(llvm::AttributeSet::FunctionIndex,
+                             llvm::Attribute::ReadNone);
+
+        return result;
+      }
+
+      // Otherwise, generic arguments are not lowered.
+      return visitType(type);
+    }
+
     llvm::Value *visitTupleType(CanTupleType type) {
       if (auto cached = tryGetLocal(type))
         return cached;
@@ -1671,6 +1683,7 @@ namespace {
       case SILFunctionType::Representation::WitnessMethod:
       case SILFunctionType::Representation::ObjCMethod:
       case SILFunctionType::Representation::CFunctionPointer:
+      case SILFunctionType::Representation::Closure:
         // A thin function looks like a plain pointer.
         // FIXME: Except for extra inhabitants?
         return emitDirectMetadataRef(C.TheRawPointerType);
@@ -1683,6 +1696,8 @@ namespace {
         // All block types look like Builtin.UnknownObject.
         return emitDirectMetadataRef(C.TheUnknownObjectType);
       }
+
+      llvm_unreachable("Not a valid SILFunctionType.");
     }
 
     llvm::Value *visitAnyMetatypeType(CanAnyMetatypeType type) {
@@ -1708,6 +1723,8 @@ namespace {
         // FIXME: It'd be nice not to need a runtime call here.
         return IGF.emitTypeMetadataRef(type);
       }
+
+      llvm_unreachable("Not a valid MetatypeRepresentation.");
     }
 
     /// Try to find the metatype in local data.
@@ -1725,7 +1742,7 @@ namespace {
       return metatype;
     }
   };
-}
+} // end anonymous namespace
 
 llvm::Value *IRGenFunction::emitTypeMetadataRefForLayout(SILType type) {
   return EmitTypeMetadataRefForLayout(*this).visit(type.getSwiftRValueType());
@@ -1850,6 +1867,7 @@ namespace {
       case SILFunctionType::Representation::WitnessMethod:
       case SILFunctionType::Representation::ObjCMethod:
       case SILFunctionType::Representation::CFunctionPointer:
+      case SILFunctionType::Representation::Closure:
         // A thin function looks like a plain pointer.
         // FIXME: Except for extra inhabitants?
         return emitFromValueWitnessTable(C.TheRawPointerType);
@@ -1861,6 +1879,8 @@ namespace {
         // All block types look like Builtin.UnknownObject.
         return emitFromValueWitnessTable(C.TheUnknownObjectType);
       }
+
+      llvm_unreachable("Not a valid SILFunctionType.");
     }
 
     llvm::Value *visitAnyMetatypeType(CanAnyMetatypeType type) {
@@ -1879,6 +1899,8 @@ namespace {
         return emitFromValueWitnessTable(
                      CanMetatypeType::get(IGF.IGM.Context.TheNativeObjectType));
       }
+
+      llvm_unreachable("Not a valid MetatypeRepresentation.");
     }
 
     llvm::Value *visitAnyClassType(ClassDecl *classDecl) {
@@ -1896,6 +1918,8 @@ namespace {
       case ReferenceCounting::Error:
         llvm_unreachable("classes shouldn't have this kind of refcounting");
       }
+
+      llvm_unreachable("Not a valid ReferenceCounting.");
     }
 
     llvm::Value *visitClassType(CanClassType type) {
@@ -2702,7 +2726,7 @@ namespace {
     }
   };
 
-}
+} // end anonymous namespace
 
 void
 IRGenModule::addLazyFieldTypeAccessor(NominalTypeDecl *type,
@@ -2781,7 +2805,7 @@ irgen::emitFieldTypeAccessor(IRGenModule &IGM,
     auto declCtxt = type;
     if (auto generics = declCtxt->getGenericSignatureOfContext()) {
       auto getInContext = [&](CanType type) -> CanType {
-        return ArchetypeBuilder::mapTypeIntoContext(declCtxt, type)
+        return declCtxt->mapTypeIntoContext(type)
             ->getCanonicalType();
       };
       bindArchetypeAccessPaths(IGF, generics, getInContext);
@@ -3140,7 +3164,7 @@ namespace {
       return makeArray(IGM.Int8PtrTy, privateData);
     }
   };
-}
+} // end anonymous namespace
 
 // Classes
 
@@ -3658,9 +3682,7 @@ namespace {
         return;
       }
 
-      Type superclassTy
-        = ArchetypeBuilder::mapTypeIntoContext(Target,
-                                               Target->getSuperclass());
+      Type superclassTy = Target->mapTypeIntoContext(Target->getSuperclass());
 
       if (!addReferenceToHeapMetadata(superclassTy->getCanonicalType(),
                                       /*allowUninit*/ false)) {
@@ -3799,7 +3821,7 @@ namespace {
       llvm::Value *superMetadata;
       if (Target->hasSuperclass()) {
         Type superclass = Target->getSuperclass();
-        superclass = ArchetypeBuilder::mapTypeIntoContext(Target, superclass);
+        superclass = Target->mapTypeIntoContext(superclass);
         superMetadata =
           emitClassHeapMetadataRef(IGF, superclass->getCanonicalType(),
                                    MetadataValueType::ObjCClass);
@@ -3994,7 +4016,7 @@ namespace {
       (void) emitFinishInitializationOfClassMetadata(IGF, metadata);
     }
   };
-}
+} // end anonymous namespace
 
 // FIXME: temporarial patch for MSVC
 extern bool EnabledDllStorage();
@@ -4017,10 +4039,7 @@ static void emitObjCClassSymbol(IRGenModule &IGM,
                                           metadata->getLinkage(),
                                           classSymbol.str(), metadata,
                                           IGM.getModule());
-  //FIXME: After having complete solution for MSVC, we will determine if 
-  //the solution is applicable to all Windows environment.
-  //If it is applicable, we will use the method .isOSBinFormatCOFF().
-  if (IGM.Triple.isKnownWindowsMSVCEnvironment() && EnabledDllStorage())
+  if (IGM.useDllStorage() && EnabledDllStorage())
     alias->setDLLStorageClass(metadata->getDLLStorageClass());
 }
 
@@ -4188,7 +4207,7 @@ namespace {
       super::addParentMetadataRef(forClass, classType);
     }
   END_METADATA_SEARCHER()
-}
+} // end anonymous namespace
 
 /// Return the index of the parent metadata pointer for the given class.
 static int getClassParentIndex(IRGenModule &IGM, ClassDecl *classDecl) {
@@ -4243,7 +4262,7 @@ namespace {
         this->setTargetOffset();
     }
   END_GENERIC_METADATA_SEARCHER(GenericRequirements)
-}
+} // end anonymous namespace
 
 static int getIndexOfGenericRequirement(IRGenModule &IGM,
                                         NominalTypeDecl *decl,
@@ -4491,6 +4510,8 @@ static llvm::Value *emitLoadOfHeapMetadataRef(IRGenFunction &IGF,
     return objcClass;
   }
   }
+
+  llvm_unreachable("Not a valid IsaEncoding.");
 }
 
 /// Given an object of class type, produce the heap metadata reference
@@ -4626,7 +4647,7 @@ namespace {
       super::addMethod(fn);
     }
   END_METADATA_SEARCHER()
-}
+} // end anonymous namespace
 
 /// Load the correct virtual function for the given class method.
 llvm::Value *irgen::emitVirtualMethodValue(IRGenFunction &IGF,
@@ -4709,9 +4730,11 @@ namespace {
       : super(IGM, theDecl) {}
 
     CanType getParentType() const {
-      Type parentType =
-        Target->getDeclContext()->getDeclaredTypeInContext();
-      return (parentType ? parentType->getCanonicalType() : CanType());
+      Type type = Target->getDeclaredTypeInContext();
+      Type parentType = type->getNominalParent();
+      if (parentType)
+        return parentType->getCanonicalType();
+      return CanType();
     }
 
   public:
@@ -4732,7 +4755,7 @@ namespace {
       addWord(parentMetadata);
     }
   };
-}
+} // end anonymous namespace
 
 static llvm::Value *
 emitInPlaceValueTypeMetadataInitialization(IRGenFunction &IGF,
@@ -4967,7 +4990,7 @@ namespace {
                             IGF.IGM.getLoweredType(structTy));
     }
   };
-}
+} // end anonymous namespace
 
 /// Emit the type metadata or metadata template for a struct.
 void irgen::emitStructMetadata(IRGenModule &IGM, StructDecl *structDecl) {
@@ -5157,7 +5180,7 @@ public:
   }
 };
   
-}
+} // end anonymous namespace
 
 void irgen::emitEnumMetadata(IRGenModule &IGM, EnumDecl *theEnum) {
   // Set up a dummy global to stand in for the metadata object while we produce
@@ -5459,7 +5482,7 @@ namespace {
       assert(HasUnfilledParent);
     }
   };
-}
+} // end anonymous namespace
 
 llvm::Constant *
 IRGenModule::getAddrOfForeignTypeMetadataCandidate(CanType type) {
@@ -5575,6 +5598,8 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::ErrorCodeProtocol:
     return SpecialProtocol::None;
   }
+
+  llvm_unreachable("Not a valid KnownProtocolKind.");
 }
 
 namespace {

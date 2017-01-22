@@ -29,6 +29,7 @@ add_swift_library(swiftSIL STATIC
   SILType.cpp
   SILValue.cpp
   SILVerifier.cpp
+  SILOwnershipVerifier.cpp
   SILVTable.cpp
   SILWitnessTable.cpp
   TypeLowering.cpp
@@ -37,3 +38,10 @@ add_swift_library(swiftSIL STATIC
     swiftSema
 )
 
+# intrinsics_gen is the LLVM tablegen target that generates the include files
+# where intrinsics and attributes are declared. See the comment in lib/AST for
+# more detail.
+if(NOT SWIFT_BUILT_STANDALONE)
+  get_property(CLANG_TABLEGEN_TARGETS GLOBAL PROPERTY CLANG_TABLEGEN_TARGETS)
+  add_dependencies(swiftSIL intrinsics_gen ${CLANG_TABLEGEN_TARGETS})
+endif()

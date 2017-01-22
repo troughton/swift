@@ -36,5 +36,9 @@ public func app() {
 
 public enum empty { case exists }
 public let globalvar = empty.exists
-// CHECK3: !DIGlobalVariable(name: "globalvar", {{.*}}line: [[@LINE-1]],
-// CHECK3-SAME:          isLocal: false, isDefinition: true, variable: i64 0)
+// CHECK3: !DIGlobalVariableExpression(var: ![[VAR:[0-9]+]],
+// CHECK3-SAME:          expr: ![[EXPR:[0-9]+]])
+// CHECK3: ![[VAR]] = distinct !DIGlobalVariable(name: "globalvar",
+// CHECK3-SAME:          {{.*}}line: [[@LINE-4]], {{.*}}isLocal: false,
+// CHECK3-SAME:          isDefinition: true)
+// CHECK3: ![[EXPR]] = !DIExpression(DW_OP_constu, 0, DW_OP_stack_value)

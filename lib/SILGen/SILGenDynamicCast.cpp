@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -140,7 +140,8 @@ namespace {
         //emission.
         scalarOperandValue = operand.forward(SGF);
         if (scalarOperandValue->getType().isAddress()) {
-          scalarOperandValue = SGF.B.createLoad(Loc, scalarOperandValue);
+          scalarOperandValue = SGF.B.emitLoadValueOperation(
+              Loc, scalarOperandValue, LoadOwnershipQualifier::Take);
         }
         SGF.B.createCheckedCastBranch(Loc, /*exact*/ false, scalarOperandValue,
                                       origTargetTL.getLoweredType(),
@@ -157,8 +158,8 @@ namespace {
           result = finishFromResultBuffer(hasAbstraction, resultBuffer,
                                           abstraction, origTargetTL, ctx);
         } else {
-          SILValue argument = new (SGF.F.getModule())
-            SILArgument(trueBB, origTargetTL.getLoweredType());
+          SILValue argument = trueBB->createPHIArgument(
+              origTargetTL.getLoweredType(), ValueOwnershipKind::Owned);
           result = finishFromResultScalar(hasAbstraction, argument, consumption,
                                           abstraction, origTargetTL, ctx);
         }
@@ -175,7 +176,7 @@ namespace {
         // If we're using the scalar strategy, handle the consumption rules.
         if (Strategy != CastStrategy::Address &&
             shouldDestroyOnFailure(consumption)) {
-          SGF.B.emitReleaseValueOperation(Loc, scalarOperandValue);
+          SGF.B.emitDestroyValueOperation(Loc, scalarOperandValue);
         }
 
         handleFalse();
@@ -233,7 +234,7 @@ namespace {
                                         SGFContext ctx) {
       // Retain the result if this is copy-on-success.
       if (!shouldTakeOnSuccess(consumption))
-        origTargetTL.emitRetainValue(SGF.B, Loc, value);
+        value = origTargetTL.emitCopyValue(SGF.B, Loc, value);
 
       // Enter a cleanup for the +1 result.
       ManagedValue result
@@ -255,7 +256,7 @@ namespace {
       return CastStrategy::Address;
     }
   };
-}
+} // end anonymous namespace
 
 void SILGenFunction::emitCheckedCastBranch(SILLocation loc, Expr *source,
                                            Type targetType,
@@ -356,19 +357,18 @@ adjustForConditionalCheckedCastOperand(SILLocation loc, ManagedValue src,
   }
   
   std::unique_ptr<TemporaryInitialization> init;
-  SGFContext ctx;
   if (requiresAddress) {
     init = SGF.emitTemporary(loc, srcAbstractTL);
-    
+
+    if (hasAbstraction)
+      src = SGF.emitSubstToOrigValue(loc, src, abstraction, sourceType);
+
     // Okay, if all we need to do is drop the value in an address,
     // this is easy.
-    if (!hasAbstraction) {
-      SGF.B.createStore(loc, src.forward(SGF), init->getAddress());
-      init->finishInitialization(SGF);
-      return init->getManagedAddress();
-    }
-    
-    ctx = SGFContext(init.get());
+    SGF.B.emitStoreValueOperation(loc, src.forward(SGF), init->getAddress(),
+                                  StoreOwnershipQualifier::Init);
+    init->finishInitialization(SGF);
+    return init->getManagedAddress();
   }
   
   assert(hasAbstraction);
@@ -497,8 +497,8 @@ RValue Lowering::emitConditionalCheckedCast(SILGenFunction &SGF,
   if (resultObjectTemp) {
     result = SGF.manageBufferForExprResult(resultBuffer, resultTL, C);
   } else {
-    auto argument =
-      new (SGF.F.getModule()) SILArgument(contBB, resultTL.getLoweredType());
+    auto argument = contBB->createPHIArgument(resultTL.getLoweredType(),
+                                              ValueOwnershipKind::Owned);
     result = SGF.emitManagedRValueWithCleanup(argument, resultTL);
   }
 
@@ -547,7 +547,7 @@ SILValue Lowering::emitIsa(SILGenFunction &SGF, SILLocation loc,
     });
 
   auto contBB = scope.exit();
-  auto isa = new (SGF.SGM.M) SILArgument(contBB, i1Ty);
+  auto isa = contBB->createPHIArgument(i1Ty, ValueOwnershipKind::Trivial);
   return isa;
 }
 

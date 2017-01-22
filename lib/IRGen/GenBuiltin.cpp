@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -23,6 +23,7 @@
 #include "swift/AST/Builtins.h"
 #include "swift/AST/Types.h"
 #include "swift/SIL/SILModule.h"
+#include "clang/AST/ASTContext.h"
 
 #include "Explosion.h"
 #include "GenCall.h"
@@ -124,7 +125,7 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
   if (Builtin.ID == BuiltinValueKind::UnsafeGuaranteedEnd) {
     // Just consume the incoming argument.
     assert(args.size() == 1 && "Expecting one incoming argument");
-    args.claimAll();
+    (void)args.claimAll();
     return;
   }
 
@@ -145,7 +146,7 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
 
   // These builtins don't care about their argument:
   if (Builtin.ID == BuiltinValueKind::Sizeof) {
-    args.claimAll();
+    (void)args.claimAll();
     auto valueTy = getLoweredTypeAndTypeInfo(IGF.IGM,
                                              substitutions[0].getReplacement());
     out.add(valueTy.second.getSize(IGF, valueTy.first));
@@ -153,7 +154,7 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
   }
 
   if (Builtin.ID == BuiltinValueKind::Strideof) {
-    args.claimAll();
+    (void)args.claimAll();
     auto valueTy = getLoweredTypeAndTypeInfo(IGF.IGM,
                                              substitutions[0].getReplacement());
     out.add(valueTy.second.getStride(IGF, valueTy.first));
@@ -161,7 +162,7 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
   }
 
   if (Builtin.ID == BuiltinValueKind::Alignof) {
-    args.claimAll();
+    (void)args.claimAll();
     auto valueTy = getLoweredTypeAndTypeInfo(IGF.IGM,
                                              substitutions[0].getReplacement());
     // The alignof value is one greater than the alignment mask.
@@ -171,24 +172,8 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
     return;
   }
 
-  if (Builtin.ID == BuiltinValueKind::StrideofNonZero) {
-    // Note this case must never return 0.
-    // It is implemented as max(strideof, 1)
-    args.claimAll();
-    auto valueTy = getLoweredTypeAndTypeInfo(IGF.IGM,
-                                             substitutions[0].getReplacement());
-    // Strideof should never return 0, so return 1 if the type has a 0 stride.
-    llvm::Value *StrideOf = valueTy.second.getStride(IGF, valueTy.first);
-    llvm::IntegerType *IntTy = cast<llvm::IntegerType>(StrideOf->getType());
-    auto *Zero = llvm::ConstantInt::get(IntTy, 0);
-    auto *One = llvm::ConstantInt::get(IntTy, 1);
-    llvm::Value *Cmp = IGF.Builder.CreateICmpEQ(StrideOf, Zero);
-    out.add(IGF.Builder.CreateSelect(Cmp, One, StrideOf));
-    return;
-  }
-
   if (Builtin.ID == BuiltinValueKind::IsPOD) {
-    args.claimAll();
+    (void)args.claimAll();
     auto valueTy = getLoweredTypeAndTypeInfo(IGF.IGM,
                                              substitutions[0].getReplacement());
     out.add(valueTy.second.getIsPOD(IGF, valueTy.first));
@@ -720,7 +705,7 @@ if (Builtin.ID == BuiltinValueKind::id) { \
     llvm::Value *FnCode = args.claimNext();
     
     // If we know the platform runtime's "done" value, emit the check inline.
-    llvm::BasicBlock *notDoneBB, *doneBB;
+    llvm::BasicBlock *doneBB = nullptr;
 
     if (auto ExpectedPred = IGF.IGM.TargetInfo.OnceDonePredicateValue) {
       auto PredValue = IGF.Builder.CreateLoad(PredPtr,
@@ -729,7 +714,7 @@ if (Builtin.ID == BuiltinValueKind::id) { \
                                                             *ExpectedPred);
       auto PredIsDone = IGF.Builder.CreateICmpEQ(PredValue, ExpectedPredValue);
       
-      notDoneBB = IGF.createBasicBlock("once_not_done");
+      auto notDoneBB = IGF.createBasicBlock("once_not_done");
       doneBB = IGF.createBasicBlock("once_done");
       
       IGF.Builder.CreateCondBr(PredIsDone, doneBB, notDoneBB);
@@ -843,6 +828,19 @@ if (Builtin.ID == BuiltinValueKind::id) { \
     for (auto &elt : schema) {
       out.add(llvm::Constant::getNullValue(elt.getScalarType()));
     }
+    return;
+  }
+  
+  if (Builtin.ID == BuiltinValueKind::GetObjCTypeEncoding) {
+    (void)args.claimAll();
+    Type valueTy = substitutions[0].getReplacement();
+    // Get the type encoding for the associated clang type.
+    auto clangTy = IGF.IGM.getClangType(valueTy->getCanonicalType());
+    std::string encoding;
+    IGF.IGM.getClangASTContext().getObjCEncodingForType(clangTy, encoding);
+    
+    auto globalString = IGF.IGM.getAddrOfGlobalString(encoding);
+    out.add(globalString);
     return;
   }
   

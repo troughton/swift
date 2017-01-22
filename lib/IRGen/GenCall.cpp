@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -24,8 +24,8 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/CodeGenABITypes.h"
 #include "clang/CodeGen/ModuleBuilder.h"
+#include "swift/AST/GenericEnvironment.h"
 #include "swift/Basic/Fallthrough.h"
-#include "swift/AST/ArchetypeBuilder.h"
 #include "llvm/IR/CallSite.h"
 
 #include "CallEmission.h"
@@ -150,7 +150,7 @@ llvm::CallingConv::ID irgen::expandCallingConv(IRGenModule &IGM,
 
   case SILFunctionTypeRepresentation::Method:
   case SILFunctionTypeRepresentation::WitnessMethod:
-    SWIFT_FALLTHROUGH;
+  case SILFunctionTypeRepresentation::Closure:
   case SILFunctionTypeRepresentation::Thin:
   case SILFunctionTypeRepresentation::Thick:
     return getFreestandingConvention(IGM);
@@ -265,7 +265,7 @@ namespace {
     void expandParameters();
     llvm::Type *expandExternalSignatureTypes();
   };
-}
+} // end anonymous namespace
 
 llvm::Type *SignatureExpansion::addIndirectResult() {
   auto resultType = FnType->getSILResult();
@@ -317,6 +317,8 @@ llvm::Type *SignatureExpansion::expandDirectResult() {
     return schema.getScalarResultType(IGM);
   }
   }
+
+  llvm_unreachable("Not a valid SILFunctionLanguage.");
 }
 
 static const clang::FieldDecl *
@@ -539,6 +541,8 @@ namespace {
         return convertFloatingType(Ctx.getTargetInfo().getDoubleFormat());
       case clang::BuiltinType::LongDouble:
         return convertFloatingType(Ctx.getTargetInfo().getLongDoubleFormat());
+      case clang::BuiltinType::Float128:
+        return convertFloatingType(Ctx.getTargetInfo().getFloat128Format());
 
       // nullptr_t -> void*
       case clang::BuiltinType::NullPtr:
@@ -548,17 +552,17 @@ namespace {
     }
 
     llvm::Type *convertFloatingType(const llvm::fltSemantics &format) {
-      if (&format == &llvm::APFloat::IEEEhalf)
+      if (&format == &llvm::APFloat::IEEEhalf())
         return llvm::Type::getHalfTy(IGM.getLLVMContext());
-      if (&format == &llvm::APFloat::IEEEsingle)
+      if (&format == &llvm::APFloat::IEEEsingle())
         return llvm::Type::getFloatTy(IGM.getLLVMContext());
-      if (&format == &llvm::APFloat::IEEEdouble)
+      if (&format == &llvm::APFloat::IEEEdouble())
         return llvm::Type::getDoubleTy(IGM.getLLVMContext());
-      if (&format == &llvm::APFloat::IEEEquad)
+      if (&format == &llvm::APFloat::IEEEquad())
         return llvm::Type::getFP128Ty(IGM.getLLVMContext());
-      if (&format == &llvm::APFloat::PPCDoubleDouble)
+      if (&format == &llvm::APFloat::PPCDoubleDouble())
         return llvm::Type::getPPC_FP128Ty(IGM.getLLVMContext());
-      if (&format == &llvm::APFloat::x87DoubleExtended)
+      if (&format == &llvm::APFloat::x87DoubleExtended())
         return llvm::Type::getX86_FP80Ty(IGM.getLLVMContext());
       llvm_unreachable("bad float format");
     }
@@ -672,7 +676,7 @@ namespace {
       Types.push_back(type);
     }
   };
-}
+} // end anonymous namespace
 
 static bool doesClangExpansionMatchSchema(IRGenModule &IGM,
                                           clang::CanQualType type,
@@ -731,6 +735,7 @@ llvm::Type *SignatureExpansion::expandExternalSignatureTypes() {
   case SILFunctionTypeRepresentation::Thick:
   case SILFunctionTypeRepresentation::Method:
   case SILFunctionTypeRepresentation::WitnessMethod:
+  case SILFunctionTypeRepresentation::Closure:
     llvm_unreachable("not a C representation");
   }
 
@@ -871,7 +876,6 @@ void SignatureExpansion::expand(SILParameterInfo param) {
   case ParameterConvention::Direct_Owned:
   case ParameterConvention::Direct_Unowned:
   case ParameterConvention::Direct_Guaranteed:
-  case ParameterConvention::Direct_Deallocating:
     switch (FnType->getLanguage()) {
     case SILFunctionLanguage::C: {
       llvm_unreachable("Unexpected C/ObjC method in parameter expansion!");
@@ -963,6 +967,7 @@ void SignatureExpansion::expandParameters() {
       case SILFunctionType::Representation::WitnessMethod:
       case SILFunctionType::Representation::ObjCMethod:
       case SILFunctionType::Representation::Thin:
+      case SILFunctionType::Representation::Closure:
         return FnType->hasErrorResult();
 
       case SILFunctionType::Representation::Thick:
@@ -1183,8 +1188,8 @@ void CallEmission::emitToMemory(Address addr,
   CanType substResultType = substFnType->getSILResult().getSwiftRValueType();
 
   if (origResultType->hasTypeParameter())
-    origResultType = IGF.IGM.getContextArchetypes()
-      .substDependentType(origResultType)
+    origResultType = IGF.IGM.getGenericEnvironment()
+      ->mapTypeIntoContext(IGF.getSwiftModule(), origResultType)
       ->getCanonicalType();
 
   if (origResultType != substResultType) {
@@ -1208,15 +1213,15 @@ void CallEmission::emitToExplosion(Explosion &out) {
   // If the call is naturally to memory, emit it that way and then
   // explode that temporary.
   if (LastArgWritten == 1) {
-    ContainedAddress ctemp = substResultTI.allocateStack(IGF, substResultType,
-                                                         "call.aggresult");
+    StackAddress ctemp = substResultTI.allocateStack(IGF, substResultType,
+                                                     false, "call.aggresult");
     Address temp = ctemp.getAddress();
     emitToMemory(temp, substResultTI);
  
     // We can use a take.
     substResultTI.loadAsTake(IGF, temp, out);
 
-    substResultTI.deallocateStack(IGF, ctemp.getContainer(), substResultType);
+    substResultTI.deallocateStack(IGF, ctemp, substResultType);
     return;
   }
 
@@ -1375,7 +1380,7 @@ static void emitCoerceAndExpand(IRGenFunction &IGF,
 
   // Otherwise, materialize to a temporary.
   Address temporary =
-    paramTI.allocateStack(IGF, paramTy, "coerce-and-expand.temp").getAddress();
+    paramTI.allocateStack(IGF, paramTy, false, "coerce-and-expand.temp").getAddress();
 
   auto coercionTyLayout = IGF.IGM.DataLayout.getStructLayout(coercionTy);
 
@@ -1434,7 +1439,7 @@ static void emitCoerceAndExpand(IRGenFunction &IGF,
     paramTI.loadAsTake(IGF, temporary, out);
   }
 
-  paramTI.deallocateStack(IGF, temporary, paramTy);
+  paramTI.deallocateStack(IGF, StackAddress(temporary), paramTy);
 }
 
 static void emitDirectExternalArgument(IRGenFunction &IGF,
@@ -1467,11 +1472,16 @@ static void emitDirectExternalArgument(IRGenFunction &IGF,
   }
 
   // Otherwise, we need to coerce through memory.
+  Address temporary;
+  Size tempSize;
+  std::tie(temporary, tempSize) =
+      allocateForCoercion(IGF, argTI.getStorageType(), toTy, "coerced-arg");
+  IGF.Builder.CreateLifetimeStart(temporary, tempSize);
 
   // Store to a temporary.
-  Address temporary = argTI.allocateStack(IGF, argType,
-                                          "coerced-arg").getAddress();
-  argTI.initializeFromParams(IGF, in, temporary, argType);
+  Address tempOfArgTy = IGF.Builder.CreateBitCast(
+      temporary, argTI.getStorageType()->getPointerTo());
+  argTI.initializeFromParams(IGF, in, tempOfArgTy, argType);
 
   // Bitcast the temporary to the expected type.
   Address coercedAddr =
@@ -1491,7 +1501,7 @@ static void emitDirectExternalArgument(IRGenFunction &IGF,
     out.add(IGF.Builder.CreateLoad(coercedAddr));
   }
 
-  argTI.deallocateStack(IGF, temporary, argType);
+  IGF.Builder.CreateLifetimeEnd(temporary, tempSize);
 }
 
 namespace {
@@ -1525,7 +1535,7 @@ namespace {
       IGF.Builder.CreateStore(value, addr);
     }
   };
-}
+} // end anonymous namespace
 
 /// Given a Swift value explosion in 'in', produce a Clang expansion
 /// (according to ABIArgInfo::Expand) in 'out'.
@@ -1541,7 +1551,7 @@ static void emitClangExpandedArgument(IRGenFunction &IGF,
   }
 
   // Otherwise, materialize to a temporary.
-  Address temp = swiftTI.allocateStack(IGF, swiftType,
+  Address temp = swiftTI.allocateStack(IGF, swiftType, false,
                                        "clang-expand-arg.temp").getAddress();
   swiftTI.initialize(IGF, in, temp);
 
@@ -1563,7 +1573,7 @@ void irgen::emitClangExpandedParameter(IRGenFunction &IGF,
   }
 
   // Otherwise, materialize to a temporary.
-  Address temp = swiftTI.allocateStack(IGF, swiftType,
+  Address temp = swiftTI.allocateStack(IGF, swiftType, false,
                                        "clang-expand-param.temp").getAddress();
   Address castTemp = IGF.Builder.CreateBitCast(temp, IGF.IGM.Int8PtrTy);
   ClangExpandStoreEmitter(IGF, in).visit(clangType, castTemp);
@@ -1646,7 +1656,7 @@ static void externalizeArguments(IRGenFunction &IGF, const Callee &callee,
     }
     case clang::CodeGen::ABIArgInfo::Indirect: {
       auto &ti = cast<LoadableTypeInfo>(IGF.getTypeInfo(paramType));
-      Address addr = ti.allocateStack(IGF, paramType,
+      Address addr = ti.allocateStack(IGF, paramType, false,
                                       "indirect-temporary").getAddress();
       ti.initialize(IGF, in, addr);
 
@@ -1773,7 +1783,7 @@ static void emitDirectForeignParameter(IRGenFunction &IGF,
 
   // Deallocate the temporary.
   // `deallocateStack` emits the lifetime.end marker for us.
-  paramTI.deallocateStack(IGF, temporary, paramType);
+  paramTI.deallocateStack(IGF, StackAddress(temporary), paramType);
 }
 
 void irgen::emitForeignParameter(IRGenFunction &IGF, Explosion &params,
@@ -1856,6 +1866,7 @@ void CallEmission::setArgs(Explosion &arg, WitnessMetadata *witnessMetadata) {
     Args.rbegin()[0] = witnessMetadata->SelfWitnessTable;
     SWIFT_FALLTHROUGH;
 
+  case SILFunctionTypeRepresentation::Closure:
   case SILFunctionTypeRepresentation::Method:
   case SILFunctionTypeRepresentation::Thin:
   case SILFunctionTypeRepresentation::Thick: {

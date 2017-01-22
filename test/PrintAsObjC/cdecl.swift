@@ -1,16 +1,14 @@
 // RUN: rm -rf %t
 // RUN: mkdir -p %t
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -enable-source-import -emit-module -emit-module-doc -o %t %s -disable-objc-attr-requires-foundation-module
-// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -parse-as-library %t/cdecl.swiftmodule -parse -emit-objc-header-path %t/cdecl.h -import-objc-header %S/../Inputs/empty.h -disable-objc-attr-requires-foundation-module
+// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -parse-as-library %t/cdecl.swiftmodule -typecheck -emit-objc-header-path %t/cdecl.h -import-objc-header %S/../Inputs/empty.h -disable-objc-attr-requires-foundation-module
 // RUN: %FileCheck %s < %t/cdecl.h
 // RUN: %check-in-clang %t/cdecl.h
 // RUN: %check-in-clang -fno-modules -Qunused-arguments %t/cdecl.h -include Foundation.h -include ctypes.h -include CoreFoundation.h
 
 // REQUIRES: objc_interop
 
-// CHECK: /**
-// CHECK-NEXT: What a nightmare!
-// CHECK: */
+// CHECK: /// What a nightmare!
 // CHECK-LABEL: double (^ _Nonnull block_nightmare(SWIFT_NOESCAPE float (^ _Nonnull x)(NSInteger)))(char);
 
 /// What a nightmare!

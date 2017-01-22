@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -82,8 +82,8 @@ struct LLVM_LIBRARY_VISIBILITY LValueWriteback {
     component->writeback(gen, loc, base, materialized, isFinal);
   }
 };
-}
-}
+} // namespace Lowering
+} // namespace swift
 
 namespace {
   class LValueWritebackCleanup : public Cleanup {
@@ -94,7 +94,7 @@ namespace {
       gen.getWritebackStack()[Depth].performWriteback(gen, /*isFinal*/ false);
     }
   };
-}
+} // end anonymous namespace
 
 std::vector<LValueWriteback> &SILGenFunction::getWritebackStack() {
   if (!WritebackStack)
@@ -558,7 +558,7 @@ namespace {
       OS << "ValueComponent()\n";
     }
   };
-} // end anonymous namespace.
+} // end anonymous namespace
 
 static bool isReadNoneFunction(const Expr *e) {
   // If this is a curried call to an integer literal conversion operations, then
@@ -831,10 +831,11 @@ namespace {
         return true;
       }
 
-      // If the declaration is dynamically dispatched through a protocol,
-      // we have to use materializeForSet.
-      if (isa<ProtocolDecl>(decl->getDeclContext()))
-        return true;
+      // If the declaration is dynamically dispatched through a
+      // non-ObjC protocol, we have to use materializeForSet.
+      if (auto *protoDecl = dyn_cast<ProtocolDecl>(decl->getDeclContext()))
+        if (!protoDecl->isObjC())
+          return true;
 
       return false;
     }
@@ -880,8 +881,8 @@ namespace {
           CanType type = subscripts.getType();
           SmallVector<ManagedValue, 4> values;
           std::move(subscripts).getAll(values);
-          subscripts = RValue(values, type);
-          borrowedSubscripts = RValue(values, type);
+          subscripts = RValue::withPreExplodedElements(values, type);
+          borrowedSubscripts = RValue::withPreExplodedElements(values, type);
           optSubscripts = &borrowedSubscripts;
         }
         return new GetterSetterComponent(decl, IsSuper, IsDirectAccessorUse,
@@ -957,8 +958,8 @@ namespace {
         auto rawPointerTy = SILType::getRawPointerType(ctx);
 
         // The callback is a BB argument from the switch_enum.
-        SILValue callback =
-          writebackBB->createBBArg(rawPointerTy);
+        SILValue callback = writebackBB->createPHIArgument(
+            rawPointerTy, ValueOwnershipKind::Trivial);
 
         // Cast the callback to the correct polymorphic function type.
         auto origCallbackFnType = gen.SGM.Types.getMaterializeForSetCallbackType(
@@ -967,7 +968,7 @@ namespace {
         callback = gen.B.createPointerToThinFunction(loc, callback, origCallbackType);
 
         auto substCallbackFnType = origCallbackFnType->substGenericArgs(
-            M, M.getSwiftModule(), substitutions);
+            M, substitutions);
         auto substCallbackType = SILType::getPrimitiveObjectType(substCallbackFnType);
         auto metatypeType = substCallbackFnType->getParameters().back().getSILType();
 
@@ -987,7 +988,8 @@ namespace {
                                             baseFormalType);
 
             baseAddress = gen.emitTemporaryAllocation(loc, base.getType());
-            gen.B.createStore(loc, base.getValue(), baseAddress);
+            gen.B.emitStoreValueOperation(loc, base.getValue(), baseAddress,
+                                          StoreOwnershipQualifier::Init);
           }
           baseMetatype = gen.B.createMetatype(loc, metatypeType);
 
@@ -1169,7 +1171,8 @@ namespace {
       // 'base').  If it isn't, we actually need to retain it, because
       // we've still got a release active.
       SILValue baseValue = (isFinal ? base.forward(gen) : base.getValue());
-      if (!isFinal) gen.B.createRetainValue(loc, baseValue, Atomicity::Atomic);
+      if (!isFinal)
+        baseValue = gen.B.createCopyValue(loc, baseValue);
 
       gen.B.createStrongUnpin(loc, baseValue, Atomicity::Atomic);
     }
@@ -1249,7 +1252,7 @@ namespace {
       printBase(OS, "AddressorComponent");
     }
   };
-} // end anonymous namespace.
+} // end anonymous namespace
 
 RValue
 TranslationPathComponent::get(SILGenFunction &gen, SILLocation loc,
@@ -1406,7 +1409,7 @@ namespace {
       OS << "OwnershipComponent(...)\n";
     }
   };
-} // end anonymous namespace.
+} // end anonymous namespace
 
 LValue LValue::forValue(ManagedValue value,
                         CanType substFormalType) {
@@ -1575,15 +1578,12 @@ LValue SILGenLValue::visitExpr(Expr *e, AccessKind accessKind) {
   llvm_unreachable("unimplemented lvalue expr");
 }
 
-static ArrayRef<Substitution>
-getNonMemberVarDeclSubstitutions(SILGenModule &SGM, VarDecl *var) {
+ArrayRef<Substitution>
+SILGenModule::getNonMemberVarDeclSubstitutions(VarDecl *var) {
   ArrayRef<Substitution> substitutions;
   auto *dc = var->getDeclContext();
-  if (auto *genericEnv = dc->getGenericEnvironmentOfContext()) {
-    auto *genericSig = dc->getGenericSignatureOfContext();
-    substitutions = genericEnv->getForwardingSubstitutions(
-        SGM.SwiftModule, genericSig);
-  }
+  if (auto *genericEnv = dc->getGenericEnvironmentOfContext())
+    substitutions = genericEnv->getForwardingSubstitutions();
   return substitutions;
 }
 
@@ -1598,7 +1598,7 @@ addNonMemberVarDeclAddressorComponent(SILGenModule &SGM, VarDecl *var,
   auto typeData = getPhysicalStorageTypeData(SGM, var, formalRValueType);
   SILType storageType = SGM.Types.getLoweredType(var->getType()).getAddressType();
   lvalue.add<AddressorComponent>(var, /*isSuper=*/ false, /*direct*/ true,
-                                 getNonMemberVarDeclSubstitutions(SGM, var),
+                                 SGM.getNonMemberVarDeclSubstitutions(var),
                                  CanType(), typeData, storageType);
 }
 
@@ -1629,7 +1629,7 @@ static LValue emitLValueForNonMemberVarDecl(SILGenFunction &gen,
   case AccessStrategy::DirectToAccessor: {
     auto typeData = getLogicalStorageTypeData(gen.SGM, formalRValueType);
     lv.add<GetterSetterComponent>(var, /*isSuper=*/false, /*direct*/ true,
-                                  getNonMemberVarDeclSubstitutions(gen.SGM, var),
+                                  gen.SGM.getNonMemberVarDeclSubstitutions(var),
                                   CanType(), typeData);
     break;
   }
@@ -1670,9 +1670,8 @@ LValue SILGenLValue::visitDiscardAssignmentExpr(DiscardAssignmentExpr *e,
   SILValue address = gen.emitTemporaryAllocation(e, typeData.TypeOfRValue);
   address = gen.B.createMarkUninitialized(e, address,
                                           MarkUninitializedInst::Var);
-  gen.enterDestroyCleanup(address);
   LValue lv;
-  lv.add<ValueComponent>(ManagedValue::forUnmanaged(address), typeData);
+  lv.add<ValueComponent>(gen.emitManagedBufferWithCleanup(address), typeData);
   return lv;
 }
 
@@ -2117,7 +2116,7 @@ ManagedValue SILGenFunction::emitLoad(SILLocation loc, SILValue addr,
   // we can perform a +0 load of the address instead of materializing a +1
   // value.
   if (isPlusZeroOk && addrTL.getLoweredType() == rvalueTL.getLoweredType()) {
-    return ManagedValue::forUnmanaged(B.createLoad(loc, addr));
+    return ManagedValue::forUnmanaged(B.createLoadBorrow(loc, addr));
   }
 
   // Load the loadable value, and retain it if we aren't taking it.
@@ -2128,10 +2127,11 @@ ManagedValue SILGenFunction::emitLoad(SILLocation loc, SILValue addr,
 static void emitUnloweredStoreOfCopy(SILGenBuilder &B, SILLocation loc,
                                      SILValue value, SILValue addr,
                                      IsInitialization_t isInit) {
-  if (isInit)
-    B.createStore(loc, value, addr);
-  else
+  if (isInit) {
+    B.emitStoreValueOperation(loc, value, addr, StoreOwnershipQualifier::Init);
+  } else {
     B.createAssign(loc, value, addr);
+  }
 }
 
 SILValue SILGenFunction::emitConversionToSemanticRValue(SILLocation loc,
@@ -2157,8 +2157,8 @@ SILValue SILGenFunction::emitConversionToSemanticRValue(SILLocation loc,
   if (auto unmanagedType = src->getType().getAs<UnmanagedStorageType>()) {
     auto result = B.createUnmanagedToRef(loc, src,
               SILType::getPrimitiveObjectType(unmanagedType.getReferentType()));
-    B.createStrongRetain(loc, result, Atomicity::Atomic);
-    return result;
+    // SEMANTIC ARC TODO: Does this need a cleanup?
+    return B.createCopyValue(loc, result);
   }
 
   llvm_unreachable("unexpected storage type that differs from type-of-rvalue");
@@ -2185,7 +2185,8 @@ static SILValue emitLoadOfSemanticRValue(SILGenFunction &gen,
       return gen.B.createLoadUnowned(loc, src, isTake);
     }
 
-    auto unownedValue = gen.B.createLoad(loc, src);
+    auto unownedValue =
+        gen.B.emitLoadValueOperation(loc, src, LoadOwnershipQualifier::Take);
     gen.B.createStrongRetainUnowned(loc, unownedValue, Atomicity::Atomic);
     if (isTake)
       gen.B.createUnownedRelease(loc, unownedValue, Atomicity::Atomic);
@@ -2196,16 +2197,16 @@ static SILValue emitLoadOfSemanticRValue(SILGenFunction &gen,
 
   // For @unowned(unsafe) types, we need to strip the unmanaged box.
   if (auto unmanagedType = src->getType().getAs<UnmanagedStorageType>()) {
-    auto value = gen.B.createLoad(loc, src);
+    auto value = gen.B.createLoad(loc, src, LoadOwnershipQualifier::Trivial);
     auto result = gen.B.createUnmanagedToRef(loc, value,
             SILType::getPrimitiveObjectType(unmanagedType.getReferentType()));
-    gen.B.createStrongRetain(loc, result, Atomicity::Atomic);
-    return result;
+    // SEMANTIC ARC TODO: Does this need a cleanup?
+    return gen.B.createCopyValue(loc, result);
   }
 
   // NSString * must be bridged to String.
   if (storageType.getSwiftRValueType() == gen.SGM.Types.getNSStringType()) {
-    auto nsstr = gen.B.createLoad(loc, src);
+    auto nsstr = gen.B.createLoad(loc, src, LoadOwnershipQualifier::Copy);
     auto str = gen.emitBridgedToNativeValue(loc,
                                 ManagedValue::forUnmanaged(nsstr),
                                 SILFunctionTypeRepresentation::CFunctionPointer,
@@ -2233,7 +2234,7 @@ static void emitStoreOfSemanticRValue(SILGenFunction &gen,
     gen.B.createStoreWeak(loc, value, dest, isInit);
 
     // store_weak doesn't take ownership of the input, so cancel it out.
-    gen.B.emitReleaseValueAndFold(loc, value);
+    gen.B.emitDestroyValueOperation(loc, value);
     return;
   }
 
@@ -2245,7 +2246,7 @@ static void emitStoreOfSemanticRValue(SILGenFunction &gen,
       gen.B.createStoreUnowned(loc, value, dest, isInit);
 
       // store_unowned doesn't take ownership of the input, so cancel it out.
-      gen.B.emitStrongReleaseAndFold(loc, value);
+      gen.B.emitDestroyValueOperation(loc, value);
       return;
     }
 
@@ -2253,7 +2254,7 @@ static void emitStoreOfSemanticRValue(SILGenFunction &gen,
       gen.B.createRefToUnowned(loc, value, storageType.getObjectType());
     gen.B.createUnownedRetain(loc, unownedValue, Atomicity::Atomic);
     emitUnloweredStoreOfCopy(gen.B, loc, unownedValue, dest, isInit);
-    gen.B.emitStrongReleaseAndFold(loc, value);
+    gen.B.emitDestroyValueOperation(loc, value);
     return;
   }
 
@@ -2263,7 +2264,7 @@ static void emitStoreOfSemanticRValue(SILGenFunction &gen,
     auto unmanagedValue =
       gen.B.createRefToUnmanaged(loc, value, storageType.getObjectType());
     emitUnloweredStoreOfCopy(gen.B, loc, unmanagedValue, dest, isInit);
-    gen.B.emitStrongReleaseAndFold(loc, value);
+    gen.B.emitDestroyValueOperation(loc, value);
     return;
   }
 
@@ -2353,7 +2354,7 @@ SILValue SILGenFunction::emitConversionFromSemanticValue(SILLocation loc,
 
     SILValue unowned = B.createRefToUnowned(loc, semanticValue, storageType);
     B.createUnownedRetain(loc, unowned, Atomicity::Atomic);
-    B.emitStrongReleaseAndFold(loc, semanticValue);
+    B.emitDestroyValueOperation(loc, semanticValue);
     return unowned;
   }
 
@@ -2361,7 +2362,7 @@ SILValue SILGenFunction::emitConversionFromSemanticValue(SILLocation loc,
   if (storageType.is<UnmanagedStorageType>()) {
     SILValue unmanaged =
       B.createRefToUnmanaged(loc, semanticValue, storageType);
-    B.emitStrongReleaseAndFold(loc, semanticValue);
+    B.emitDestroyValueOperation(loc, semanticValue);
     return unmanaged;
   }
   
