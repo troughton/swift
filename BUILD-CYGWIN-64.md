@@ -31,6 +31,20 @@ Patch gcc header
 -void    _EXFUN(encrypt, (char *__block, int __edflag)); 
 +void    _EXFUN(encrypt, (char *, int __edflag));
 ```
+```
+  $ cd /usr/lib/gcc/i686-pc-cygwin
+  $ ln -s 5.4.0 4.7.3
+  $ cd /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++
+  $ ln -s x86_64-pc-cygwin i686-pc-cygwin
+
+  $ vi /usr/lib/gcc/i686-pc-cygwin/4.7.3/include/c++/type_traits
+    //#if !defined(__STRICT_ANSI__) && defined(_GLIBCXX_USE_FLOAT128)
+    #if 0
+      template<>
+        struct __is_floating_point_helper<__float128>
+        : public true_type { };
+    #endif
+```
 
 Download sources
 ----------------

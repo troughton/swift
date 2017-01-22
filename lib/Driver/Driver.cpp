@@ -2234,6 +2234,7 @@ void Driver::printHelp(bool ShowHidden) const {
                       IncludedFlagsBitmask, ExcludedFlagsBitmask);
 }
 
+#if 0
 static llvm::Triple computeTargetTriple(StringRef DefaultTargetTriple) {
   return llvm::Triple(DefaultTargetTriple); 
 }
@@ -2277,3 +2278,4 @@ const ToolChain *Driver::getToolChain(const ArgList &Args) const {
   }
   return TC;
 }
+#endif
