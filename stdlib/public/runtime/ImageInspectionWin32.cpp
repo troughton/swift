@@ -219,7 +219,8 @@ void swift::initializeTypeMetadataRecordLookup() {
 
 
 int swift::lookupSymbol(const void *address, SymbolInfo *info) {
-#if defined(__CYGWIN__)
+//#if defined(__CYGWIN__)
+#if 0
   Dl_info dlinfo;
   if (dladdr(address, &dlinfo) == 0) {
     return 0;

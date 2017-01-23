@@ -353,11 +353,6 @@ module SwiftGlibc [system] {
       }
 % end
 
-      module file {
-        header "${GLIBC_ARCH_INCLUDE_PATH}/sys/file.h"
-        export *
-      }
-
       module ipc {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/ipc.h"
         export *

@@ -530,7 +530,7 @@ extension ${Self} {
 %     (lower, upper) = getFtoIBounds(floatBits=srcBits, intBits=int(bits), signed=signed)
 
 %     if srcBits == 80:
-#if !os(Windows) && (arch(i386) || arch(x86_64))
+#if (!os(Windows) || CYGWIN) && (arch(i386) || arch(x86_64))
 %     end
 
   /// Creates a new instance by rounding the given floating-point value toward

@@ -37,13 +37,6 @@ Patch gcc header
   $ cd /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++
   $ ln -s x86_64-pc-cygwin i686-pc-cygwin
 
-  $ vi /usr/lib/gcc/i686-pc-cygwin/4.7.3/include/c++/type_traits
-    //#if !defined(__STRICT_ANSI__) && defined(_GLIBCXX_USE_FLOAT128)
-    #if 0
-      template<>
-        struct __is_floating_point_helper<__float128>
-        : public true_type { };
-    #endif
 ```
 
 Download sources

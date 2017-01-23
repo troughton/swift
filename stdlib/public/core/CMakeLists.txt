@@ -179,7 +179,7 @@ else()
   #  -Wl,--whole-archive swiftRuntime -Wl,--no-whole-archive)
   if("${SWIFT_PATH_TO_LIBICU_BUILD}" STREQUAL "")
     list(APPEND swift_core_private_link_libraries
-      ICU_UC ICU_I18N)
+      ${ICU_UC_LIBRARY} ${ICU_I18N_LIBRARY})
   else()
     list(APPEND swift_core_private_link_libraries -licui18n -licuuc -licudata)
   endif()
