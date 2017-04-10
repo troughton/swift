@@ -34,4 +34,4 @@ let y = inlined(x)
 use(y)
 
 // Check if the inlined and removed function still has the correct linkage name.
-// CHECK-DAG: !DISubprogram(name: "inlined", linkageName: "_TF4main7inlinedFVs5Int64S0_"
+// CHECK-DAG: !DISubprogram(name: "inlined", linkageName: "_T04main7inlineds5Int64VADF"

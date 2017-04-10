@@ -21,10 +21,10 @@
 
 #define DEBUG_TYPE "sil-func-extractor"
 #include "swift/Strings.h"
-#include "swift/Basic/Demangle.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/LLVMInitialize.h"
-#include "swift/Basic/ManglingMacros.h"
+#include "swift/Demangling/Demangle.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "swift/Frontend/DiagnosticVerifier.h"
 #include "swift/Frontend/Frontend.h"
 #include "swift/Frontend/PrintingDiagnosticConsumer.h"
@@ -115,6 +115,11 @@ static llvm::cl::opt<bool> AssumeUnqualifiedOwnershipWhenParsing(
     "assume-parsing-unqualified-ownership-sil", llvm::cl::Hidden,
     llvm::cl::init(false),
     llvm::cl::desc("Assume all parsed functions have unqualified ownership"));
+
+static llvm::cl::opt<bool>
+DisableSILLinking("disable-sil-linking",
+                  llvm::cl::init(true),
+                  llvm::cl::desc("Disable SIL linking"));
 
 // This function isn't referenced outside its translation unit, but it
 // can't use the "static" keyword because its address is used for
@@ -207,7 +212,7 @@ void removeUnwantedFunctions(SILModule *M, ArrayRef<std::string> MangledNames,
   // After running this pass all of the functions we will remove
   // should consist only of one basic block terminated by
   // UnreachableInst.
-  performSILDiagnoseUnreachable(M);
+  performSILDiagnoseUnreachable(M, nullptr);
 
   // Now mark all of these functions as public and remove their bodies.
   for (auto &F : DeadFunctions) {
@@ -303,7 +308,7 @@ int main(int argc, char **argv) {
     std::unique_ptr<SerializedSILLoader> SL = SerializedSILLoader::create(
         CI.getASTContext(), CI.getSILModule(), nullptr);
 
-    if (extendedInfo.isSIB())
+    if (extendedInfo.isSIB() || DisableSILLinking)
       SL->getAllForModule(CI.getMainModule()->getName(), nullptr);
     else
       SL->getAll();

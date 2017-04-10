@@ -92,8 +92,7 @@ SILInstruction *SILCombiner::optimizeBuiltinCanBeObjCClass(BuiltinInst *BI) {
 }
 
 static unsigned getTypeWidth(SILType Ty) {
-  if (auto BuiltinIntTy =
-          dyn_cast<BuiltinIntegerType>(Ty.getSwiftRValueType())) {
+  if (auto BuiltinIntTy = Ty.getAs<BuiltinIntegerType>()) {
     if (BuiltinIntTy->isFixedWidth()) {
       return BuiltinIntTy->getFixedWidth();
     }
@@ -289,7 +288,8 @@ static SILInstruction *createIndexAddrFrom(IndexRawPointerInst *I,
 
   // index_raw_pointer's address type is currently always strict.
   auto *NewPTAI = Builder.createPointerToAddress(
-    I->getLoc(), Ptr, InstanceType.getAddressType(), /*isStrict*/ true);
+    I->getLoc(), Ptr, InstanceType.getAddressType(),
+    /*isStrict*/ true, /*isInvariant*/ false);
 
   auto *DistanceAsWord =
       Builder.createBuiltin(I->getLoc(), TruncOrBitCast->getName(),
@@ -496,7 +496,7 @@ SILInstruction *SILCombiner::visitBuiltinInst(BuiltinInst *I) {
       [](const APInt &i) -> bool { return false; }           /* isZero */,
       Builder, this);
   case BuiltinValueKind::DestroyArray: {
-    ArrayRef<Substitution> Substs = I->getSubstitutions();
+    SubstitutionList Substs = I->getSubstitutions();
     // Check if the element type is a trivial type.
     if (Substs.size() == 1) {
       Substitution Subst = Substs[0];

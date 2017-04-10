@@ -1,3 +1,4 @@
+from __future__ import print_function
 
 import os
 import subprocess
@@ -14,7 +15,8 @@ def br_call(args, dry_run=DRY_RUN, echo=ECHO_CALLS):
         print('BRCALL: ' + ' '.join(args))
     if dry_run:
         return {'exit_code': 0, 'fingerprint': ''}
-    return subprocess_utils.call_fingerprint(args, echo_stderr=not SQUELCH_STDERR)
+    return subprocess_utils.call_fingerprint(args,
+                                             echo_stderr=not SQUELCH_STDERR)
 
 
 # We use this since our squelching of stderr can hide missing file errors.
@@ -205,7 +207,10 @@ class SILFuncExtractorInvoker(SILConstantInputToolInvoker):
     def _invoke(self, input_file, funclist_path, output_filename,
                 invert=False):
         assert(isinstance(funclist_path, str))
-        cmdline = self._cmdline(input_file, funclist_path, True, output_filename,
+        cmdline = self._cmdline(input_file,
+                                funclist_path,
+                                True,
+                                output_filename,
                                 invert)
         return br_call(cmdline)
 

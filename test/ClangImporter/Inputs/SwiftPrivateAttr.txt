@@ -9,13 +9,21 @@ class Foo : NSObject, __PrivProto {
   func __oneArg(_ arg: Int32)
   func __twoArgs(_ arg: Int32, other arg2: Int32)
   class func __withNoArgs() -> Self!
+  @available(*, unavailable, renamed: "init(__oneArg:)", message: "Not available in Swift")
+  class func __fooWithOneArg(_ arg: Int32) -> Self!
   convenience init!(__oneArg arg: Int32)
+  @available(*, unavailable, renamed: "init(__twoArgs:other:)", message: "Not available in Swift")
+  class func __fooWithTwoArgs(_ arg: Int32, other arg2: Int32) -> Self!
   convenience init!(__twoArgs arg: Int32, other arg2: Int32)
+  @available(*, unavailable, renamed: "init(__:)", message: "Not available in Swift")
+  class func __foo(_ arg: Int32) -> Self!
   convenience init!(__ arg: Int32)
   func objectForKeyedSubscript(_ index: Any!) -> Any!
   func __setObject(_ object: Any!, forKeyedSubscript index: Any!)
   func __objectAtIndexedSubscript(_ index: Int32) -> Any!
   func setObject(_ object: Any!, atIndexedSubscript index: Int32)
+  @available(swift, obsoleted: 3, renamed: "__withNoArgs()")
+  class func __fooWithNoArgs() -> Self!
   init()
 }
 class Bar : NSObject {
@@ -75,6 +83,8 @@ enum NSEnum : Int {
   init?(rawValue: Int)
   var rawValue: Int { get }
   case __privA
+  @available(swift, obsoleted: 3, renamed: "__privA")
+  static var __PrivA: NSEnum { get }
   case B
 }
 struct __PrivNSOptions : OptionSet {
@@ -86,9 +96,15 @@ struct NSOptions : OptionSet {
   init(rawValue: Int)
   let rawValue: Int
   static var __privA: NSOptions { get }
+  @available(swift, obsoleted: 3, renamed: "__privA")
+  static var __PrivA: NSOptions { get }
   static var B: NSOptions { get }
 }
+@available(swift, obsoleted: 3, renamed: "__PrivCFType")
+typealias __PrivCFTypeRef = __PrivCFType
 class __PrivCFType {
 }
+@available(swift, obsoleted: 3, renamed: "__PrivCFSub")
+typealias __PrivCFSubRef = __PrivCFSub
 typealias __PrivCFSub = __PrivCFType
 typealias __PrivInt = Int32

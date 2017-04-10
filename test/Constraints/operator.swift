@@ -6,7 +6,7 @@ do {
   let a: String? = "a"
   let b: String? = "b"
   let c: String? = "c"
-  let d: String? = a! + b! + c!
+  let _: String? = a! + b! + c!
 
   let x: Double = 1
   _ = x + x + x
@@ -132,3 +132,9 @@ extension P3 {
 }
 
 struct S3 : P3, Equatable { }
+
+// rdar://problem/30220565
+func shrinkTooFar(_ : Double, closure : ()->()) {}
+func testShrinkTooFar() {
+  shrinkTooFar(0*0*0) {}
+}

@@ -1,14 +1,15 @@
+from __future__ import print_function
 
 import md5
 import os
 import sys
 
-import swift_tools
-
 import list_reducer
 from list_reducer import TESTRESULT_KEEPPREFIX
 from list_reducer import TESTRESULT_KEEPSUFFIX
 from list_reducer import TESTRESULT_NOFAILURE
+
+import swift_tools
 
 
 class ReduceMiscompilingFunctions(list_reducer.ListReducer):
@@ -126,8 +127,8 @@ list of function given a specific pass that causes the perf pipeline to crash
     input_file = args.input_file
     extra_args = args.extra_args
     sil_opt_invoker = swift_tools.SILOptInvoker(config, tools,
-                                                      input_file,
-                                                      extra_args)
+                                                input_file,
+                                                extra_args)
 
     # Make sure that the base case /does/ crash.
     filename = sil_opt_invoker.get_suffixed_filename('base_case')

@@ -13,6 +13,9 @@
 #define DEBUG_TYPE "diagnose-unreachable"
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/AST/DiagnosticsSIL.h"
+#include "swift/AST/Expr.h"
+#include "swift/AST/Pattern.h"
+#include "swift/AST/Stmt.h"
 #include "swift/SIL/SILArgument.h"
 #include "swift/SIL/SILBuilder.h"
 #include "swift/SIL/SILUndef.h"
@@ -416,14 +419,7 @@ static SILInstruction *getAsCallToNoReturn(SILInstruction *I) {
       return AI;
   
   if (auto *BI = dyn_cast<BuiltinInst>(I)) {
-    // TODO: We should have an "isNoReturn" bit on Swift's BuiltinInfo, but for
-    // now, let's recognize noreturn intrinsics and builtins specially here.
-    if (BI->getIntrinsicInfo().hasAttribute(llvm::Attribute::NoReturn))
-      return BI;
-    if (BI->getBuiltinInfo().ID == BuiltinValueKind::Unreachable
-        || BI->getBuiltinInfo().ID == BuiltinValueKind::CondUnreachable
-        || BI->getBuiltinInfo().ID == BuiltinValueKind::UnexpectedError
-        || BI->getBuiltinInfo().ID == BuiltinValueKind::ErrorInMain)
+    if (BI->getModule().isNoReturnBuiltinOrIntrinsic(BI->getName()))
       return BI;
   }
   return nullptr;
@@ -731,7 +727,8 @@ static bool removeUnreachableBlocks(SILFunction &F, SILModule &M,
 /// diagnose any user code after it as being unreachable.  This pass happens
 /// before the definite initialization pass so that it doesn't see infeasible
 /// control flow edges.
-static void performNoReturnFunctionProcessing(SILModule *M) {
+static void performNoReturnFunctionProcessing(SILModule *M,
+                                              SILModuleTransform *T) {
   for (auto &Fn : *M) {
     DEBUG(llvm::errs() << "*** No return function processing: "
           << Fn.getName() << "\n");
@@ -741,10 +738,11 @@ static void performNoReturnFunctionProcessing(SILModule *M) {
       // function.
       simplifyBlocksWithCallsToNoReturn(BB, nullptr);
     }
+    T->invalidateAnalysis(&Fn, SILAnalysis::InvalidationKind::FunctionBody);
   }
 }
 
-void swift::performSILDiagnoseUnreachable(SILModule *M) {
+void swift::performSILDiagnoseUnreachable(SILModule *M, SILModuleTransform *T) {
   for (auto &Fn : *M) {
     DEBUG(llvm::errs() << "*** Diagnose Unreachable processing: "
           << Fn.getName() << "\n");
@@ -782,14 +780,16 @@ void swift::performSILDiagnoseUnreachable(SILModule *M) {
 
     // Remove unreachable blocks.
     removeUnreachableBlocks(Fn, *M, &State);
+
+    if (T)
+      T->invalidateAnalysis(&Fn, SILAnalysis::InvalidationKind::FunctionBody);
   }
 }
 
 namespace {
   class NoReturnFolding : public SILModuleTransform {
     void run() override {
-      performNoReturnFunctionProcessing(getModule());
-      invalidateAnalysis(SILAnalysis::InvalidationKind::FunctionBody);
+      performNoReturnFunctionProcessing(getModule(), this);
     }
     
     StringRef getName() override { return "NoReturnFolding"; }
@@ -804,8 +804,7 @@ SILTransform *swift::createNoReturnFolding() {
 namespace {
   class DiagnoseUnreachable : public SILModuleTransform {
     void run() override {
-      performSILDiagnoseUnreachable(getModule());
-      invalidateAnalysis(SILAnalysis::InvalidationKind::FunctionBody);
+      performSILDiagnoseUnreachable(getModule(), this);
     }
 
     StringRef getName() override { return "Diagnose Unreachable"; }

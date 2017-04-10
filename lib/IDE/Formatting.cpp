@@ -10,7 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "swift/AST/AST.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/SourceEntityWalker.h"
 #include "swift/Parse/Parser.h"
@@ -420,7 +419,7 @@ public:
       } else if (auto *Seq = dyn_cast_or_null<SequenceExpr>(Cursor->getAsExpr())) {
         ArrayRef<Expr*> Elements = Seq->getElements();
         if (Elements.size() == 3 &&
-            Elements[1]->getKind() == ExprKind::Assign &&
+            isa<AssignExpr>(Elements[1]) &&
             SM.getLineAndColumn(Elements[2]->getEndLoc()).first == Line) {
               return false;
         }
@@ -576,16 +575,6 @@ class FormatWalker : public SourceEntityWalker {
       }
 
       if (auto AFD = dyn_cast_or_null<AbstractFunctionDecl>(Node.dyn_cast<Decl*>())) {
-
-        // Generic type params are siblings to align.
-        if (auto GPL = AFD->getGenericParams()) {
-          const auto Params = GPL->getParams();
-          for (unsigned I = 0, N = Params.size(); I < N; I++) {
-            addPair(Params[I]->getEndLoc(), FindAlignLoc(Params[I]->getStartLoc()),
-                    tok::comma);
-          }
-        }
-
         // Function parameters are siblings.
         for (auto P : AFD->getParameterLists()) {
           for (ParamDecl* param : *P) {

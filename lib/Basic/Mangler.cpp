@@ -10,112 +10,24 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define CHECK_MANGLING_AGAINST_OLD
-
 #include "swift/Basic/Mangler.h"
-#include "swift/Basic/Punycode.h"
-#include "swift/Basic/ManglingMacros.h"
+#include "swift/Demangling/Demangler.h"
+#include "swift/Demangling/Punycode.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/CommandLine.h"
-#ifdef CHECK_MANGLING_AGAINST_OLD
-#include "swift/Basic/Demangle.h"
-#include "swift/Basic/DemangleWrappers.h"
-#endif
 #include <algorithm>
 
 using namespace swift;
-using namespace NewMangling;
-
-bool NewMangling::useNewMangling() {
-#ifdef USE_NEW_MANGLING
-  return true;
-#else
-  return false;
-#endif
-}
+using namespace Mangle;
 
 #ifndef NDEBUG
+
 llvm::cl::opt<bool> PrintSwiftManglingStats(
     "print-swift-mangling-stats", llvm::cl::init(false),
     llvm::cl::desc("Print statistics about Swift symbol mangling"));
 
 namespace {
-
-#ifdef CHECK_MANGLING_AGAINST_OLD
-
-static bool areTreesEqual(Demangle::NodePointer Old, Demangle::NodePointer New) {
-  if ((Old != nullptr) != (New != nullptr))
-    return false;
-  if (!Old)
-    return true;
-
-  if (Old->getKind() == Demangle::Node::Kind::CurryThunk)
-    Old = Old->getFirstChild();
-  if (New->getKind() == Demangle::Node::Kind::CurryThunk)
-    New = New->getFirstChild();
-
-  if (Old->getKind() != New->getKind()) {
-    if (Old->getKind() != Demangle::Node::Kind::UncurriedFunctionType ||
-        New->getKind() != Demangle::Node::Kind::FunctionType)
-      return false;
-  }
-  if (Old->hasText() != New->hasText())
-    return false;
-  if (Old->hasIndex() != New->hasIndex())
-    return false;
-  if (Old->hasText() && Old->getText() != New->getText())
-    return false;
-  if (Old->hasIndex() && Old->getIndex() != New->getIndex())
-    return false;
-
-  size_t OldNum = Old->getNumChildren();
-  size_t NewNum = New->getNumChildren();
-
-  if (OldNum >= 1 && NewNum == 1 &&
-      Old->getChild(OldNum - 1)->getKind() == Demangle::Node::Kind::Suffix) {
-    switch (New->getFirstChild()->getKind()) {
-      case Demangle::Node::Kind::ReflectionMetadataBuiltinDescriptor:
-      case Demangle::Node::Kind::ReflectionMetadataFieldDescriptor:
-      case Demangle::Node::Kind::ReflectionMetadataAssocTypeDescriptor:
-      case Demangle::Node::Kind::ReflectionMetadataSuperclassDescriptor:
-      case Demangle::Node::Kind::PartialApplyForwarder:
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  if (Old->getKind() == Demangle::Node::Kind::DependentAssociatedTypeRef &&
-      OldNum + NewNum == 1) {
-    OldNum = 0;
-    NewNum = 0;
-  }
-  if (Old->getKind() == Demangle::Node::Kind::GenericSpecializationParam &&
-      OldNum > 1 && NewNum == 1)
-    OldNum = 1;
-
-  if (OldNum != NewNum) {
-    return false;
-  }
-  for (unsigned Idx = 0, End = OldNum; Idx < End; ++Idx) {
-    if (!areTreesEqual(Old->getChild(Idx), New->getChild(Idx)))
-      return false;
-  }
-  return true;
-}
-
-static bool treeContains(Demangle::NodePointer Nd, Demangle::Node::Kind Kind) {
-  if (Nd->getKind() == Kind)
-    return true;
-
-  for (auto Child : *Nd) {
-    if (treeContains(Child, Kind))
-      return true;
-  }
-  return false;
-}
-
-#endif // CHECK_MANGLING_AGAINST_OLD
 
 struct SizeStatEntry {
   int sizeDiff;
@@ -131,6 +43,7 @@ static int numLarger = 0;
 static int totalOldSize = 0;
 static int totalNewSize = 0;
 static int mergedSubsts = 0;
+static int numLargeSubsts = 0;
 
 struct OpStatEntry {
   OpStatEntry() : num(0), size(0) { }
@@ -153,79 +66,7 @@ void Mangler::recordOpStatImpl(StringRef op, size_t OldPos) {
 
 #endif // NDEBUG
 
-std::string NewMangling::selectMangling(const std::string &Old,
-                                          const std::string &New) {
-#ifndef NDEBUG
-#ifdef CHECK_MANGLING_AGAINST_OLD
-
-  static int numCmp = 0;
-  using namespace Demangle;
-
-  NodePointer OldNode = demangleSymbolAsNode(Old);
-  NodePointer NewNode = demangleSymbolAsNode(New);
-
-  if (StringRef(New).startswith(MANGLING_PREFIX_STR) &&
-      (!NewNode || treeContains(NewNode, Demangle::Node::Kind::Suffix))) {
-    llvm::errs() << "Can't demangle " << New << '\n';
-    assert(false);
-  }
-  
-  if (OldNode && !treeContains(OldNode, Demangle::Node::Kind::Suffix)) {
-    if (!areTreesEqual(OldNode, NewNode)) {
-      llvm::errs() << "Mangling differs at #" << numCmp << ":\n"
-                      "old: " << Old << "\n"
-                      "new: " << New << "\n\n"
-                      "### old tree: ###\n";
-      demangle_wrappers::NodeDumper(OldNode).print(llvm::errs());
-      llvm::errs() << "\n### new tree: ###\n";
-      demangle_wrappers::NodeDumper(NewNode).print(llvm::errs());
-      llvm::errs() << '\n';
-      assert(false);
-    }
-    if (StringRef(New).startswith(MANGLING_PREFIX_STR)) {
-      std::string Remangled = mangleNodeNew(NewNode);
-      if (New != Remangled) {
-        bool isEqual = false;
-        if (treeContains(NewNode,
-                         Demangle::Node::Kind::DependentAssociatedTypeRef) ||
-            // Does the mangling contain an identifier which is the name of
-            // an old-mangled function?
-            New.find("_T") != std::string::npos) {
-          NodePointer RemangledNode = demangleSymbolAsNode(Remangled);
-          isEqual = areTreesEqual(NewNode, RemangledNode);
-        }
-        if (!isEqual) {
-          llvm::errs() << "Remangling failed at #" << numCmp << ":\n"
-                          "original:  " << New << "\n"
-                          "remangled: " << Remangled << "\n";
-          assert(false);
-        }
-      }
-    }
-  }
-  numCmp++;
-#endif // CHECK_MANGLING_AGAINST_OLD
-
-  if (PrintSwiftManglingStats) {
-    int OldSize = (int)Old.size();
-    int NewSize = (int)New.size();
-    if (NewSize > OldSize) {
-      numLarger++;
-      SizeStats.push_back({NewSize - OldSize, Old, New});
-    } else if (OldSize > NewSize) {
-      numSmaller++;
-    } else {
-      numEqual++;
-    }
-    totalOldSize += OldSize;
-    totalNewSize += NewSize;
-  }
-#endif // NDEBUG
-
-  return useNewMangling() ? New : Old;
-}
-
-void NewMangling::printManglingStats() {
+void Mangle::printManglingStats() {
 #ifndef NDEBUG
   if (!PrintSwiftManglingStats)
     return;
@@ -264,7 +105,8 @@ void NewMangling::printManglingStats() {
     llvm::outs() << "  " << E->getKey() << ": num = " << E->getValue().num
                  << ", size = " << E->getValue().size << '\n';
   }
-  llvm::outs() << "  merged substitutions: " << mergedSubsts << '\n';
+  llvm::outs() << "  merged substitutions: " << mergedSubsts << "\n"
+                  "  large substitutions: " << numLargeSubsts << "\n";
 #endif
 }
 
@@ -272,8 +114,8 @@ void Mangler::beginMangling() {
   Storage.clear();
   Substitutions.clear();
   StringSubstitutions.clear();
-  lastSubstIdx = -2;
   Words.clear();
+  SubstMerging.clear();
   Buffer << MANGLING_PREFIX_STR;
 }
 
@@ -282,6 +124,7 @@ std::string Mangler::finalize() {
   assert(Storage.size() && "Mangling an empty name");
   std::string result = std::string(Storage.data(), Storage.size());
   Storage.clear();
+  verify(result);
   return result;
 }
 
@@ -290,6 +133,52 @@ std::string Mangler::finalize() {
 void Mangler::finalize(llvm::raw_ostream &stream) {
   std::string result = finalize();
   stream.write(result.data(), result.size());
+}
+
+
+static bool treeContains(Demangle::NodePointer Nd, Demangle::Node::Kind Kind) {
+  if (Nd->getKind() == Kind)
+    return true;
+
+  for (auto Child : *Nd) {
+    if (treeContains(Child, Kind))
+      return true;
+  }
+  return false;
+}
+
+void Mangler::verify(const std::string &mangledName) {
+#ifndef NDEBUG
+  StringRef nameStr = mangledName;
+  if (!nameStr.startswith(MANGLING_PREFIX_STR))
+    return;
+
+  Demangler Dem;
+  NodePointer Root = Dem.demangleSymbol(nameStr);
+  if (!Root || treeContains(Root, Node::Kind::Suffix)) {
+    llvm::errs() << "Can't demangle: " << nameStr << '\n';
+    abort();
+  }
+  std::string Remangled = mangleNode(Root);
+  if (Remangled == mangledName)
+    return;
+
+  if (treeContains(Root,
+                   Demangle::Node::Kind::DependentAssociatedTypeRef)) {
+    // There are cases where dependent associated types results in different
+    // remangled names. See ASTMangler::appendAssociatedTypeName.
+    // This is no problem for the compiler, but we have to exclude this case
+    // for the check. Instead we try to re-de-mangle the remangled name.
+    nameStr = Remangled;
+    NodePointer RootOfRemangled = Dem.demangleSymbol(nameStr);
+    if (Remangled == mangleNode(RootOfRemangled))
+      return;
+  }
+  llvm::errs() << "Remangling failed:\n"
+                  "original  = " << nameStr << "\n"
+                  "remangled = " << Remangled << '\n';
+  abort();
+#endif
 }
 
 void Mangler::appendIdentifier(StringRef ident) {
@@ -315,20 +204,20 @@ bool Mangler::tryMangleSubstitution(const void *ptr) {
 }
 
 void Mangler::mangleSubstitution(unsigned Idx) {
-  if (Idx >= 26)
+  if (Idx >= 26) {
+#ifndef NDEBUG
+    numLargeSubsts++;
+#endif
     return appendOperator("A", Index(Idx - 26));
+  }
 
-  char c = Idx + 'A';
-  if (lastSubstIdx == (int)Storage.size() - 1) {
-    assert(isUpperLetter(Storage[lastSubstIdx]));
-    Storage[lastSubstIdx] = Storage[lastSubstIdx] - 'A' + 'a';
-    Buffer << c;
+  char Subst = Idx + 'A';
+  if (SubstMerging.tryMergeSubst(*this, Subst, /*isStandardSubst*/ false)) {
 #ifndef NDEBUG
     mergedSubsts++;
 #endif
   } else {
-    appendOperator("A", StringRef(&c, 1));
+    appendOperator("A", StringRef(&Subst, 1));
   }
-  lastSubstIdx = (int)Storage.size() - 1;
 }
 

@@ -29,7 +29,6 @@
 #include "swift/AST/Types.h"
 #include "swift/ClangImporter/ClangModule.h"
 #include "swift/Parse/Token.h"
-#include "swift/Basic/Fallthrough.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Lex/Preprocessor.h"
@@ -37,6 +36,7 @@
 #include "clang/AST/TypeVisitor.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Compiler.h"
 
 using namespace swift;
 using namespace importer;
@@ -90,9 +90,6 @@ namespace {
       /// The source type is any other pointer type.
       OtherPointer,
 
-      /// The source type created a new Swift type, using swift_newtype
-      SwiftNewtype,
-
       /// The source type created a new Swift type, using swift_newtype, of an
       /// original underlying CFPointer. This distinction is necessary to
       /// trigger audit-checking.
@@ -136,7 +133,6 @@ namespace {
     case ImportHint::ObjCPointer:
     case ImportHint::CFunctionPointer:
     case ImportHint::OtherPointer:
-    case ImportHint::SwiftNewtype:
     case ImportHint::SwiftNewtypeFromCFPointer:
       return true;
     }
@@ -634,17 +630,17 @@ namespace {
       ImportHint hint = ImportHint::None;
 
       if (getSwiftNewtypeAttr(type->getDecl(), Impl.CurrentVersion)) {
-        if (isCFTypeDecl(type->getDecl()))
+        if (isCFTypeDecl(type->getDecl())) {
           hint = ImportHint::SwiftNewtypeFromCFPointer;
-        else
-          hint = ImportHint::SwiftNewtype;
-
-        // If the underlying type was bridged, the wrapper type is
-        // only useful in bridged cases.
-        auto underlying = Visit(type->getDecl()->getUnderlyingType());
-        if (underlying.Hint == ImportHint::ObjCBridged) {
-          return { underlying.AbstractType,
-                   ImportHint(ImportHint::ObjCBridged, mappedType) };
+        } else {
+          // If the underlying type was bridged, the wrapper type is
+          // only useful in bridged cases.
+          auto underlying = Visit(type->getDecl()->getUnderlyingType());
+          if (underlying.Hint == ImportHint::ObjCBridged) {
+            return { underlying.AbstractType,
+                     ImportHint(ImportHint::ObjCBridged, mappedType) };
+          }
+          hint = underlying.Hint;
         }
 
       // For certain special typedefs, we don't want to use the imported type.
@@ -693,7 +689,7 @@ namespace {
           if (underlyingResult.AbstractType->getAnyNominal() ==
               Impl.SwiftContext.getIntDecl())
             break;
-          SWIFT_FALLTHROUGH;
+          LLVM_FALLTHROUGH;
         default:
           if (!underlyingResult.AbstractType->isEqual(mappedType)) {
             underlyingResult.AbstractType->dump();
@@ -757,8 +753,8 @@ namespace {
       auto nominal = dyn_cast<NominalTypeDecl>(decl);
       if (!nominal) return nullptr;
 
-      for (auto attr : decl->getAttrs().getAttributes<SynthesizedProtocolAttr,
-                                                      false>()) {
+      const DeclAttributes &allAttrs = decl->getAttrs();
+      for (auto attr : allAttrs.getAttributes<SynthesizedProtocolAttr>()) {
         if (attr->getProtocolKind() ==
             KnownProtocolKind::BridgedStoredNSError) {
           auto &ctx = nominal->getASTContext();
@@ -1524,13 +1520,13 @@ Type ClangImporter::Implementation::importFunctionReturnType(
     DeclContext *dc,
     const clang::FunctionDecl *clangDecl,
     bool allowNSUIntegerAsInt) {
- // CF function results can be managed if they are audited or
+  // CF function results can be managed if they are audited or
   // the ownership convention is explicitly declared.
+  assert(clangDecl && "expected to have a decl to import");
   bool isAuditedResult =
-    (clangDecl &&
-     (clangDecl->hasAttr<clang::CFAuditedTransferAttr>() ||
-      clangDecl->hasAttr<clang::CFReturnsRetainedAttr>() ||
-      clangDecl->hasAttr<clang::CFReturnsNotRetainedAttr>()));
+    (clangDecl->hasAttr<clang::CFAuditedTransferAttr>() ||
+     clangDecl->hasAttr<clang::CFReturnsRetainedAttr>() ||
+     clangDecl->hasAttr<clang::CFReturnsNotRetainedAttr>());
 
   // Check if we know more about the type from our whitelists.
   OptionalTypeKind OptionalityOfReturn;
@@ -1626,7 +1622,7 @@ ParameterList *ClangImporter::Implementation::importFunctionParameterList(
     }
 
     // Figure out the name for this parameter.
-    Identifier bodyName = importFullName(param, ImportNameVersion::Swift3)
+    Identifier bodyName = importFullName(param, CurrentVersion)
                               .getDeclName()
                               .getBaseName();
 
@@ -1771,15 +1767,28 @@ adjustResultTypeForThrowingFunction(ForeignErrorConvention::Info errorInfo,
   switch (errorInfo.TheKind) {
   case ForeignErrorConvention::ZeroResult:
   case ForeignErrorConvention::NonZeroResult:
+    // Check for a bad override.
+    if (resultTy->isVoid())
+      return Type();
     return TupleType::getEmpty(resultTy->getASTContext());
 
   case ForeignErrorConvention::NilResult:
-    resultTy = resultTy->getAnyOptionalObjectType();
-    assert(resultTy &&
-           "result type of NilResult convention was not imported as optional");
+    if (Type unwrappedTy = resultTy->getAnyOptionalObjectType())
+      return unwrappedTy;
+    // Check for a bad override.
+    if (resultTy->isVoid())
+      return Type();
+    // It's possible an Objective-C method overrides the base method to never
+    // fail, and marks the method _Nonnull to indicate that. Swift can't
+    // represent that, but it shouldn't fall over either.
     return resultTy;
 
   case ForeignErrorConvention::ZeroPreservedResult:
+    // Check for a bad override.
+    if (resultTy->isVoid())
+      return Type();
+    return resultTy;
+
   case ForeignErrorConvention::NonNilError:
     return resultTy;
   }
@@ -1861,11 +1870,11 @@ Type ClangImporter::Implementation::importMethodType(
       // Get the substitutions that we need to access a member of
       // 'origDC' on 'dc'.
       auto subs = dc->getDeclaredTypeInContext()
-          ->getContextSubstitutions(origDC);
+          ->getContextSubstitutionMap(dc->getParentModule(), origDC);
 
       // Apply them to the interface type to produce the final
       // substituted type.
-      type = type.subst(dc->getParentModule(), subs);
+      type = type.subst(subs);
     }
     return type;
   };
@@ -2037,7 +2046,7 @@ Type ClangImporter::Implementation::importMethodType(
     }
 
     // Figure out the name for this parameter.
-    Identifier bodyName = importFullName(param, ImportNameVersion::Swift3)
+    Identifier bodyName = importFullName(param, CurrentVersion)
                               .getDeclName()
                               .getBaseName();
 
@@ -2141,6 +2150,7 @@ Type ClangImporter::Implementation::importAccessorMethodType(
     const clang::ObjCPropertyDecl *property,
     const clang::ObjCMethodDecl *clangDecl,
     bool isFromSystemModule,
+    ImportedName functionName,
     swift::ParameterList **params) {
   // Note: We're using a pointer instead of a reference here to make it clear
   // at the call site that this is an out-parameter.
@@ -2169,11 +2179,11 @@ Type ClangImporter::Implementation::importAccessorMethodType(
       // Get the substitutions that we need to access a member of
       // 'origDC' on 'dc'.
       auto subs = dc->getDeclaredTypeInContext()
-          ->getContextSubstitutions(origDC);
+          ->getContextSubstitutionMap(dc->getParentModule(), origDC);
 
       // Apply them to the interface type to produce the final
       // substituted type.
-      type = type.subst(dc->getParentModule(), subs);
+      type = type.subst(subs);
     }
     return type;
   };
@@ -2193,16 +2203,17 @@ Type ClangImporter::Implementation::importAccessorMethodType(
 
   } else {
     const clang::ParmVarDecl *param = clangDecl->parameters().front();
-    ImportedName fullBodyName = importFullName(param,ImportNameVersion::Swift3);
+    ImportedName fullBodyName = importFullName(param, CurrentVersion);
     Identifier bodyName = fullBodyName.getDeclName().getBaseName();
     SourceLoc nameLoc = importSourceLoc(param->getLocation());
+    Identifier argLabel = functionName.getDeclName().getArgumentNames().front();
     auto paramInfo
       = createDeclWithClangNode<ParamDecl>(param, Accessibility::Private,
                                            /*IsLet*/true,
                                            /*let loc*/SourceLoc(),
                                            /*label loc*/SourceLoc(),
-                                           /*argument label*/Identifier(),
-                                           nameLoc, bodyName, propertyTy,
+                                           argLabel, nameLoc, bodyName,
+                                           propertyTy,
                                            /*dummy DC*/ImportedHeaderUnit);
     paramInfo->setInterfaceType(propertyInterfaceTy);
 

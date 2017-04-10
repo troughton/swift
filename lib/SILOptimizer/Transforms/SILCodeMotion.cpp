@@ -49,7 +49,7 @@ namespace {
 static void createRefCountOpForPayload(SILBuilder &Builder, SILInstruction *I,
                                        EnumElementDecl *EnumDecl,
                                        SILValue DefOfEnum = SILValue()) {
-  assert(EnumDecl->hasArgumentType() &&
+  assert(EnumDecl->getArgumentInterfaceType() &&
          "We assume enumdecl has an argument type");
 
   SILModule &Mod = I->getModule();
@@ -73,17 +73,19 @@ static void createRefCountOpForPayload(SILBuilder &Builder, SILInstruction *I,
 
   ++NumRefCountOpsSimplified;
 
+  auto *RCI = cast<RefCountingInst>(I);
+
   // If we have a retain value...
   if (isa<RetainValueInst>(I)) {
     // And our payload is refcounted, insert a strong_retain onto the
     // payload.
     if (UEDITy.isReferenceCounted(Mod)) {
-      Builder.createStrongRetain(I->getLoc(), UEDI, Atomicity::Atomic);
+      Builder.createStrongRetain(I->getLoc(), UEDI, RCI->getAtomicity());
       return;
     }
 
     // Otherwise, insert a retain_value on the payload.
-    Builder.createRetainValue(I->getLoc(), UEDI, Atomicity::Atomic);
+    Builder.createRetainValue(I->getLoc(), UEDI, RCI->getAtomicity());
     return;
   }
 
@@ -94,13 +96,13 @@ static void createRefCountOpForPayload(SILBuilder &Builder, SILInstruction *I,
 
   // If our payload has reference semantics, insert the strong release.
   if (UEDITy.isReferenceCounted(Mod)) {
-    Builder.createStrongRelease(I->getLoc(), UEDI, Atomicity::Atomic);
+    Builder.createStrongRelease(I->getLoc(), UEDI, RCI->getAtomicity());
     return;
   }
 
   // Otherwise if our payload is non-trivial but lacking reference semantics,
   // insert the release_value.
-  Builder.createReleaseValue(I->getLoc(), UEDI, Atomicity::Atomic);
+  Builder.createReleaseValue(I->getLoc(), UEDI, RCI->getAtomicity());
 }
 
 //===----------------------------------------------------------------------===//
@@ -753,7 +755,7 @@ static bool tryToSinkRefCountAcrossSwitch(SwitchEnumInst *Switch,
     EnumElementDecl *Enum = Case.first;
     SILBasicBlock *Succ = Case.second;
     Builder.setInsertionPoint(&*Succ->begin());
-    if (Enum->hasArgumentType())
+    if (Enum->getArgumentInterfaceType())
       createRefCountOpForPayload(Builder, &*RV, Enum, Switch->getOperand());
   }
 
@@ -839,7 +841,7 @@ static bool tryToSinkRefCountAcrossSelectEnum(CondBranchInst *CondBr,
     EnumElementDecl *Enum = Elts[i];
     SILBasicBlock *Succ = i == 0 ? CondBr->getTrueBB() : CondBr->getFalseBB();
     Builder.setInsertionPoint(&*Succ->begin());
-    if (Enum->hasArgumentType())
+    if (Enum->getArgumentInterfaceType())
       createRefCountOpForPayload(Builder, &*I, Enum, SEI->getEnumOperand());
   }
 
@@ -1302,7 +1304,7 @@ bool BBEnumTagDataflowState::visitRetainValueInst(RetainValueInst *RVI) {
     return false;
 
   // If we do not have any argument, kill the retain_value.
-  if (!(*FindResult)->second->hasArgumentType()) {
+  if (!(*FindResult)->second->getArgumentInterfaceType()) {
     RVI->eraseFromParent();
     return true;
   }
@@ -1322,7 +1324,7 @@ bool BBEnumTagDataflowState::visitReleaseValueInst(ReleaseValueInst *RVI) {
     return false;
 
   // If we do not have any argument, just delete the release value.
-  if (!(*FindResult)->second->hasArgumentType()) {
+  if (!(*FindResult)->second->getArgumentInterfaceType()) {
     RVI->eraseFromParent();
     return true;
   }
@@ -1413,7 +1415,7 @@ BBEnumTagDataflowState::hoistDecrementsIntoSwitchRegions(AliasAnalysis *AA) {
     for (auto P : EnumBBCaseList) {
       // If we don't have an argument for this case, there is nothing to
       // do... continue...
-      if (!P.second->hasArgumentType())
+      if (!P.second->getArgumentInterfaceType())
         continue;
 
       // Otherwise create the release_value before the terminator of the
@@ -1478,7 +1480,7 @@ findRetainsSinkableFromSwitchRegionForEnum(
 
     // If the case does not have an argument type, skip the predecessor since
     // there will not be a retain to sink.
-    if (!Decl->hasArgumentType())
+    if (!Decl->getArgumentInterfaceType())
       continue;
 
     // Ok, we found a payloaded predecessor. Look backwards through the
@@ -1545,9 +1547,9 @@ sinkIncrementsOutOfSwitchRegions(AliasAnalysis *AA,
     //
     // TODO: Which debug loc should we use here? Using one of the locs from the
     // delete list seems reasonable for now...
-    SILBuilder(getBB()->begin()).createRetainValue(DeleteList[0]->getLoc(),
-                                                   EnumValue,
-                                                   Atomicity::Atomic);
+    SILBuilder Builder(getBB()->begin());
+    Builder.createRetainValue(DeleteList[0]->getLoc(), EnumValue,
+                              cast<RefCountingInst>(DeleteList[0])->getAtomicity());
     for (auto *I : DeleteList)
       I->eraseFromParent();
     ++NumSunk;

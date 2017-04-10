@@ -1004,7 +1004,7 @@ static bool isOrContainsReference(SILType Ty, SILModule *Mod) {
   if (Ty.hasReferenceSemantics())
     return true;
 
-  if (Ty.getSwiftType() == Mod->getASTContext().TheRawPointerType)
+  if (Ty.getSwiftRValueType() == Mod->getASTContext().TheRawPointerType)
     return true;
 
   if (auto *Str = Ty.getStructOrBoundGenericStruct()) {
@@ -1023,7 +1023,7 @@ static bool isOrContainsReference(SILType Ty, SILModule *Mod) {
   }
   if (auto En = Ty.getEnumOrBoundGenericEnum()) {
     for (auto *ElemDecl : En->getAllElements()) {
-      if (ElemDecl->hasArgumentType() &&
+      if (ElemDecl->getArgumentInterfaceType() &&
           isOrContainsReference(Ty.getEnumElementType(ElemDecl, *Mod), Mod))
         return true;
     }
@@ -1157,14 +1157,13 @@ bool EscapeAnalysis::buildConnectionGraphForDestructor(
     // The object is local, but we cannot determine its type.
     return false;
   }
-  // If Ty is a an optional, its deallocation is equivalent to the deallocation
+  // If Ty is an optional, its deallocation is equivalent to the deallocation
   // of its payload.
   // TODO: Generalize it. Destructor of an aggregate type is equivalent to calling
   // destructors for its components.
-  while (Ty.getSwiftRValueType()->getAnyOptionalObjectType())
-    Ty = M.Types.getLoweredType(Ty.getSwiftRValueType()
-                                  .getAnyOptionalObjectType());
-  auto Class = Ty.getSwiftRValueType().getClassOrBoundGenericClass();
+  while (auto payloadTy = Ty.getAnyOptionalObjectType())
+    Ty = payloadTy;
+  auto Class = Ty.getClassOrBoundGenericClass();
   if (!Class || !Class->hasDestructor())
     return false;
   auto Destructor = Class->getDestructor();
@@ -1268,12 +1267,12 @@ void EscapeAnalysis::analyzeInstruction(SILInstruction *I,
         break;
     }
 
-    if (FAS.getReferencedFunction() &&
-        FAS.getReferencedFunction()->hasSemanticsAttr(
-            "self_no_escaping_closure") &&
-        ((FAS.hasIndirectResults() && FAS.getNumArguments() == 3) ||
-         (!FAS.hasIndirectResults() && FAS.getNumArguments() == 2)) &&
-        FAS.hasSelfArgument()) {
+    if (FAS.getReferencedFunction()
+        && FAS.getReferencedFunction()->hasSemanticsAttr(
+               "self_no_escaping_closure")
+        && ((FAS.hasIndirectSILResults() && FAS.getNumArguments() == 3)
+            || (!FAS.hasIndirectSILResults() && FAS.getNumArguments() == 2))
+        && FAS.hasSelfArgument()) {
       // The programmer has guaranteed that the closure will not capture the
       // self pointer passed to it or anything that is transitively reachable
       // from the pointer.
@@ -1283,12 +1282,12 @@ void EscapeAnalysis::analyzeInstruction(SILInstruction *I,
       return;
     }
 
-    if (FAS.getReferencedFunction() &&
-        FAS.getReferencedFunction()->hasSemanticsAttr(
-            "pair_no_escaping_closure") &&
-        ((FAS.hasIndirectResults() && FAS.getNumArguments() == 4) ||
-         (!FAS.hasIndirectResults() && FAS.getNumArguments() == 3)) &&
-        FAS.hasSelfArgument()) {
+    if (FAS.getReferencedFunction()
+        && FAS.getReferencedFunction()->hasSemanticsAttr(
+               "pair_no_escaping_closure")
+        && ((FAS.hasIndirectSILResults() && FAS.getNumArguments() == 4)
+            || (!FAS.hasIndirectSILResults() && FAS.getNumArguments() == 3))
+        && FAS.hasSelfArgument()) {
       // The programmer has guaranteed that the closure will not capture the
       // self pointer passed to it or anything that is transitively reachable
       // from the pointer.
@@ -1819,9 +1818,16 @@ bool EscapeAnalysis::canObjectOrContentEscapeTo(SILValue V, FullApplySite FAS) {
   if (ConGraph->isUsePoint(UsePoint, Node))
     return true;
 
-  if (hasReferenceSemantics(V->getType())) {
-    // Check if the object "content", i.e. a pointer to one of its stored
-    // properties, can escape to the called function.
+  if (isPointer(V)) {
+    // Check if the object "content" can escape to the called function.
+    // This will catch cases where V is a reference and a pointer to a stored
+    // property escapes.
+    // It's also important in case of a pointer assignment, e.g.
+    //    V = V1
+    //    apply(V1)
+    // In this case the apply is only a use-point for V1 and V1's content node.
+    // As V1's content node is the same as V's content node, we also make the
+    // check for the content node.
     CGNode *ContentNode = ConGraph->getContentNode(Node);
     if (ContentNode->escapesInsideFunction(false))
       return true;
@@ -1954,7 +1960,7 @@ bool EscapeAnalysis::canParameterEscape(FullApplySite FAS, int ParamIdx,
   return false;
 }
 
-void EscapeAnalysis::invalidate(InvalidationKind K) {
+void EscapeAnalysis::invalidate() {
   Function2Info.clear();
   Allocator.DestroyAll();
   DEBUG(llvm::dbgs() << "invalidate all\n");

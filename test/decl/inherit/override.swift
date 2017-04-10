@@ -9,9 +9,12 @@ class A {
 
   @objc func f3() { } // expected-note{{overridden declaration is here}}
   @objc func f4() -> ObjCClassA { } // expected-note{{overridden declaration is here}}
+  @objc var v1: Int { return 0 } // expected-note{{overridden declaration is here}}
+  @objc var v2: Int { return 0 } // expected-note{{overridden declaration is here}}
+  @objc var v3: Int = 0 // expected-note{{overridden declaration is here}}
 
-  dynamic func f3D() { }
-  dynamic func f4D() -> ObjCClassA { }
+  dynamic func f3D() { } // expected-error{{'dynamic' instance method 'f3D()' must also be '@objc'}}{{3-3=@objc }}
+  dynamic func f4D() -> ObjCClassA { } // expected-error{{'dynamic' instance method 'f4D()' must also be '@objc'}}{{3-3=@objc }}
 }
 
 extension A {
@@ -30,6 +33,15 @@ extension B {
 
   override func f3() { } // expected-error{{cannot override a non-dynamic class declaration from an extension}}
   override func f4() -> ObjCClassB { } // expected-error{{cannot override a non-dynamic class declaration from an extension}}
+  override var v1: Int { return 1 } // expected-error{{cannot override a non-dynamic class declaration from an extension}}
+  override var v2: Int { // expected-error{{cannot override a non-dynamic class declaration from an extension}}
+    get { return 1 }
+    set { }
+  }
+  override var v3: Int { // expected-error{{cannot override a non-dynamic class declaration from an extension}}
+    willSet { }
+    didSet { }
+  }
 
   override func f3D() { }
   override func f4D() -> ObjCClassB { }
@@ -64,7 +76,7 @@ class Sub : Base {
 
   func method2(_ x: Sub, withInt y: Int) { }
 
-  func method3(_ x: Base, withInt y: Int) { } // expected-note{{method 'method3(_:withInt:)' declared here}}
+  @objc func method3(_ x: Base, withInt y: Int) { } // expected-note{{method 'method3(_:withInt:)' declared here}}
 }
 
 class ObjCSub : ObjCSuper {
@@ -72,5 +84,5 @@ class ObjCSub : ObjCSuper {
 
   override func method2(_ x: Base, withInt y: Int) { } // okay, overrides trivially
 
-  func method3(_ x: Sub, withInt y: Int) { } // expected-error{{method3(_:withInt:)' with Objective-C selector 'method3:withInt:' conflicts with method 'method3(_:withInt:)' from superclass 'ObjCSuper' with the same Objective-C selector}}
+  @objc(method3:withInt:) func method3(_ x: Sub, with y: Int) { } // expected-error{{method3(_:with:)' with Objective-C selector 'method3:withInt:' conflicts with method 'method3(_:withInt:)' from superclass 'ObjCSuper' with the same Objective-C selector}}
 }

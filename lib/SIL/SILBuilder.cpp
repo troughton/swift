@@ -10,12 +10,22 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "swift/AST/Expr.h"
 #include "swift/SIL/SILBuilder.h"
+
 using namespace swift;
 
 //===----------------------------------------------------------------------===//
 // SILBuilder Implementation
 //===----------------------------------------------------------------------===//
+
+IntegerLiteralInst *SILBuilder::createIntegerLiteral(IntegerLiteralExpr *E) {
+  return insert(IntegerLiteralInst::create(E, getSILDebugLocation(E), F));
+}
+
+FloatLiteralInst *SILBuilder::createFloatLiteral(FloatLiteralExpr *E) {
+  return insert(FloatLiteralInst::create(E, getSILDebugLocation(E), F));
+}
 
 TupleInst *SILBuilder::createTuple(SILLocation loc, ArrayRef<SILValue> elts) {
   // Derive the tuple type from the elements.
@@ -30,7 +40,7 @@ TupleInst *SILBuilder::createTuple(SILLocation loc, ArrayRef<SILValue> elts) {
 
 SILType SILBuilder::getPartialApplyResultType(SILType origTy, unsigned argCount,
                                         SILModule &M,
-                                        ArrayRef<Substitution> subs,
+                                        SubstitutionList subs,
                                         ParameterConvention calleeConvention) {
   CanSILFunctionType FTI = origTy.castTo<SILFunctionType>();
   if (!subs.empty())
@@ -51,7 +61,7 @@ SILType SILBuilder::getPartialApplyResultType(SILType origTy, unsigned argCount,
   // If the original method has an @autoreleased return, the partial application
   // thunk will retain it for us, converting the return value to @owned.
   SmallVector<SILResultInfo, 4> results;
-  results.append(FTI->getAllResults().begin(), FTI->getAllResults().end());
+  results.append(FTI->getResults().begin(), FTI->getResults().end());
   for (auto &result : results) {
     if (result.getConvention() == ResultConvention::UnownedInnerPointer)
       result = SILResultInfo(result.getType(), ResultConvention::Unowned);
@@ -245,7 +255,7 @@ SILBuilder::emitStrongRelease(SILLocation Loc, SILValue Operand) {
   }
 
   // If we didn't find a retain to fold this into, emit the release.
-  return createStrongRelease(Loc, Operand, Atomicity::Atomic);
+  return createStrongRelease(Loc, Operand, getDefaultAtomicity());
 }
 
 /// Emit a release_value instruction at the current location, attempting to
@@ -272,7 +282,7 @@ SILBuilder::emitReleaseValue(SILLocation Loc, SILValue Operand) {
   }
 
   // If we didn't find a retain to fold this into, emit the release.
-  return createReleaseValue(Loc, Operand, Atomicity::Atomic);
+  return createReleaseValue(Loc, Operand, getDefaultAtomicity());
 }
 
 PointerUnion<CopyValueInst *, DestroyValueInst *>

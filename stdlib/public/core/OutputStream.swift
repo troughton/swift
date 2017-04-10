@@ -250,6 +250,7 @@ func _getEnumCaseName<T>(_ value: T) -> UnsafePointer<CChar>?
 func _opaqueSummary(_ metadata: Any.Type) -> UnsafePointer<CChar>?
 
 /// Do our best to print a value that cannot be printed directly.
+@_semantics("optimize.sil.specialize.generic.never")
 internal func _adHocPrint_unlocked<T, TargetStream : TextOutputStream>(
     _ value: T, _ mirror: Mirror, _ target: inout TargetStream,
     isDebugPrint: Bool
@@ -343,7 +344,9 @@ internal func _adHocPrint_unlocked<T, TargetStream : TextOutputStream>(
   }
 }
 
+@_versioned
 @inline(never)
+@_semantics("optimize.sil.specialize.generic.never")
 @_semantics("stdlib_binary_only")
 internal func _print_unlocked<T, TargetStream : TextOutputStream>(
   _ value: T, _ target: inout TargetStream
@@ -384,6 +387,8 @@ internal func _print_unlocked<T, TargetStream : TextOutputStream>(
 ///
 /// This function is forbidden from being inlined because when building the
 /// standard library inlining makes us drop the special semantics.
+@_inlineable
+@_versioned
 @inline(never) @effects(readonly)
 func _toStringReadOnlyStreamable<T : TextOutputStreamable>(_ x: T) -> String {
   var result = ""
@@ -391,6 +396,8 @@ func _toStringReadOnlyStreamable<T : TextOutputStreamable>(_ x: T) -> String {
   return result
 }
 
+@_inlineable
+@_versioned
 @inline(never) @effects(readonly)
 func _toStringReadOnlyPrintable<T : CustomStringConvertible>(_ x: T) -> String {
   return x.description
@@ -400,6 +407,7 @@ func _toStringReadOnlyPrintable<T : CustomStringConvertible>(_ x: T) -> String {
 // `debugPrint`
 //===----------------------------------------------------------------------===//
 
+@_semantics("optimize.sil.specialize.generic.never")
 @inline(never)
 public func _debugPrint_unlocked<T, TargetStream : TextOutputStream>(
     _ value: T, _ target: inout TargetStream
@@ -423,6 +431,7 @@ public func _debugPrint_unlocked<T, TargetStream : TextOutputStream>(
   _adHocPrint_unlocked(value, mirror, &target, isDebugPrint: true)
 }
 
+@_semantics("optimize.sil.specialize.generic.never")
 internal func _dumpPrint_unlocked<T, TargetStream : TextOutputStream>(
     _ value: T, _ mirror: Mirror, _ target: inout TargetStream
 ) {

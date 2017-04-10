@@ -3,7 +3,7 @@
 var func6 : (_ fn : (Int,Int) -> Int) -> ()
 var func6a : ((Int, Int) -> Int) -> ()
 var func6b : (Int, (Int, Int) -> Int) -> ()
-func func6c(_ f: (Int, Int) -> Int, _ n: Int = 0) {} // expected-warning{{prior to parameters}}
+func func6c(_ f: (Int, Int) -> Int, _ n: Int = 0) {}
 
 
 // Expressions can be auto-closurified, so that they can be evaluated separately
@@ -128,9 +128,18 @@ var shadowedShort = { (shadowedShort: Int) -> Int in shadowedShort+1 } // no-war
 
 
 func anonymousClosureArgsInClosureWithArgs() {
+  func f(_: String) {}
   var a1 = { () in $0 } // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments}}
   var a2 = { () -> Int in $0 } // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments}}
-  var a3 = { (z: Int) in $0 } // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments}}
+  var a3 = { (z: Int) in $0 } // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments; did you mean 'z'?}} {{26-28=z}}
+  var a4 = { (z: [Int], w: [Int]) in
+    f($0.count) // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments; did you mean 'z'?}} {{7-9=z}} expected-error {{cannot convert value of type 'Int' to expected argument type 'String'}}
+    f($1.count) // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments; did you mean 'w'?}} {{7-9=w}} expected-error {{cannot convert value of type 'Int' to expected argument type 'String'}}
+  }
+  var a5 = { (_: [Int], w: [Int]) in
+    f($0.count) // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments}}
+    f($1.count) // expected-error {{anonymous closure arguments cannot be used inside a closure that has explicit arguments; did you mean 'w'?}} {{7-9=w}} expected-error {{cannot convert value of type 'Int' to expected argument type 'String'}}
+  }
 }
 
 func doStuff(_ fn : @escaping () -> Int) {}
@@ -232,7 +241,7 @@ var closureWithObservedProperty: () -> () = {
 
 ;
 
-{}() // expected-error{{statement cannot begin with a closure expression}} expected-note{{explicitly discard the result of the closure by assigning to '_'}} {{1-1=_ = }}
+{}() // expected-error{{top-level statement cannot begin with a closure expression}}
 
 
 
@@ -328,4 +337,19 @@ func r25993258a() {
 }
 func r25993258b() {
   r25993258_helper { _ in () }
+}
+
+// We have to map the captured var type into the right generic environment.
+class GenericClass<T> {}
+
+func lvalueCapture<T>(c: GenericClass<T>) {
+  var cc = c
+  weak var wc = c
+
+  func innerGeneric<U>(_: U) {
+    _ = cc
+    _ = wc
+
+    cc = wc!
+  }
 }

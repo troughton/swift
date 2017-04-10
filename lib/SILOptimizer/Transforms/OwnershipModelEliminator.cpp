@@ -64,8 +64,22 @@ struct OwnershipModelEliminatorVisitor
     EBI->eraseFromParent();
     return true;
   }
+  bool visitEndLifetimeInst(EndLifetimeInst *ELI) {
+    ELI->eraseFromParent();
+    return true;
+  }
+  bool visitUncheckedOwnershipConversionInst(
+      UncheckedOwnershipConversionInst *UOCI) {
+    UOCI->replaceAllUsesWith(UOCI->getOperand());
+    UOCI->eraseFromParent();
+    return true;
+  }
   bool visitUnmanagedRetainValueInst(UnmanagedRetainValueInst *URVI);
   bool visitUnmanagedReleaseValueInst(UnmanagedReleaseValueInst *URVI);
+  bool visitUnmanagedAutoreleaseValueInst(UnmanagedAutoreleaseValueInst *UAVI);
+  bool visitCheckedCastBranchInst(CheckedCastBranchInst *CBI);
+  bool visitSwitchEnumInst(SwitchEnumInst *SWI);
+  bool visitProjectBoxInst(ProjectBoxInst *PBI);
 };
 
 } // end anonymous namespace
@@ -128,6 +142,10 @@ OwnershipModelEliminatorVisitor::visitLoadBorrowInst(LoadBorrowInst *LBI) {
 }
 
 bool OwnershipModelEliminatorVisitor::visitCopyValueInst(CopyValueInst *CVI) {
+  // A copy_value of an address-only type cannot be replaced.
+  if (CVI->getType().isAddressOnly(B.getModule()))
+    return false;
+
   // Now that we have set the unqualified ownership flag, destroy value
   // operation will delegate to the appropriate strong_release, etc.
   B.emitCopyValueOperation(CVI->getLoc(), CVI->getOperand());
@@ -139,7 +157,7 @@ bool OwnershipModelEliminatorVisitor::visitCopyValueInst(CopyValueInst *CVI) {
 bool OwnershipModelEliminatorVisitor::visitCopyUnownedValueInst(
     CopyUnownedValueInst *CVI) {
   B.createStrongRetainUnowned(CVI->getLoc(), CVI->getOperand(),
-                              Atomicity::Atomic);
+                              B.getDefaultAtomicity());
   // Users of copy_value_unowned expect an owned value. So we need to convert
   // our unowned value to a ref.
   auto *UTRI =
@@ -168,11 +186,125 @@ bool OwnershipModelEliminatorVisitor::visitUnmanagedReleaseValueInst(
   return true;
 }
 
+bool OwnershipModelEliminatorVisitor::visitUnmanagedAutoreleaseValueInst(
+    UnmanagedAutoreleaseValueInst *UAVI) {
+  // Now that we have set the unqualified ownership flag, destroy value
+  // operation will delegate to the appropriate strong_release, etc.
+  B.createAutoreleaseValue(UAVI->getLoc(), UAVI->getOperand(),
+                           UAVI->getAtomicity());
+  UAVI->eraseFromParent();
+  return true;
+}
+
 bool OwnershipModelEliminatorVisitor::visitDestroyValueInst(DestroyValueInst *DVI) {
+  // A destroy_value of an address-only type cannot be replaced.
+  if (DVI->getOperand()->getType().isAddressOnly(B.getModule()))
+    return false;
+
   // Now that we have set the unqualified ownership flag, destroy value
   // operation will delegate to the appropriate strong_release, etc.
   B.emitDestroyValueOperation(DVI->getLoc(), DVI->getOperand());
   DVI->eraseFromParent();
+  return true;
+}
+
+bool OwnershipModelEliminatorVisitor::visitCheckedCastBranchInst(
+    CheckedCastBranchInst *CBI) {
+  // In ownership qualified SIL, checked_cast_br must pass its argument to the
+  // fail case so we can clean it up. In non-ownership qualified SIL, we expect
+  // no argument from the checked_cast_br in the default case. The way that we
+  // handle this transformation is that:
+  //
+  // 1. We replace all uses of the argument to the false block with a use of the
+  // checked cast branch's operand.
+  // 2. We delete the argument from the false block.
+  SILBasicBlock *FailureBlock = CBI->getFailureBB();
+  if (FailureBlock->getNumArguments() == 0)
+    return false;
+  FailureBlock->getArgument(0)->replaceAllUsesWith(CBI->getOperand());
+  FailureBlock->eraseArgument(0);
+  return true;
+}
+
+bool OwnershipModelEliminatorVisitor::visitSwitchEnumInst(
+    SwitchEnumInst *SWEI) {
+  // In ownership qualified SIL, switch_enum must pass its argument to the fail
+  // case so we can clean it up. In non-ownership qualified SIL, we expect no
+  // argument from the switch_enum in the default case. The way that we handle
+  // this transformation is that:
+  //
+  // 1. We replace all uses of the argument to the false block with a use of the
+  // checked cast branch's operand.
+  // 2. We delete the argument from the false block.
+  if (!SWEI->hasDefault())
+    return false;
+
+  SILBasicBlock *DefaultBlock = SWEI->getDefaultBB();
+  if (DefaultBlock->getNumArguments() == 0)
+    return false;
+  DefaultBlock->getArgument(0)->replaceAllUsesWith(SWEI->getOperand());
+  DefaultBlock->eraseArgument(0);
+  return true;
+}
+
+// Since we are threading through copies, we may have situations like:
+//
+// let x = alloc_box $Foo
+// let y = project_box x
+// let z = mark_uninitialized y
+// ... use z ...
+//
+// let y2 = project_box x
+//
+// let x2 = copy_value x
+// let y3 = project_box y
+//
+// We need to move project_box like y2 and y3 to go through z so that DI can
+// reason about them.
+//
+// Once DI is updated for ownership, this can go away.
+bool OwnershipModelEliminatorVisitor::visitProjectBoxInst(ProjectBoxInst *PBI) {
+  // First if our operand is already a mark_uninitialized, then we do not need
+  // to do anything.
+  auto *Use = PBI->getSingleUse();
+  if (Use && isa<MarkUninitializedInst>(Use->getUser())) {
+    return false;
+  }
+
+  // Otherwise, lets try to find the alloc_box.
+  SILValue BoxValue = PBI->getOperand();
+  while (auto *CVI = dyn_cast<CopyValueInst>(BoxValue)) {
+    BoxValue = CVI->getOperand();
+  }
+
+  // We were unable to find the alloc_box. This must be an indirect enum box
+  // pattern.
+  auto *ABI = dyn_cast<AllocBoxInst>(BoxValue);
+  if (!ABI)
+    return false;
+
+  // See if we can find (mark_uninitialized (project_box))
+  SILValue MUI;
+  for (auto *Use : ABI->getUses()) {
+    auto *BoxProjection = dyn_cast<ProjectBoxInst>(Use->getUser());
+    if (!BoxProjection)
+      continue;
+    auto *Op = BoxProjection->getSingleUse();
+    if (!Op || !isa<MarkUninitializedInst>(Op->getUser()))
+      continue;
+    MUI = SILValue(Op->getUser());
+    break;
+  }
+
+  // If we did not find a mark uninitialized inst, then this is not the pattern
+  // that we are looking for.
+  if (!MUI)
+    return false;
+
+  // Ok, we found it. Replace all uses of this project box with the
+  // mark_uninitialized and then erase it.
+  PBI->replaceAllUsesWith(MUI);
+  PBI->eraseFromParent();
   return true;
 }
 
@@ -182,32 +314,33 @@ bool OwnershipModelEliminatorVisitor::visitDestroyValueInst(DestroyValueInst *DV
 
 namespace {
 
-struct OwnershipModelEliminator : SILFunctionTransform {
+struct OwnershipModelEliminator : SILModuleTransform {
   void run() override {
-    SILFunction *F = getFunction();
+    for (auto &F : *getModule()) {
+      // Set F to have unqualified ownership.
+      F.setUnqualifiedOwnership();
 
-    // Set F to have unqualified ownership.
-    F->setUnqualifiedOwnership();
+      bool MadeChange = false;
+      SILBuilder B(F);
+      OwnershipModelEliminatorVisitor Visitor(B);
 
-    bool MadeChange = false;
-    SILBuilder B(*F);
-    OwnershipModelEliminatorVisitor Visitor(B);
+      for (auto &BB : F) {
+        for (auto II = BB.begin(), IE = BB.end(); II != IE;) {
+          // Since we are going to be potentially removing instructions, we need
+          // to make sure to increment our iterator before we perform any
+          // visits.
+          SILInstruction *I = &*II;
+          ++II;
 
-    for (auto &BB : *F) {
-      for (auto II = BB.begin(), IE = BB.end(); II != IE;) {
-        // Since we are going to be potentially removing instructions, we need
-        // to make sure to grab out instruction and increment first.
-        SILInstruction *I = &*II;
-        ++II;
-
-        MadeChange |= Visitor.visit(I);
+          MadeChange |= Visitor.visit(I);
+        }
       }
-    }
 
-    if (MadeChange) {
-      // If we made any changes, we just changed instructions, so invalidate
-      // that analysis.
-      invalidateAnalysis(SILAnalysis::InvalidationKind::Instructions);
+      if (MadeChange) {
+        auto InvalidKind =
+            SILAnalysis::InvalidationKind::BranchesAndInstructions;
+        invalidateAnalysis(&F, InvalidKind);
+      }
     }
   }
 

@@ -39,6 +39,10 @@ public:
     return Parts;
   }
 
+  ArrayRef<StringRef> getTags() const {
+    return Parts.Tags;
+  }
+
   Optional<const swift::markup::Paragraph *> getBrief() const {
     return Parts.Brief;
   }
@@ -57,6 +61,11 @@ public:
 
   ArrayRef<const swift::markup::MarkupASTNode *> getBodyNodes() const {
     return Parts.BodyNodes;
+  }
+
+  Optional<const markup::LocalizationKeyField *>
+  getLocalizationKeyField() const {
+    return Parts.LocalizationKeyField;
   }
 
   bool isEmpty() const {
@@ -86,6 +95,10 @@ Optional<DocComment *>getSingleDocComment(swift::markup::MarkupContext &Context,
 Optional<DocComment *> getCascadingDocComment(swift::markup::MarkupContext &MC,
                                              const Decl *D);
 
+/// Extract comments parts from the given Markup node.
+swift::markup::CommentParts
+extractCommentParts(swift::markup::MarkupContext &MC,
+                    swift::markup::MarkupASTNode *Node);
 } // namespace swift
 
 #endif // LLVM_SWIFT_AST_COMMENT_H

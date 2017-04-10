@@ -88,12 +88,13 @@ public:
 
   SILSuccessorIterator operator++(int) {
     SILSuccessorIterator copy = *this;
-    ++copy;
+    ++*this;
     return copy;
   }
 
   SILSuccessor *getSuccessorRef() const { return Cur; }
   SILBasicBlock *operator*();
+  const SILBasicBlock *operator*() const;
 };
   
 

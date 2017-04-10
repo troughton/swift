@@ -21,6 +21,7 @@
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/ASTVisitor.h"
 #include "swift/AST/NameLookup.h"
+#include "swift/AST/ParameterList.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <utility>
 using namespace swift;
@@ -394,7 +395,7 @@ public:
   // Unresolved member syntax '.Element' forms an EnumElement pattern. The
   // element will be resolved when we type-check the pattern.
   Pattern *visitUnresolvedMemberExpr(UnresolvedMemberExpr *ume) {
-    // We the unresolved member has an argument, turn it into a subpattern.
+    // If the unresolved member has an argument, turn it into a subpattern.
     Pattern *subPattern = nullptr;
     if (auto arg = ume->getArgument()) {
       subPattern = getSubExprPattern(arg);
@@ -402,11 +403,11 @@ public:
     
     // FIXME: Compound names.
     return new (TC.Context) EnumElementPattern(
-                              TypeLoc(), ume->getDotLoc(),
+                              ume->getDotLoc(),
                               ume->getNameLoc().getBaseNameLoc(),
                               ume->getName().getBaseName(),
-                              nullptr,
-                              subPattern);
+                              subPattern,
+                              ume);
   }
   
   // Member syntax 'T.Element' forms a pattern if 'T' is an enum and the
@@ -602,7 +603,8 @@ Pattern *TypeChecker::resolvePattern(Pattern *P, DeclContext *DC,
         .fixItInsert(TE->getStartLoc(), "is ");
       
       P = new (Context) IsPattern(TE->getStartLoc(), TE->getTypeLoc(),
-                                  /*subpattern*/nullptr);
+                                  /*subpattern*/nullptr,
+                                  CheckedCastKind::Unresolved);
     }
   
   // Look through a TypedPattern if present.
@@ -1004,6 +1006,7 @@ bool TypeChecker::coercePatternToType(Pattern *&P, DeclContext *dc, Type type,
                                       TypeResolutionOptions options,
                                       GenericTypeResolver *resolver,
                                       TypeLoc tyLoc) {
+recur:
   if (tyLoc.isNull()) {
     tyLoc = TypeLoc::withoutLoc(type);
   }
@@ -1377,6 +1380,14 @@ bool TypeChecker::coercePatternToType(Pattern *&P, DeclContext *dc, Type type,
 
               return true;
             }
+          
+          // If we have the original expression parse tree, try reinterpreting
+          // it as an expr-pattern if enum element lookup failed, since `.foo`
+          // could also refer to a static member of the context type.
+          } else if (EEP->hasUnresolvedOriginalExpr()) {
+            P = new (Context) ExprPattern(EEP->getUnresolvedOriginalExpr(),
+                                          nullptr, nullptr);
+            goto recur;
           }
 
           diagnose(EEP->getLoc(), diag::enum_element_pattern_member_not_found,
@@ -1434,10 +1445,9 @@ bool TypeChecker::coercePatternToType(Pattern *&P, DeclContext *dc, Type type,
     // If there is a subpattern, push the enum element type down onto it.
     if (EEP->hasSubPattern()) {
       Type elementType;
-      if (elt->hasArgumentType())
+      if (auto argType = elt->getArgumentInterfaceType())
         elementType = enumTy->getTypeOfMember(elt->getModuleContext(),
-                                              elt, this,
-                                              elt->getArgumentInterfaceType());
+                                              elt, argType);
       else
         elementType = TupleType::getEmpty(Context);
       Pattern *sub = EEP->getSubPattern();
@@ -1590,12 +1600,13 @@ bool TypeChecker::coerceParameterListToType(ParameterList *P, ClosureExpr *CE,
   // the closure argument is also one to avoid the tuple splat
   // from happening.
   if (!hadError && isa<ParenType>(paramListType.getPointer())) {
-    auto underlyingTy = paramListType->getCanonicalType();
+    auto underlyingTy = cast<ParenType>(paramListType.getPointer())
+      ->getUnderlyingType();
     
-    if (underlyingTy->is<TupleType>()) {
-      if (P->size() == 1) {
+    if (underlyingTy->is<TupleType>() &&
+        !underlyingTy->castTo<TupleType>()->getVarArgsBaseType()) {
+      if (P->size() == 1)
         return handleParameter(P->get(0), underlyingTy);
-      }
     }
     
     //pass
@@ -1614,9 +1625,11 @@ bool TypeChecker::coerceParameterListToType(ParameterList *P, ClosureExpr *CE,
   // The number of elements must match exactly.
   // TODO: incomplete tuple patterns, with some syntax.
   if (!hadError && tupleTy->getNumElements() != P->size()) {
-    auto fnType = FunctionType::get(paramListType->getDesugaredType(), FN->getResult());
+    auto fnType = FunctionType::get(paramListType->getDesugaredType(),
+                                    FN->getResult());
     diagnose(P->getStartLoc(), diag::closure_argument_list_tuple,
-             fnType, tupleTy->getNumElements(), P->size(), (P->size() == 1));
+             fnType, tupleTy->getNumElements(),
+             P->size(), (P->size() == 1));
     hadError = true;
   }
 

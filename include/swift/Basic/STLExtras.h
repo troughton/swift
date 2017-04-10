@@ -196,6 +196,8 @@ inline Iterator prev_or_begin(Iterator it, Iterator begin) {
 /// @}
 
 /// A range of iterators.
+/// TODO: Add `llvm::iterator_range::empty()`, then remove this helper, along
+/// with the superfluous FilterIterator and TransformIterator.
 template<typename Iterator>
 class IteratorRange {
   Iterator First, Last;
@@ -702,6 +704,11 @@ inline bool is_sorted_and_uniqued(IterTy II, IterTy IE) {
 template <typename Container>
 inline bool is_sorted_and_uniqued(const Container &C) {
   return is_sorted_and_uniqued(C.begin(), C.end());
+}
+
+template <typename Container, typename OutputIterator>
+inline void copy(const Container &C, OutputIterator iter) {
+  std::copy(C.begin(), C.end(), iter);
 }
 
 //===----------------------------------------------------------------------===//

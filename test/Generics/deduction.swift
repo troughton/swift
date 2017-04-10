@@ -216,11 +216,11 @@ func callRangeOfIsBefore(_ ia: [Int], da: [Double]) {
 }
 
 func testEqualIterElementTypes<A: IteratorProtocol, B: IteratorProtocol>(_ a: A, _ b: B) where A.Element == B.Element {}
-// expected-note@-1 {{requirement specified as 'B.Element' == 'A.Element' [with A = IndexingIterator<[Int]>, B = IndexingIterator<[Double]>]}}
+// expected-note@-1 {{requirement specified as 'A.Element' == 'B.Element' [with A = IndexingIterator<[Int]>, B = IndexingIterator<[Double]>]}}
 func compareIterators() {
   var a: [Int] = []
   var b: [Double] = []
-  testEqualIterElementTypes(a.makeIterator(), b.makeIterator()) // expected-error {{'<A, B where A : IteratorProtocol, B : IteratorProtocol, B.Element == A.Element> (A, B) -> ()' requires the types 'Double' and 'Int' be equivalent}}
+  testEqualIterElementTypes(a.makeIterator(), b.makeIterator()) // expected-error {{'<A, B where A : IteratorProtocol, B : IteratorProtocol, A.Element == B.Element> (A, B) -> ()' requires the types 'Int' and 'Double' be equivalent}}
 }
 
 protocol P_GI {
@@ -292,7 +292,7 @@ protocol Bool_ {}
 struct False : Bool_ {}
 struct True : Bool_ {}
 
-postfix func <*> <B:Bool_>(_: Test<B>) -> Int? { return .none }
+postfix func <*> <B>(_: Test<B>) -> Int? { return .none }
 postfix func <*> (_: Test<True>) -> String? { return .none }
 
 class Test<C: Bool_> : MetaFunction {

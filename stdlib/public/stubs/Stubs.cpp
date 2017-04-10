@@ -64,7 +64,9 @@ static long double swift_strtold_l(const char *nptr,
 #include <xlocale.h>
 #endif
 #include <limits>
+#include <thread>
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Compiler.h"
 #include "swift/Runtime/Debug.h"
 #include "swift/Basic/Lazy.h"
 
@@ -99,9 +101,9 @@ static uint64_t uint64ToStringImpl(char *Buffer, uint64_t Value,
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" uint64_t swift_int64ToString(char *Buffer, size_t BufferLength,
-                                        int64_t Value, int64_t Radix,
-                                        bool Uppercase) {
+uint64_t swift_int64ToString(char *Buffer, size_t BufferLength,
+                             int64_t Value, int64_t Radix,
+                             bool Uppercase) {
   if ((Radix >= 10 && BufferLength < 32) || (Radix < 10 && BufferLength < 65))
     swift::crash("swift_int64ToString: insufficient buffer size");
 
@@ -123,9 +125,9 @@ extern "C" uint64_t swift_int64ToString(char *Buffer, size_t BufferLength,
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" uint64_t swift_uint64ToString(char *Buffer, intptr_t BufferLength,
-                                         uint64_t Value, int64_t Radix,
-                                         bool Uppercase) {
+uint64_t swift_uint64ToString(char *Buffer, intptr_t BufferLength,
+                              uint64_t Value, int64_t Radix,
+                              bool Uppercase) {
   if ((Radix >= 10 && BufferLength < 32) || (Radix < 10 && BufferLength < 64))
     swift::crash("swift_int64ToString: insufficient buffer size");
 
@@ -235,22 +237,22 @@ static uint64_t swift_floatingPointToString(char *Buffer, size_t BufferLength,
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" uint64_t swift_float32ToString(char *Buffer, size_t BufferLength,
-                                          float Value, bool Debug) {
+uint64_t swift_float32ToString(char *Buffer, size_t BufferLength,
+                               float Value, bool Debug) {
   return swift_floatingPointToString<float>(Buffer, BufferLength, Value,
                                             "%0.*g", Debug);
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" uint64_t swift_float64ToString(char *Buffer, size_t BufferLength,
-                                          double Value, bool Debug) {
+uint64_t swift_float64ToString(char *Buffer, size_t BufferLength,
+                               double Value, bool Debug) {
   return swift_floatingPointToString<double>(Buffer, BufferLength, Value,
                                              "%0.*g", Debug);
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" uint64_t swift_float80ToString(char *Buffer, size_t BufferLength,
-                                          long double Value, bool Debug) {
+uint64_t swift_float80ToString(char *Buffer, size_t BufferLength,
+                               long double Value, bool Debug) {
   return swift_floatingPointToString<long double>(Buffer, BufferLength, Value,
                                                   "%0.*Lg", Debug);
 }
@@ -314,17 +316,17 @@ ssize_t swift::swift_stdlib_readLine_stdin(unsigned char **LinePtr) {
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" float _swift_fmodf(float lhs, float rhs) {
+float _swift_fmodf(float lhs, float rhs) {
     return fmodf(lhs, rhs);
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" double _swift_fmod(double lhs, double rhs) {
+double _swift_fmod(double lhs, double rhs) {
     return fmod(lhs, rhs);
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" long double _swift_fmodl(long double lhs, long double rhs) {
+long double _swift_fmodl(long double lhs, long double rhs) {
     return fmodl(lhs, rhs);
 }
 
@@ -343,7 +345,6 @@ extern "C" long double _swift_fmodl(long double lhs, long double rhs) {
 
 typedef int ti_int __attribute__((__mode__(TI)));
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C"
 ti_int
 __muloti4(ti_int a, ti_int b, int* overflow)
 {
@@ -395,9 +396,14 @@ __muloti4(ti_int a, ti_int b, int* overflow)
 // some other lower-level architecture issue that I'm
 // missing.  Perhaps relevant bug report:
 // FIXME: https://llvm.org/bugs/show_bug.cgi?id=14469
-typedef int di_int __attribute__((__mode__(DI)));
+#if __has_attribute(__mode__)
+#define SWIFT_MODE_DI __attribute__((__mode__(DI)))
+#else
+#define SWIFT_MODE_DI
+#endif
+
+typedef int di_int SWIFT_MODE_DI;
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C"
 di_int
 __mulodi4(di_int a, di_int b, int* overflow)
 {
@@ -439,11 +445,28 @@ __mulodi4(di_int a, di_int b, int* overflow)
 #endif
 
 #if defined(__CYGWIN__) || defined(_WIN32)
+  #define strcasecmp _stricmp
+#endif
+
+static bool swift_stringIsSignalingNaN(const char *nptr) {
+  if (nptr[0] == '+' || nptr[0] == '-') {
+    nptr++;
+  }
+
+  return strcasecmp(nptr, "snan") == 0;
+}
+
+#if defined(__CYGWIN__) || defined(_WIN32)
 // Cygwin does not support uselocale(), but we can use the locale feature 
 // in stringstream object.
 template <typename T>
 static const char *_swift_stdlib_strtoX_clocale_impl(
     const char *nptr, T *outResult) {
+  if (swift_stringIsSignalingNaN(nptr)) {
+    *outResult = std::numeric_limits<T>::signaling_NaN();
+    return nptr + std::strlen(nptr);
+  }
+  
   std::istringstream ValueStream(nptr);
   ValueStream.imbue(std::locale::classic());
   T ParsedValue;
@@ -481,6 +504,13 @@ static const char *_swift_stdlib_strtoX_clocale_impl(
     const char * nptr, T* outResult, T huge,
     T (*posixImpl)(const char *, char **, locale_t)
 ) {
+  if (swift_stringIsSignalingNaN(nptr)) {
+    // TODO: ensure that the returned sNaN bit pattern matches that of sNaNs
+    // produced by Swift.
+    *outResult = std::numeric_limits<T>::signaling_NaN();
+    return nptr + std::strlen(nptr);
+  }
+  
   char *EndPtr;
   errno = 0;
   const auto result = posixImpl(nptr, &EndPtr, getCLocale());
@@ -532,11 +562,5 @@ int swift::_swift_stdlib_putc_stderr(int C) {
 }
 
 size_t swift::_swift_stdlib_getHardwareConcurrency() {
-#if defined(_WIN32)
-  SYSTEM_INFO SystemInfo;
-  GetSystemInfo(&SystemInfo);
-  return SystemInfo.dwNumberOfProcessors;
-#else
-  return sysconf(_SC_NPROCESSORS_ONLN);
-#endif
+  return std::thread::hardware_concurrency();
 }

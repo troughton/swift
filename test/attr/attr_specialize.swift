@@ -49,7 +49,9 @@ class G<T> {
   // CHECK: @_specialize(exported: false, kind: full, where T == Int)
   @_specialize(where T == Int)
   @_specialize(where T == T) // expected-error{{Only concrete type same-type requirements are supported by '_specialize' attribute}}
+	// expected-warning@-1{{redundant same-type constraint 'T' == 'T'}}
   @_specialize(where T == S<T>) // expected-error{{Only concrete type same-type requirements are supported by '_specialize' attribute}}
+	// expected-error@-1{{same-type constraint 'T' == 'S<T>' is recursive}}
   @_specialize(where T == Int, U == Int) // expected-error{{use of undeclared type 'U'}}
   func noGenericParams() {}
 
@@ -85,7 +87,7 @@ struct FloatElement : HasElt {
   typealias Element = Float
 }
 @_specialize(where T == FloatElement)
-@_specialize(where T == IntElement) // expected-error{{generic parameter T.Element cannot be equal to both 'Float' and 'IntElement.Element' (aka 'Int')}}
+@_specialize(where T == IntElement) // expected-error{{associated type 'T.Element' cannot be equal to both 'Float' and 'Int'}}
 func sameTypeRequirement<T : HasElt>(_ t: T) where T.Element == Float {}
 
 @_specialize(where T == Sub)
@@ -115,6 +117,8 @@ public func funcWithEmptySpecializeAttr<X: P, Y>(x: X, y: Y) {
 @_specialize(where X:_Trivial(8), Y == Int)
 @_specialize(where X == Int, Y == Int)
 @_specialize(where X == Int, X == Int) // expected-error{{too few type parameters are specified in '_specialize' attribute (got 1, but expected 2)}} expected-error{{Missing constraint for 'Y' in '_specialize' attribute}}
+// expected-warning@-1{{redundant same-type constraint 'X' == 'Int'}}
+// expected-note@-2{{same-type constraint 'X' == 'Int' written here}}
 @_specialize(where Y:_Trivial(32), X == Float)
 @_specialize(where X1 == Int, Y1 == Int) // expected-error{{use of undeclared type 'X1'}} expected-error{{use of undeclared type 'Y1'}} expected-error{{too few type parameters are specified in '_specialize' attribute (got 0, but expected 2)}} expected-error{{Missing constraint for 'X' in '_specialize' attribute}} expected-error{{Missing constraint for 'Y' in '_specialize' attribute}}
 public func funcWithTwoGenericParameters<X, Y>(x: X, y: Y) {
@@ -147,18 +151,44 @@ public func anotherFuncWithTwoGenericParameters<X: P, Y>(x: X, y: Y) {
 
 @_specialize(where T: P) // expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
 @_specialize(where T: Int) // expected-error{{Only conformances to protocol types are supported by '_specialize' attribute}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
+// expected-error@-1{{type 'T' constrained to non-protocol type 'Int'}}
 
 @_specialize(where T: S1) // expected-error{{Only conformances to protocol types are supported by '_specialize' attribute}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
+// expected-error@-1{{type 'T' constrained to non-protocol type 'S1'}}
 @_specialize(where T: C1) // expected-error{{Only conformances to protocol types are supported by '_specialize' attribute}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
 @_specialize(where Int: P) // expected-error{{type 'Int' in conformance requirement does not refer to a generic parameter or associated type}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}} expected-error{{too few type parameters are specified in '_specialize' attribute (got 0, but expected 1)}} expected-error{{Missing constraint for 'T' in '_specialize' attribute}}
 func funcWithForbiddenSpecializeRequirement<T>(_ t: T) {
 }
 
-@_specialize(where T: _Trivial(32), T: _Trivial(64), T: _Trivial, T: _RefCountedObject) // expected-error{{multiple layout constraints cannot be used at the same time: '_Trivial(64)' and '_Trivial(32)'}} expected-note{{previous layout constraint declaration '_Trivial(32)' was here}} expected-error{{multiple layout constraints cannot be used at the same time: '_Trivial' and '_Trivial(32)'}} expected-note{{previous layout constraint declaration '_Trivial(32)' was here}} expected-error{{multiple layout constraints cannot be used at the same time: '_RefCountedObject' and '_Trivial(32)'}} expected-note{{previous layout constraint declaration '_Trivial(32)' was here}}
-@_specialize(where Array<T> == Int) // expected-error{{neither type in same-type refers to a generic parameter or associated type}} expected-error{{Only requirements on generic parameters are supported by '_specialize' attribute}}
+@_specialize(where T: _Trivial(32), T: _Trivial(64), T: _Trivial, T: _RefCountedObject)
+// expected-error@-1{{generic parameter 'T' has conflicting layout constraints '_Trivial(64)' and '_Trivial(32)'}}
+// expected-error@-2{{generic parameter 'T' has conflicting layout constraints '_RefCountedObject' and '_Trivial(32)'}}
+// expected-warning@-3{{redundant layout constraint 'T' : '_Trivial'}}
+// expected-note@-4 3{{layout constraint constraint 'T' : '_Trivial(32)' written here}}
+@_specialize(where T: _Trivial, T: _Trivial(64))
+// expected-warning@-1{{redundant layout constraint 'T' : '_Trivial'}}
+// expected-note@-2 1{{layout constraint constraint 'T' : '_Trivial(64)' written here}}
+@_specialize(where T: _RefCountedObject, T: _NativeRefCountedObject)
+// expected-warning@-1{{redundant layout constraint 'T' : '_RefCountedObject'}}
+// expected-note@-2 1{{layout constraint constraint 'T' : '_NativeRefCountedObject' written here}}
+@_specialize(where Array<T> == Int) // expected-error{{Only requirements on generic parameters are supported by '_specialize' attribute}}
+// expected-error@-1{{generic signature requires types 'Array<T>' and 'Int' to be the same}}
 @_specialize(where T.Element == Int) // expected-error{{Only requirements on generic parameters are supported by '_specialize' attribute}}
 public func funcWithComplexSpecializeRequirements<T: ProtocolWithDep>(t: T) -> Int {
   return 55555
+}
+
+public protocol Proto: class {
+}
+
+@_specialize(where T: _RefCountedObject)
+// expected-warning@-1{{redundant layout constraint 'T' : '_RefCountedObject'}}
+@_specialize(where T: _Trivial)
+// expected-error@-1{{generic parameter 'T' has conflicting layout constraints '_Trivial' and '_NativeClass'}}
+@_specialize(where T: _Trivial(64))
+// expected-error@-1{{generic parameter 'T' has conflicting layout constraints '_Trivial(64)' and '_NativeClass'}}
+public func funcWithABaseClassRequirement<T>(t: T) -> Int where T: C1 {
+  return 44444
 }
 
 public struct S1 {
@@ -183,6 +213,9 @@ public func copyValue<S>(_ t: S, s: inout S) -> Int64 where S: P{
 @_specialize(exported: true, where S: _Trivial(64))
 @_specialize(exported: true, where S: _Trivial(32))
 @_specialize(exported: true, where S: _RefCountedObject)
+@_specialize(exported: true, where S: _NativeRefCountedObject)
+@_specialize(exported: true, where S: _Class)
+@_specialize(exported: true, where S: _NativeClass)
 @inline(never)
 public func copyValueAndReturn<S>(_ t: S, s: inout S) -> S where S: P{
   return s
@@ -219,4 +252,30 @@ public func copy3<S>(_ s: S) -> S {
 }
 
 public func funcWithWhereClause<T>(t: T) where T:P, T: _Trivial(64) { // expected-error{{layout constraints are only allowed inside '_specialize' attributes}}
+}
+
+// rdar://problem/29333056
+public protocol P1 {
+  associatedtype DP1
+  associatedtype DP11
+}
+
+public protocol P2 {
+  associatedtype DP2 : P1
+}
+
+public struct H<T> {
+}
+
+public struct MyStruct3 : P1 {
+  public typealias DP1 = Int
+  public typealias DP11 = H<Int>
+}
+
+public struct MyStruct4 : P2 {
+  public typealias DP2 = MyStruct3
+}
+
+@_specialize(where T==MyStruct4)
+public func foo<T: P2>(_ t: T) where T.DP2.DP11 == H<T.DP2.DP1> {
 }

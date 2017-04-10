@@ -21,7 +21,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Casting.h"
 #include "swift/ABI/MetadataValues.h"
-#include "swift/Basic/Unreachable.h"
+#include "swift/Runtime/Unreachable.h"
 
 #include <iostream>
 
@@ -397,11 +397,11 @@ public:
   }
 
   bool isAnyObject() const {
-    return MangledName == "Ps9AnyObject_";
+    return MangledName == "s9AnyObject_p";
   }
 
   bool isError() const {
-    return MangledName == "Ps5Error_";
+    return MangledName == "s5Error_p";
   }
 
   const std::string &getMangledName() const {
@@ -783,7 +783,7 @@ public:
 #include "swift/Reflection/TypeRefs.def"
     }
 
-    swift_unreachable("Unhandled TypeRefKind in switch.");
+    swift_runtime_unreachable("Unhandled TypeRefKind in switch.");
   }
 };
 

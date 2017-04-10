@@ -1,4 +1,4 @@
-// RUN: %target-typecheck-verify-swift -D FOO -D BAZ
+// RUN: %target-typecheck-verify-swift -D FOO -D BAZ -swift-version 4
 
 #if FOO == BAZ // expected-error{{expected '&&' or '||' expression}}
 var x = 0
@@ -31,6 +31,17 @@ func h() {}
       .baz() // expected-error {{unexpected platform condition (expected 'os', 'arch', or 'swift')}}
 
 #endif
+
+
+// <https://twitter.com/practicalswift/status/829066902869786625>
+#if // expected-error {{incomplete condition in conditional compilation directive}}
+#if 0 == // expected-error {{incomplete condition in conditional compilation directive}}
+#if0= // expected-error {{incomplete condition in conditional compilation directive}} expected-error {{'=' must have consistent whitespace on both sides}}
+class Foo {
+  #if // expected-error {{incomplete condition in conditional compilation directive}}
+  #if 0 == // expected-error {{incomplete condition in conditional compilation directive}}
+  #if0= // expected-error {{incomplete condition in conditional compilation directive}} expected-error {{'=' must have consistent whitespace on both sides}}
+}
 
 struct S {
   #if FOO
@@ -87,4 +98,19 @@ func fn_j() {}
 fn_j() // OK
 
 #if foo || bar || nonExistent() // expected-error {{expected only one argument to platform condition}}
+#endif
+
+#if FOO = false
+// expected-error @-1 {{invalid conditional compilation expression}}
+undefinedFunc() // ignored.
+#else
+undefinedFunc() // expected-error {{use of unresolved identifier 'undefinedFunc'}}
+#endif
+
+#if false
+#elseif FOO ? true : false
+// expected-error @-1 {{invalid conditional compilation expression}}
+undefinedFunc() // ignored.
+#else
+undefinedFunc() // expected-error {{use of unresolved identifier 'undefinedFunc'}}
 #endif

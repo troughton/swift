@@ -6,6 +6,7 @@ CHANGELOG
 
 | Contents               |
 | :--------------------- |
+| [Swift 4.0](#swift-40) |
 | [Swift 3.1](#swift-31) |
 | [Swift 3.0](#swift-30) |
 | [Swift 2.2](#swift-22) |
@@ -17,13 +18,129 @@ CHANGELOG
 
 </details>
 
+Swift 4.0
+---------
+
+* [SE-0138](https://github.com/apple/swift-evolution/blob/master/proposals/0138-unsaferawbufferpointer.md#amendment-to-normalize-the-slice-type):
+
+  Slicing a raw buffer no longer results in the same raw buffer
+  type. Specifically, `Unsafe[Mutable]BufferPointer.SubSequence` now has type
+  `[Mutable]RandomAccessSlice<Unsafe[Mutable]RawBufferPointer>`. Therefore,
+  indexing into a raw buffer slice is no longer zero-based. This is required for
+  raw buffers to fully conform to generic `Collection`. Changing the slice type
+  resulted in the following behavioral changes:
+
+  Passing a region within buffer to another function that takes a buffer can no
+  longer be done via subscript:
+
+  Incorrect: `takesRawBuffer(buffer[i..<j])`
+
+  This now requires explicit initialization, using a `rebasing:` initializer,
+  which converts from a slice to a zero-based `Unsafe[Mutable]RawBufferPointer`:
+
+  Correct: `takesRawBuffer(UnsafeRawBufferPointer(rebasing: buffer[i..<j]))`
+
+  Subscript assignment directly from a buffer no longer compiles:
+
+  Incorrect: `buffer[n..<m] = smaller_buffer`
+
+  This now requires creation of a slice from the complete source buffer:
+
+  Correct: `buffer[n..<m] = smaller_buffer.suffix(from: 0)`
+
+  `UnsafeRawBufferPointer`'s slice type no longer has a nonmutating subscript
+  setter. So assigning into a mutable `let` buffer no longer compiles:
+
+  ```
+  let slice = buffer[n..<m]
+  slice[i..<j] = buffer[k..<l]
+  ```
+
+  The assigned buffer slice now needs to be a `var`.
+
+  ```
+  var slice = buffer[n..<m]
+  slice[i..<j] = buffer[k..<l]
+  ```
+
+* [SR-1529](https://bugs.swift.org/browse/SR-1529):
+
+  Covariant method overrides are now fully supported, fixing many crashes
+  and compile-time assertions when defining or calling such methods.
+  Examples:
+
+  ```swift
+  class Bed {}
+  class Nook : Bed {}
+
+  class Cat<T> {
+    func eat(snack: T) {}
+    func play(game: String) {}
+    func sleep(where: Nook) {}
+  }
+
+  class Dog : Cat<(Int, Int)> {
+    // 'T' becomes concrete
+    override func eat(snack: (Int, Int)) {}
+
+    // 'game' becomes optional
+    override func play(game: String?) {}
+
+    // 'where' becomes a superclass
+    override func sleep(where: Bed) {}
+  }
+  ```
+
+* [SE-0148][]:
+
+  Subscript declarations can now be defined to have generic parameter lists.
+  Example:
+
+  ```swift
+  extension JSON {
+    subscript<T>(key: String) -> T?
+        where T : JSONConvertible {
+      // ...
+    }
+  }
+  ```
+
+* [SE-0110][]:
+
+  In Swift 4 mode, Swift's type system properly distinguishes between functions that
+  take one tuple argument, and functions that take multiple arguments.
+
+* More types of C macros which define integer constants are supported by the
+  importer. Specifically the `+, -, *, /, ^, >>, ==, <, <=, >, >=` operators
+  are now recognized, and the previously-supported `<<, &&, ||, &, |`
+  operators always look through importable macros on each side of the operator.
+  Logical AND and OR macros (`&&` and `||`) are now imported as Boolean
+  constants, rather than integers of value 0 or 1.
+
+  ```c
+  #define HIGHER    (5 + 5)
+  #define THE_EDGE  (INT64_MAX - 1)
+  #define FORTY_TWO (6 * 9)
+  #define SPLIT     (THE_EDGE / FORTY_TWO)
+
+  #define HALF_AND_HALF (UINT64_MAX ^ UINT32_MAX)
+
+  #define SMALL   (BITWIDTH == 32)
+  #define TINY    (BITWIDTH <= 16)
+  #define LIMITED (SMALL || TINY)   // now imported as Bool.
+  ```
+
+  **Add new entries to the top of this file, not here!**
+
 Swift 3.1
 ---------
 
+### 2017-03-27 (Xcode 8.3)
+
 * [SE-0080][]:
 
-  Adds a new family of conversion initializers to all numeric types that 
-  either complete successfully without loss of information or return nil. 
+  Adds a new family of conversion initializers to all numeric types that
+  either complete successfully without loss of information or return nil.
 
 * Swift will now warn when an `NSObject` subclass attempts to override the
   class `initialize` method. Swift doesn't guarantee that references to class
@@ -49,7 +166,7 @@ Swift 3.1
   the compiler will prevent them from being used in the first place.
 
 * Indirect fields from C structures and unions are now always imported, while
-  they previously weren't imported if they belonged to an union. This is done by
+  they previously weren't imported if they belonged to a union. This is done by
   naming anonymous fields. For example:
 
   ```c
@@ -83,7 +200,7 @@ Swift 3.1
 
 * The `withoutActuallyEscaping` function from [SE-0103][] has been implemented.
   To pass off a non-escaping closure to an API that formally takes an
-  `@escaping` closure, but which is used in a way that will not in fact 
+  `@escaping` closure, but which is used in a way that will not in fact
   escape it in practice, use `withoutActuallyEscaping` to get an escapable
   copy of the closure and delimit its expected lifetime. For example:
 
@@ -143,8 +260,6 @@ Swift 3.1
   satisfying a predicate.  `drop(while:)` requests the remaining
   subsequence after dropping the longest subsequence satisfying a
   predicate.
-
-**Add new entries to the top of this file, not here!**
 
 Swift 3.0
 ---------
@@ -6388,3 +6503,11 @@ Swift 1.0
 [SE-0145]: <https://github.com/apple/swift-evolution/blob/master/proposals/0145-package-manager-version-pinning.md>
 [SE-0146]: <https://github.com/apple/swift-evolution/blob/master/proposals/0146-package-manager-product-definitions.md>
 [SE-0147]: <https://github.com/apple/swift-evolution/blob/master/proposals/0147-move-unsafe-initialize-from.md>
+[SE-0148]: <https://github.com/apple/swift-evolution/blob/master/proposals/0148-generic-subscripts.md>
+[SE-0149]: <https://github.com/apple/swift-evolution/blob/master/proposals/0149-package-manager-top-of-tree.md>
+[SE-0150]: <https://github.com/apple/swift-evolution/blob/master/proposals/0150-package-manager-branch-support.md>
+[SE-0151]: <https://github.com/apple/swift-evolution/blob/master/proposals/0151-package-manager-swift-language-compatibility-version.md>
+[SE-0152]: <https://github.com/apple/swift-evolution/blob/master/proposals/0152-package-manager-tools-version.md>
+[SE-0153]: <https://github.com/apple/swift-evolution/blob/master/proposals/0153-compensate-for-the-inconsistency-of-nscopyings-behaviour.md>
+[SE-0154]: <https://github.com/apple/swift-evolution/blob/master/proposals/0154-dictionary-key-and-value-collections.md>
+[SE-0155]: <https://github.com/apple/swift-evolution/blob/master/proposals/0155-normalize-enum-case-representation.md>

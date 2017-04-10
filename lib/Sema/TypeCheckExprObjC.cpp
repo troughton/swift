@@ -289,7 +289,8 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
 
       // Resolve this component to the variable we found.
       expr->resolveComponent(idx, var);
-      updateState(/*isProperty=*/true, var->getType()->getRValueObjectType());
+      updateState(/*isProperty=*/true,
+                  var->getInterfaceType()->getRValueObjectType());
 
       // Check that the property is @objc.
       if (!var->isObjC()) {
@@ -298,6 +299,20 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
         if (var->getLoc().isValid() && var->getDeclContext()->isTypeContext()) {
           diagnose(var, diag::make_decl_objc,
                    var->getDescriptiveKind())
+            .fixItInsert(var->getAttributeInsertionLoc(false),
+                         "@objc ");
+        }
+      } else if (auto attr = var->getAttrs().getAttribute<ObjCAttr>()) {
+        // If this attribute was inferred based on deprecated Swift 3 rules,
+        // complain.
+        if (attr->isSwift3Inferred() &&
+            !Context.LangOpts.WarnSwift3ObjCInference) {
+          diagnose(componentNameLoc, diag::expr_keypath_swift3_objc_inference,
+                   var->getFullName(),
+                   var->getDeclContext()
+                    ->getAsNominalTypeOrNominalTypeExtensionContext()
+                   ->getName());
+          diagnose(var, diag::make_decl_objc, var->getDescriptiveKind())
             .fixItInsert(var->getAttributeInsertionLoc(false),
                          "@objc ");
         }
@@ -330,7 +345,7 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
 
       Type newType;
       if (lookupType && !lookupType->isAnyObject()) {
-        newType = lookupType->getTypeOfMember(dc->getParentModule(), type, this,
+        newType = lookupType->getTypeOfMember(dc->getParentModule(), type,
                                               type->getDeclaredInterfaceType());
       } else {
         newType = type->getDeclaredInterfaceType();

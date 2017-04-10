@@ -1,8 +1,13 @@
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -emit-sil %s -verify
+// RUN: not %target-swift-frontend(mock-sdk: %clang-importer-sdk) -typecheck %s 2>&1 | %FileCheck %s
 // -- Check that we can successfully round-trip.
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -D IRGEN -emit-ir %s >/dev/null
 
 // REQUIRES: objc_interop
+
+// At one point we diagnosed enum case aliases that referred to unavailable 
+// cases in their (synthesized) implementation.
+// CHECK-NOT: unknown
 
 import Foundation
 import user_objc
@@ -106,6 +111,15 @@ extension NSAliasesEnum {
   }
 }
 
+#if !IRGEN
+_ = NSUnavailableAliasesEnum.originalAU
+_ = NSUnavailableAliasesEnum.aliasAU // expected-error {{'aliasAU' is unavailable}}
+_ = NSUnavailableAliasesEnum.originalUA // expected-error {{'originalUA' is unavailable}}
+_ = NSUnavailableAliasesEnum.aliasUA
+_ = NSUnavailableAliasesEnum.originalUU // expected-error {{'originalUU' is unavailable}}
+_ = NSUnavailableAliasesEnum.aliasUU // expected-error {{'aliasUU' is unavailable}}
+#endif
+
 // Test NS_SWIFT_NAME:
 _ = XMLNode.Kind.DTDKind == .invalid
 
@@ -190,3 +204,7 @@ _ = EmptySet1.default
 _ = EmptySet2.none
 // ...or the original name.
 _ = EmptySet3.None
+
+// Just use this type, making sure that its case alias doesn't cause problems.
+// rdar://problem/30401506
+_ = EnumWithAwkwardDeprecations.normalCase1

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 @_exported import Foundation // Clang module
+import _SwiftFoundationOverlayShims
 
 extension IndexSet.Index {
     public static func ==(lhs: IndexSet.Index, rhs: IndexSet.Index) -> Bool {
@@ -39,52 +40,6 @@ extension IndexSet.RangeView {
         return lhs.startIndex == rhs.startIndex && lhs.endIndex == rhs.endIndex && lhs.indexSet == rhs.indexSet
     }
 }
-
-// We currently cannot use this mechanism because NSIndexSet is not abstract; it has its own ivars and therefore subclassing it using the same trick as NSData, etc. does not work.
-
-/*
-private final class _SwiftNSIndexSet : _SwiftNativeNSIndexSet, _SwiftNativeFoundationType {
-    public typealias ImmutableType = NSIndexSet
-    public typealias MutableType = NSMutableIndexSet
-
-    var __wrapped : _MutableUnmanagedWrapper<ImmutableType, MutableType>
-
-    init(immutableObject: AnyObject) {
-      // Take ownership.
-      __wrapped = .Immutable(
-        Unmanaged.passRetained(
-          _unsafeReferenceCast(immutableObject, to: ImmutableType.self)))
-
-      super.init()
-    }
-
-    init(mutableObject: AnyObject) {
-      // Take ownership.
-      __wrapped = .Mutable(
-       Unmanaged.passRetained(
-         _unsafeReferenceCast(mutableObject, to: MutableType.self)))
-      super.init()
-    }
-
-    public required init(unmanagedImmutableObject: Unmanaged<ImmutableType>) {
-      // Take ownership.
-      __wrapped = .Immutable(unmanagedImmutableObject)
-
-      super.init()
-    }
-
-    public required init(unmanagedMutableObject: Unmanaged<MutableType>) {
-      // Take ownership.
-      __wrapped = .Mutable(unmanagedMutableObject)
-
-      super.init()
-    }
-
-    deinit {
-      releaseWrappedObject()
-    }
-}
-*/
 
 /// Manages a `Set` of integer values, which are commonly used as an index type in Cocoa API.
 ///
@@ -257,9 +212,9 @@ public struct IndexSet : ReferenceConvertible, Equatable, BidirectionalCollectio
     
     private func _indexOfRange(containing integer : Element) -> RangeView.Index? {
         let result = _handle.map { 
-            __NSIndexSetIndexOfRangeContainingIndex($0, UInt(integer))
+            __NSIndexSetIndexOfRangeContainingIndex($0, integer)
         }
-        if result == UInt(NSNotFound) {
+        if result == NSNotFound {
             return nil
         } else {
             return Int(result)
@@ -268,9 +223,9 @@ public struct IndexSet : ReferenceConvertible, Equatable, BidirectionalCollectio
     
     private func _range(at index: RangeView.Index) -> Range<Element> {
         return _handle.map {
-            var location: UInt = 0
-            var length: UInt = 0
-            __NSIndexSetRangeAtIndex($0, UInt(index), &location, &length)
+            var location: Int = 0
+            var length: Int = 0
+            __NSIndexSetRangeAtIndex($0, index, &location, &length)
             return Int(location)..<Int(location)+Int(length)
         }
     }
@@ -785,7 +740,7 @@ extension IndexSet : CustomStringConvertible, CustomDebugStringConvertible, Cust
 
     public var customMirror: Mirror {
         var c: [(label: String?, value: Any)] = []
-        c.append((label: "ranges", value: rangeView.map { $0 }))
+        c.append((label: "ranges", value: Array(rangeView)))
         return Mirror(self, children: c, displayStyle: Mirror.DisplayStyle.struct)
     }
 }
@@ -897,15 +852,6 @@ extension NSIndexSet : _HasCustomAnyHashableRepresentation {
     }
 }
 
-@_silgen_name("__NSIndexSetRangeCount")
-internal func __NSIndexSetRangeCount(_ indexSet: NSIndexSet) -> UInt
-
-@_silgen_name("__NSIndexSetRangeAtIndex")
-internal func __NSIndexSetRangeAtIndex(_ indexSet: NSIndexSet, _ index: UInt, _ location : UnsafeMutablePointer<UInt>, _ length : UnsafeMutablePointer<UInt>)
-
-@_silgen_name("__NSIndexSetIndexOfRangeContainingIndex")
-internal func __NSIndexSetIndexOfRangeContainingIndex(_ indexSet: NSIndexSet, _ index: UInt) -> UInt
-
 // MARK: Protocol
 
 // TODO: This protocol should be replaced with a native Swift object like the other Foundation bridged types. However, NSIndexSet does not have an abstract zero-storage base class like NSCharacterSet, NSData, and NSAttributedString. Therefore the same trick of laying it out with Swift ref counting does not work.and
@@ -956,7 +902,7 @@ private final class _MutablePairHandle<ImmutableType : NSObject, MutableType : N
             return try whatToDo(i)
         case .Mutable(let m):
             // TODO: It should be possible to reflect the constraint that MutableType is a subtype of ImmutableType in the generics for the class, but I haven't figured out how yet. For now, cheat and unsafe bit cast.
-            return try whatToDo(unsafeBitCast(m, to: ImmutableType.self))
+            return try whatToDo(unsafeDowncast(m, to: ImmutableType.self))
         }
     }
     
@@ -966,7 +912,7 @@ private final class _MutablePairHandle<ImmutableType : NSObject, MutableType : N
             return i
         case .Mutable(let m):
             // TODO: It should be possible to reflect the constraint that MutableType is a subtype of ImmutableType in the generics for the class, but I haven't figured out how yet. For now, cheat and unsafe bit cast.
-            return unsafeBitCast(m, to: ImmutableType.self)
+            return unsafeDowncast(m, to: ImmutableType.self)
         }
     }
 }

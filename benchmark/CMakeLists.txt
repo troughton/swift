@@ -29,6 +29,7 @@ set(SWIFT_BENCH_MODULES
     single-source/ArraySubscript
     single-source/BitCount
     single-source/ByteSwap
+    single-source/CString
     single-source/Calculator
     single-source/CaptureProp
     single-source/CharacterLiteralsLarge
@@ -43,15 +44,19 @@ set(SWIFT_BENCH_MODULES
     single-source/DictionaryLiteral
     single-source/DictionaryRemove
     single-source/DictionarySwap
+    single-source/DropLast
     single-source/ErrorHandling
+    single-source/ExistentialPerformance
     single-source/Fibonacci
     single-source/GlobalClass
     single-source/Hanoi
     single-source/Hash
+    single-source/HashQuadratic
     single-source/Histogram
     single-source/Integrate
     single-source/IterateData
     single-source/Join
+    single-source/LazyFilter
     single-source/LinkedList
     single-source/MapReduce
     single-source/Memset
@@ -92,9 +97,12 @@ set(SWIFT_BENCH_MODULES
     single-source/StrComplexWalk
     single-source/StrToInt
     single-source/StringBuilder
+    single-source/StringEdits
     single-source/StringInterpolation
+    single-source/StringMatch
     single-source/StringTests
     single-source/StringWalk
+    single-source/Suffix
     single-source/SuperChars
     single-source/TwoSum
     single-source/TypeFlood
@@ -139,9 +147,18 @@ if(NOT SWIFT_LIBRARY_PATH)
   set(SWIFT_LIBRARY_PATH "${tmp_dir}/lib/swift")
 endif()
 
-runcmd(COMMAND "xcrun" "-toolchain" "${SWIFT_DARWIN_XCRUN_TOOLCHAIN}" "-f" "clang"
-       VARIABLE CLANG_EXEC
-       ERROR "Unable to find Clang driver")
+# If the CMAKE_C_COMPILER is already clang, don't find it again,
+# thus allowing the --host-cc build-script argument to work here.
+get_filename_component(c_compiler ${CMAKE_C_COMPILER} NAME)
+
+if(${c_compiler} STREQUAL "clang")
+  set(CLANG_EXEC ${CMAKE_C_COMPILER})
+else()
+  runcmd(COMMAND "xcrun" "-toolchain" "${SWIFT_DARWIN_XCRUN_TOOLCHAIN}" "-f" "clang"
+         VARIABLE CLANG_EXEC
+         ERROR "Unable to find Clang driver")
+endif()
+
 
 # You have to delete CMakeCache.txt in the swift build to force a
 # reconfiguration.

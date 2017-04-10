@@ -576,7 +576,10 @@ static void diagSyntacticUseRestrictions(TypeChecker &TC, const Expr *E,
       const TypeDecl *declParent =
           VD->getDeclContext()->getAsNominalTypeOrNominalTypeExtensionContext();
       if (!declParent) {
-        assert(VD->getDeclContext()->isModuleScopeContext());
+        // If the declaration has been validated but not fully type-checked,
+        // the attribute might be applied to something invalid.
+        if (!VD->getDeclContext()->isModuleScopeContext())
+          return;
         declParent = VD->getDeclContext()->getParentModule();
       }
 
@@ -1475,7 +1478,8 @@ bool TypeChecker::getDefaultGenericArgumentsString(
     ArrayRef<ProtocolDecl *> protocols =
         genericParam->getConformingProtocols();
 
-    if (Type superclass = genericParam->getSuperclass()) {
+    Type superclass = genericParam->getSuperclass();
+    if (superclass && !superclass->hasError()) {
       if (protocols.empty()) {
         superclass.print(genericParamText);
         return;
@@ -1862,8 +1866,7 @@ bool swift::fixItOverrideDeclarationTypes(InFlightDiagnostic &diag,
 
 namespace {
 class VarDeclUsageChecker : public ASTWalker {
-  TypeChecker &TC;
-  
+  DiagnosticEngine &Diags;
   // Keep track of some information about a variable.
   enum {
     RK_Read        = 1,      ///< Whether it was ever read.
@@ -1891,7 +1894,7 @@ class VarDeclUsageChecker : public ASTWalker {
   void operator=(const VarDeclUsageChecker &) = delete;
 
 public:
-  VarDeclUsageChecker(TypeChecker &TC, AbstractFunctionDecl *AFD) : TC(TC) {
+  VarDeclUsageChecker(TypeChecker &TC, AbstractFunctionDecl *AFD) : Diags(TC.Diags) {
     // Track the parameters of the function.
     for (auto PL : AFD->getParameterLists())
       for (auto param : *PL)
@@ -1899,8 +1902,10 @@ public:
           VarDecls[param] = 0;
     
   }
-    
-  VarDeclUsageChecker(TypeChecker &TC, VarDecl *VD) : TC(TC) {
+
+  VarDeclUsageChecker(DiagnosticEngine &Diags) : Diags(Diags) {}
+
+  VarDeclUsageChecker(TypeChecker &TC, VarDecl *VD) : Diags(TC.Diags) {
     // Track a specific VarDecl
     VarDecls[VD] = 0;
   }
@@ -2006,6 +2011,35 @@ public:
       // Don't walk into it though, it may not even be type checked yet.
       return false;
     }
+    if (auto *TLCD = dyn_cast<TopLevelCodeDecl>(D)) {
+      // If this is a TopLevelCodeDecl, scan for global variables
+      auto *body = TLCD->getBody();
+      for (auto node : body->getElements()) {
+        if (node.is<Decl *>()) {
+          // Flag all variables in a PatternBindingDecl
+          Decl *D = node.get<Decl *>();
+          PatternBindingDecl *PBD = dyn_cast<PatternBindingDecl>(D);
+          if (!PBD) continue;
+          for (PatternBindingEntry PBE : PBD->getPatternList()) {
+            PBE.getPattern()->forEachVariable([&](VarDecl *VD) {
+              VarDecls[VD] = RK_Read|RK_Written;
+            });
+          }
+        } else if (node.is<Stmt *>()) {
+          // Flag all variables in guard statements
+          Stmt *S = node.get<Stmt *>();
+          GuardStmt *GS = dyn_cast<GuardStmt>(S);
+          if (!GS) continue;
+          for (StmtConditionElement SCE : GS->getCond()) {
+            if (auto pattern = SCE.getPatternOrNull()) {
+              pattern->forEachVariable([&](VarDecl *VD) {
+                VarDecls[VD] = RK_Read|RK_Written;
+              });
+            }
+          }
+        }
+      }
+    }
 
     
     // Note that we ignore the initialization behavior of PatternBindingDecls,
@@ -2060,8 +2094,11 @@ VarDeclUsageChecker::~VarDeclUsageChecker() {
 
     // If this is a 'let' value, any stores to it are actually initializations,
     // not mutations.
-    if (var->isLet())
+    auto isWrittenLet = false;
+    if (var->isLet()) {
+      isWrittenLet = (access & RK_Written) != 0;
       access &= ~RK_Written;
+    }
     
     // If this variable has WeakStorageType, then it can be mutated in ways we
     // don't know.
@@ -2088,8 +2125,8 @@ VarDeclUsageChecker::~VarDeclUsageChecker() {
       // produce a fixit hint with a parent map, but this is a lot of effort for
       // a narrow case.
       if (access & RK_CaptureList) {
-        TC.diagnose(var->getLoc(), diag::capture_never_used,
-                    var->getName());
+        Diags.diagnose(var->getLoc(), diag::capture_never_used,
+                       var->getName());
         continue;
       }
       
@@ -2105,8 +2142,8 @@ VarDeclUsageChecker::~VarDeclUsageChecker() {
           SourceRange replaceRange(
               pbd->getStartLoc(),
               pbd->getPatternList()[0].getPattern()->getEndLoc());
-          TC.diagnose(var->getLoc(), diag::pbd_never_used,
-                      var->getName(), varKind)
+          Diags.diagnose(var->getLoc(), diag::pbd_never_used,
+                         var->getName(), varKind)
             .fixItReplace(replaceRange, "_");
           continue;
         }
@@ -2140,8 +2177,8 @@ VarDeclUsageChecker::~VarDeclUsageChecker() {
                     noParens = isIsTest = true;
                   }
                   
-                  auto diagIF = TC.diagnose(var->getLoc(),
-                                            diag::pbd_never_used_stmtcond,
+                  auto diagIF = Diags.diagnose(var->getLoc(),
+                                               diag::pbd_never_used_stmtcond,
                                             var->getName());
                   auto introducerLoc = SC->getCond()[0].getIntroducerLoc();
                   diagIF.fixItReplaceChars(introducerLoc,
@@ -2166,11 +2203,17 @@ VarDeclUsageChecker::~VarDeclUsageChecker() {
       
       // Otherwise, this is something more complex, perhaps
       //    let (a,b) = foo()
-      // Just rewrite the one variable with a _.
-      unsigned varKind = var->isLet();
-      TC.diagnose(var->getLoc(), diag::variable_never_used,
-                  var->getName(), varKind)
-        .fixItReplace(var->getLoc(), "_");
+      if (isWrittenLet) {
+        Diags.diagnose(var->getLoc(),
+                       diag::immutable_value_never_used_but_assigned,
+                       var->getName());
+      } else {
+        unsigned varKind = var->isLet();
+        // Just rewrite the one variable with a _.
+        Diags.diagnose(var->getLoc(), diag::variable_never_used,
+                       var->getName(), varKind)
+          .fixItReplace(var->getLoc(), "_");
+      }
       continue;
     }
     
@@ -2202,18 +2245,18 @@ VarDeclUsageChecker::~VarDeclUsageChecker() {
       // If this is a parameter explicitly marked 'var', remove it.
       unsigned varKind = isa<ParamDecl>(var);
       if (FixItLoc.isInvalid())
-        TC.diagnose(var->getLoc(), diag::variable_never_mutated,
-                    var->getName(), varKind);
+        Diags.diagnose(var->getLoc(), diag::variable_never_mutated,
+                       var->getName(), varKind);
       else
-        TC.diagnose(var->getLoc(), diag::variable_never_mutated,
-                    var->getName(), varKind)
+        Diags.diagnose(var->getLoc(), diag::variable_never_mutated,
+                       var->getName(), varKind)
           .fixItReplace(FixItLoc, "let");
       continue;
     }
     
     // If this is a variable that was only written to, emit a warning.
     if ((access & RK_Read) == 0) {
-      TC.diagnose(var->getLoc(), diag::variable_never_read, var->getName(),
+      Diags.diagnose(var->getLoc(), diag::variable_never_read, var->getName(),
                   isa<ParamDecl>(var));
       continue;
     }
@@ -2382,6 +2425,14 @@ void VarDeclUsageChecker::handleIfConfig(IfConfigStmt *ICS) {
     for (auto elt : clause.Elements)
       elt.walk(ConservativeDeclMarker(*this));
   }
+}
+
+/// Apply the warnings managed by VarDeclUsageChecker to the top level
+/// code declarations that haven't been checked yet.
+void swift::
+performTopLevelDeclDiagnostics(TypeChecker &TC, TopLevelCodeDecl *TLCD) {
+  VarDeclUsageChecker checker(TC.Diags);
+  TLCD->walk(checker);
 }
 
 /// Perform diagnostics for func/init/deinit declarations.
@@ -3553,7 +3604,7 @@ Optional<DeclName> TypeChecker::omitNeedlessWords(AbstractFunctionDecl *afd) {
 
   // Always look at the parameters in the last parameter list.
   for (auto param : *afd->getParameterLists().back()) {
-    paramTypes.push_back(getTypeNameForOmission(param->getType())
+    paramTypes.push_back(getTypeNameForOmission(param->getInterfaceType())
                          .withDefaultArgument(param->isDefaultArgument()));
   }
   
@@ -3621,10 +3672,10 @@ Optional<DeclName> TypeChecker::omitNeedlessWords(AbstractFunctionDecl *afd) {
 Optional<Identifier> TypeChecker::omitNeedlessWords(VarDecl *var) {
   auto &Context = var->getASTContext();
 
-  if (!var->hasType())
+  if (!var->hasInterfaceType())
     validateDecl(var);
 
-  if (var->isInvalid() || !var->hasType())
+  if (var->isInvalid() || !var->hasInterfaceType())
     return None;
 
   if (var->getName().empty())
@@ -3655,7 +3706,7 @@ Optional<Identifier> TypeChecker::omitNeedlessWords(VarDecl *var) {
 
   // Omit needless words.
   StringScratchSpace scratch;
-  OmissionTypeName typeName = getTypeNameForOmission(var->getType());
+  OmissionTypeName typeName = getTypeNameForOmission(var->getInterfaceType());
   OmissionTypeName contextTypeName = getTypeNameForOmission(contextType);
   if (::omitNeedlessWords(name, { }, "", typeName, contextTypeName, { },
                           /*returnsSelf=*/false, true, allPropertyNames,

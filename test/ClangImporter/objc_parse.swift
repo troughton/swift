@@ -134,6 +134,9 @@ func properties(_ b: B) {
 
   // Properties that are Swift keywords
   var prot = b.`protocol`
+
+  // Properties whose accessors run afoul of selector splitting.
+  _ = SelectorSplittingAccessors()
 }
 
 // Construction.
@@ -400,6 +403,23 @@ func testPropertyAndMethodCollision(_ obj: PropertyAndMethodCollision,
   _ = value
 }
 
+func testPropertyAndMethodCollisionInOneClass(
+  obj: PropertyAndMethodCollisionInOneClass,
+  rev: PropertyAndMethodReverseCollisionInOneClass
+) {
+  obj.object = nil
+  obj.object()
+
+  type(of: obj).classRef = nil
+  type(of: obj).classRef()
+
+  rev.object = nil
+  rev.object()
+
+  type(of: rev).classRef = nil
+  type(of: rev).classRef()
+}
+
 func testSubscriptAndPropertyRedeclaration(_ obj: SubscriptAndProperty) {
   _ = obj.x
   obj.x = 5
@@ -609,4 +629,3 @@ class NewtypeUser {
   @objc func intNewtype(a: MyInt) {}
   @objc func intNewtypeOptional(a: MyInt?) {} // expected-error {{method cannot be marked @objc because the type of the parameter cannot be represented in Objective-C}}
 }
-

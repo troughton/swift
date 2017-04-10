@@ -92,8 +92,8 @@ public:
   SILFunction *lookupSILFunction(SILFunction *Callee);
   SILFunction *
   lookupSILFunction(StringRef Name, bool declarationOnly = false,
-                    SILLinkage linkage = SILLinkage::Private);
-  bool hasSILFunction(StringRef Name, SILLinkage linkage = SILLinkage::Private);
+                    Optional<SILLinkage> linkage = None);
+  bool hasSILFunction(StringRef Name, Optional<SILLinkage> linkage = None);
   SILVTable *lookupVTable(Identifier Name);
   SILVTable *lookupVTable(const ClassDecl *C) {
     return lookupVTable(C->getName());
@@ -112,6 +112,12 @@ public:
 
   /// Deserialize all SILFunctions, VTables, and WitnessTables for
   /// a given Module.
+  ///
+  /// If PrimaryFile is nullptr, all definitions are brought in with
+  /// definition linkage.
+  ///
+  /// Otherwise, definitions not in the primary file are brought in
+  /// with external linkage.
   void getAllForModule(Identifier Mod, FileUnit *PrimaryFile);
 
   /// Deserialize all SILFunctions in all SILModules.

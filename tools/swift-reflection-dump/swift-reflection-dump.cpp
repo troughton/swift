@@ -14,7 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/ABI/MetadataValues.h"
-#include "swift/Basic/Demangle.h"
+#include "swift/Demangling/Demangle.h"
 #include "swift/Basic/LLVMInitialize.h"
 #include "swift/Reflection/TypeRef.h"
 #include "swift/Reflection/TypeRefBuilder.h"
@@ -184,7 +184,8 @@ static int doDumpReflectionSections(ArrayRef<std::string> binaryFilenames,
       if (StringRef(line).startswith("//"))
         continue;
 
-      auto demangled = Demangle::demangleTypeAsNode(line);
+      Demangle::Demangler Dem;
+      auto demangled = Dem.demangleType(line);
       auto *typeRef = swift::remote::decodeMangledType(builder, demangled);
       if (typeRef == nullptr) {
         OS << "Invalid typeref: " << line << "\n";

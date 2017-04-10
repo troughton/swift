@@ -1186,7 +1186,7 @@ static void fixAvailabilityForDecl(SourceRange ReferenceRange, const Decl *D,
         << OriginalIndent;
   }
 
-  TC.diagnose(ReferenceRange.Start, diag::availability_add_attribute,
+  TC.diagnose(D, diag::availability_add_attribute,
               KindForDiagnostic)
       .fixItInsert(InsertLoc, AttrText);
 }
@@ -1405,10 +1405,11 @@ const AvailableAttr *TypeChecker::getDeprecated(const Decl *D) {
 
 /// Returns true if some declaration lexically enclosing the reference
 /// matches the passed in predicate and false otherwise.
-static bool someEnclosingDeclMatches(SourceRange ReferenceRange,
-                                     const DeclContext *ReferenceDC,
-                                     TypeChecker &TC,
-                                     std::function<bool(const Decl *)> Pred) {
+static bool
+someEnclosingDeclMatches(SourceRange ReferenceRange,
+                         const DeclContext *ReferenceDC,
+                         TypeChecker &TC,
+                         llvm::function_ref<bool(const Decl *)> Pred) {
   ASTContext &Ctx = TC.Context;
 
   // Climb the DeclContext hierarchy to see if any of the containing
@@ -1500,7 +1501,7 @@ bool TypeChecker::isInsideUnavailableDeclaration(
 
 bool TypeChecker::isInsideDeprecatedDeclaration(SourceRange ReferenceRange,
                                                 const DeclContext *ReferenceDC){
-  std::function<bool(const Decl *)> IsDeprecated = [](const Decl *D) {
+  auto IsDeprecated = [](const Decl *D) {
     return D->getAttrs().getDeprecated(D->getASTContext());
   };
 
@@ -1535,7 +1536,7 @@ static void fixItAvailableAttrRename(TypeChecker &TC,
     // We can only do a good job with the fix-it if we have the whole call
     // expression.
     // FIXME: Should we be validating the ContextName in some way?
-    if (!dyn_cast_or_null<CallExpr>(call))
+    if (!call || !isa<CallExpr>(call))
       return;
 
     unsigned selfIndex = parsed.SelfIndex.getValue();
@@ -1640,7 +1641,7 @@ static void fixItAvailableAttrRename(TypeChecker &TC,
     // Continue on to diagnose any argument label renames.
 
   } else if (parsed.BaseName == TC.Context.Id_init.str() &&
-             dyn_cast_or_null<CallExpr>(call)) {
+             call && isa<CallExpr>(call)) {
     // For initializers, replace with a "call" of the context type...but only
     // if we know we're doing a call (rather than a first-class reference).
     if (parsed.isMember()) {
@@ -1675,7 +1676,7 @@ static void fixItAvailableAttrRename(TypeChecker &TC,
     diag.fixItReplace(referenceRange, baseReplace);
   }
 
-  if (!dyn_cast_or_null<CallExpr>(call))
+  if (!call || !isa<CallExpr>(call))
     return;
 
   const Expr *argExpr = call->getArg();

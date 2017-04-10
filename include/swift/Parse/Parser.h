@@ -17,10 +17,14 @@
 #ifndef SWIFT_PARSER_H
 #define SWIFT_PARSER_H
 
-#include "swift/AST/AST.h"
-#include "swift/AST/LayoutConstraint.h"
+#include "swift/AST/ASTContext.h"
+#include "swift/AST/ASTNode.h"
 #include "swift/AST/DiagnosticsParse.h"
-#include "swift/Basic/Fallthrough.h"
+#include "swift/AST/Expr.h"
+#include "swift/AST/LayoutConstraint.h"
+#include "swift/AST/Module.h"
+#include "swift/AST/Pattern.h"
+#include "swift/AST/Stmt.h"
 #include "swift/Basic/OptionSet.h"
 #include "swift/Parse/Lexer.h"
 #include "swift/Parse/LocalContext.h"
@@ -35,6 +39,7 @@ namespace llvm {
 }
 
 namespace swift {
+  class DefaultArgumentInitializer;
   class DiagnosticEngine;
   class Lexer;
   class ScopeInfo;
@@ -165,6 +170,12 @@ public:
 
   /// \brief The location of the previous token.
   SourceLoc PreviousLoc;
+
+  /// Stop parsing immediately.
+  void cutOffParsing() {
+    // Cut off parsing by acting as if we reached the end-of-file.
+    Tok.setKind(tok::eof);
+  }
   
   /// A RAII object for temporarily changing CurDeclContext.
   class ContextChange {
@@ -255,11 +266,22 @@ public:
   class StructureMarkerRAII {
     Parser &P;
 
+    /// Max nesting level
+    // TODO: customizable.
+    enum { MaxDepth = 256 };
+
+    void diagnoseOverflow();
+
   public:
     StructureMarkerRAII(Parser &parser, SourceLoc loc,
                                StructureMarkerKind kind)
       : P(parser) {
       P.StructureMarkers.push_back({loc, kind, None});
+
+      if (P.StructureMarkers.size() >= MaxDepth) {
+        diagnoseOverflow();
+        P.cutOffParsing();
+      }
     }
 
     StructureMarkerRAII(Parser &parser, const Token &tok);
@@ -463,7 +485,7 @@ public:
 
   /// Parse an #endif.
   bool parseEndIfDirective(SourceLoc &Loc);
-
+  
 public:
   InFlightDiagnostic diagnose(SourceLoc Loc, Diagnostic Diag) {
     if (Diags.isDiagnosticPointsToFirstBadToken(Diag.getID()) &&
@@ -490,6 +512,11 @@ public:
   }
   
   void diagnoseRedefinition(ValueDecl *Prev, ValueDecl *New);
+  
+  /// Add a fix-it to remove the space in consecutive identifiers.
+  /// Add a camel-cased option if it is different than the first option.
+  void diagnoseConsecutiveIDs(StringRef First, SourceLoc FirstLoc,
+                              StringRef DeclKindName);
      
   /// \brief Check whether the current token starts with '<'.
   bool startsWithLess(Token Tok) {
@@ -675,8 +702,8 @@ public:
     return AlreadyHandledDecls.erase(D);
   }
 
-  ParserStatus parseDecl(ParseDeclOptions Flags,
-                         llvm::function_ref<void(Decl*)> Handler);
+  ParserResult<Decl> parseDecl(ParseDeclOptions Flags,
+                               llvm::function_ref<void(Decl*)> Handler);
 
   void parseDeclDelayed();
 
@@ -729,6 +756,9 @@ public:
                                            DeclAttributes &Attributes);
   ParserStatus parseInheritance(SmallVectorImpl<TypeLoc> &Inherited,
                                 SourceLoc *classRequirementLoc);
+  ParserStatus parseDeclItem(bool &PreviousHadSemi,
+                             Parser::ParseDeclOptions Options,
+                             llvm::function_ref<void(Decl*)> handler);
   bool parseDeclList(SourceLoc LBLoc, SourceLoc &RBLoc,
                      Diag<> ErrorDiag, ParseDeclOptions Options,
                      llvm::function_ref<void(Decl*)> handler);
@@ -736,18 +766,20 @@ public:
                                                  DeclAttributes &Attributes);
   ParserResult<EnumDecl> parseDeclEnum(ParseDeclOptions Flags,
                                        DeclAttributes &Attributes);
-  ParserStatus parseDeclEnumCase(ParseDeclOptions Flags, DeclAttributes &Attributes,
-                                 SmallVectorImpl<Decl *> &decls);
+  ParserResult<EnumCaseDecl>
+  parseDeclEnumCase(ParseDeclOptions Flags, DeclAttributes &Attributes,
+                    SmallVectorImpl<Decl *> &decls);
   ParserResult<StructDecl>
   parseDeclStruct(ParseDeclOptions Flags, DeclAttributes &Attributes);
   ParserResult<ClassDecl>
   parseDeclClass(SourceLoc ClassLoc,
                  ParseDeclOptions Flags, DeclAttributes &Attributes);
-  ParserStatus parseDeclVar(ParseDeclOptions Flags, DeclAttributes &Attributes,
-                            SmallVectorImpl<Decl *> &Decls,
-                            SourceLoc StaticLoc,
-                            StaticSpellingKind StaticSpelling,
-                            SourceLoc TryLoc);
+  ParserResult<PatternBindingDecl>
+  parseDeclVar(ParseDeclOptions Flags, DeclAttributes &Attributes,
+               SmallVectorImpl<Decl *> &Decls,
+               SourceLoc StaticLoc,
+               StaticSpellingKind StaticSpelling,
+               SourceLoc TryLoc);
 
   void consumeGetSetBody(AbstractFunctionDecl *AFD, SourceLoc LBLoc);
 
@@ -768,13 +800,17 @@ public:
   };
 
   bool parseGetSetImpl(ParseDeclOptions Flags,
-                       ParameterList *Indices, TypeLoc ElementTy,
+                       GenericParamList *GenericParams,
+                       ParameterList *Indices,
+                       TypeLoc ElementTy,
                        ParsedAccessors &accessors,
                        SourceLoc &LastValidLoc,
                        SourceLoc StaticLoc, SourceLoc VarLBLoc,
                        SmallVectorImpl<Decl *> &Decls);
   bool parseGetSet(ParseDeclOptions Flags,
-                   ParameterList *Indices, TypeLoc ElementTy,
+                   GenericParamList *GenericParams,
+                   ParameterList *Indices,
+                   TypeLoc ElementTy,
                    ParsedAccessors &accessors,
                    SourceLoc StaticLoc, SmallVectorImpl<Decl *> &Decls);
   void recordAccessors(AbstractStorageDecl *storage, ParseDeclOptions flags,
@@ -796,9 +832,9 @@ public:
   ParserResult<ProtocolDecl> parseDeclProtocol(ParseDeclOptions Flags,
                                                DeclAttributes &Attributes);
 
-  ParserStatus parseDeclSubscript(ParseDeclOptions Flags,
-                                  DeclAttributes &Attributes,
-                                  SmallVectorImpl<Decl *> &Decls);
+  ParserResult<SubscriptDecl>
+  parseDeclSubscript(ParseDeclOptions Flags, DeclAttributes &Attributes,
+                     SmallVectorImpl<Decl *> &Decls);
 
   ParserResult<ConstructorDecl>
   parseDeclInit(ParseDeclOptions Flags, DeclAttributes &Attributes);
@@ -861,8 +897,8 @@ public:
   ParserResult<TypeRepr> parseTypeSimple(Diag<> MessageID,
                                          bool HandleCodeCompletion = true);
 
-  // \brief Parse layout constraint. 
-  LayoutConstraintInfo parseLayoutConstraint(Identifier LayoutConstraintID);
+  /// \brief Parse layout constraint.
+  LayoutConstraint parseLayoutConstraint(Identifier LayoutConstraintID);
 
   bool parseGenericArguments(SmallVectorImpl<TypeRepr*> &Args,
                              SourceLoc &LAngleLoc,
@@ -1109,9 +1145,12 @@ public:
   ParserResult<Expr> parseExprStringLiteral();
   ParserResult<Expr> parseExprTypeOf();
 
-  /// If the token is an escaped identifier being used as an argument
-  /// label, but doesn't need to be, diagnose it.
-  void diagnoseEscapedArgumentLabel(const Token &tok);
+  /// Parse an argument label `identifier ':'`, if it exists.
+  ///
+  /// \param name The parsed name of the label (empty if it doesn't exist, or is
+  /// _)
+  /// \param loc The location of the label (empty if it doesn't exist)
+  void parseOptionalArgumentLabel(Identifier &name, SourceLoc &loc);
 
   /// Parse an unqualified-decl-name.
   ///
@@ -1265,6 +1304,10 @@ public:
   ParserStatus parseGenericWhereClause(
       SourceLoc &WhereLoc, SmallVectorImpl<RequirementRepr> &Requirements,
       bool &FirstTypeInComplete, bool AllowLayoutConstraints = false);
+
+  ParserStatus
+  parseProtocolOrAssociatedTypeWhereClause(TrailingWhereClause *&trailingWhere,
+                                           bool isProtocol);
 
   //===--------------------------------------------------------------------===//
   // Availability Specification Parsing

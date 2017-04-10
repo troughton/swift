@@ -25,6 +25,7 @@
 #include "swift/AST/ForeignErrorConvention.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/NameLookup.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/AST/ProtocolConformance.h"
 #include "swift/AST/TypeLoc.h"
@@ -264,6 +265,11 @@ findDeclContextForType(TypeChecker &TC,
     if (ownerDC == parentDC)
       return std::make_tuple(parentDC, parentNominal, true);
 
+    if (isa<ExtensionDecl>(parentDC) && typeDecl == parentNominal) {
+      assert(parentDC->getParent()->isModuleScopeContext());
+      return std::make_tuple(parentDC, parentNominal, true);
+    }
+
     // FIXME: Horrible hack. Don't allow us to reference a generic parameter
     // from a context outside a ProtocolDecl.
     if (isa<ProtocolDecl>(parentDC) && isa<GenericTypeParamDecl>(typeDecl))
@@ -328,7 +334,7 @@ findDeclContextForType(TypeChecker &TC,
 
       // If not, walk into the superclass and inherited protocols, if any.
       if (auto *protoDecl = dyn_cast<ProtocolDecl>(parentNominal)) {
-        for (auto *refined : protoDecl->getInheritedProtocols(&TC))
+        for (auto *refined : protoDecl->getInheritedProtocols())
           pushDecl(refined);
       } else {
         if (auto *classDecl = dyn_cast<ClassDecl>(parentNominal))
@@ -394,15 +400,14 @@ Type TypeChecker::resolveTypeInContext(
 
   bool hasDependentType = typeDecl->getDeclaredInterfaceType()
       ->hasTypeParameter();
+  // If we found a generic parameter, map to the archetype if there is one.
+  if (auto genericParam = dyn_cast<GenericTypeParamDecl>(typeDecl)) {
+    return resolver->resolveGenericTypeParamType(
+        genericParam->getDeclaredInterfaceType()
+            ->castTo<GenericTypeParamType>());
+  }
 
   if (!foundNominal || !hasDependentType) {
-    // If we found a generic parameter, map to the archetype if there is one.
-    if (auto genericParam = dyn_cast<GenericTypeParamDecl>(typeDecl)) {
-      return resolver->resolveGenericTypeParamType(
-          genericParam->getDeclaredInterfaceType()
-              ->castTo<GenericTypeParamType>());
-    }
-
     // If this is a typealias not in type context, we still need the
     // interface type; the typealias might be in a function context, and
     // its underlying type might reference outer generic parameters.
@@ -495,12 +500,19 @@ Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
 
     // Don't add fixit on module type; that isn't the right type regardless
     // of whether it had generic arguments.
-    if (!type->is<ModuleType>())
-      diag.fixItRemove(generic->getAngleBrackets());
+    if (!type->is<ModuleType>()) {
+      // When turning a SourceRange into CharSourceRange the closing angle
+      // brackets on nested generics are lexed as one token.
+      SourceRange angles = generic->getAngleBrackets();
+      diag.fixItRemoveChars(angles.Start,
+                            angles.End.getAdvancedLocOrInvalid(1));
+    }
 
     generic->setInvalid();
     return type;
   }
+
+  auto *unboundType = type->castTo<UnboundGenericType>();
 
   // If we have a non-generic type alias, we have an unbound generic type.
   // Grab the decl from the unbound generic type.
@@ -517,7 +529,7 @@ Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
   //
   if (isa<TypeAliasDecl>(decl) &&
       !cast<TypeAliasDecl>(decl)->getGenericParams()) {
-    decl = type->castTo<UnboundGenericType>()->getDecl();
+    decl = unboundType->getDecl();
   }
 
   // Make sure we have the right number of generic arguments.
@@ -566,9 +578,10 @@ Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
   for (auto tyR : genericArgs)
     args.push_back(tyR);
 
-  auto result = applyUnboundGenericArguments(type, genericDecl, loc, dc, args,
-                                             options, resolver,
-                                             unsatisfiedDependency);
+  auto argumentOptions = options - TR_NonEnumInheritanceClauseOuterLayer;
+  auto result = applyUnboundGenericArguments(unboundType, genericDecl, loc,
+                                             dc, args, argumentOptions,
+                                             resolver, unsatisfiedDependency);
   if (!result)
     return result;
   bool isMutablePointer;
@@ -585,7 +598,8 @@ Type TypeChecker::applyGenericArguments(Type type, TypeDecl *decl,
 
 /// Apply generic arguments to the given type.
 Type TypeChecker::applyUnboundGenericArguments(
-    Type type, GenericTypeDecl *decl, SourceLoc loc, DeclContext *dc,
+    UnboundGenericType *unboundType, GenericTypeDecl *decl,
+    SourceLoc loc, DeclContext *dc,
     MutableArrayRef<TypeLoc> genericArgs,
     TypeResolutionOptions options,
     GenericTypeResolver *resolver,
@@ -604,84 +618,84 @@ Type TypeChecker::applyUnboundGenericArguments(
   if (!resolver)
     resolver = &defaultResolver;
 
-  // Validate the generic arguments and capture just the types.
-  SmallVector<Type, 4> genericArgTypes;
-  for (auto &genericArg : genericArgs) {
-    // Validate the generic argument.
+  auto genericSig = decl->getGenericSignature();
+  assert(genericSig != nullptr);
+
+  TypeSubstitutionMap subs;
+
+  // Get the interface type for the declaration. We will be substituting
+  // type parameters that appear inside this type with the provided
+  // generic arguments.
+  auto resultType = decl->getDeclaredInterfaceType();
+
+  // Get the substitutions for outer generic parameters from the parent
+  // type, but skip the step if the result type does not contain any
+  // substitutable type parameters.
+  if (resultType->hasTypeParameter())
+    if (auto parentType = unboundType->getParent())
+      subs = parentType->getContextSubstitutions(decl->getDeclContext());
+
+  SourceLoc noteLoc = decl->getLoc();
+  if (noteLoc.isInvalid())
+    noteLoc = loc;
+
+  // Realize the types of the generic arguments and add them to the
+  // substitution map.
+  bool hasTypeParameterOrVariable = false;
+  for (unsigned i = 0, e = genericArgs.size(); i < e; i++) {
+    auto &genericArg = genericArgs[i];
+
+    // Propagate failure.
     if (validateType(genericArg, dc, options, resolver, unsatisfiedDependency))
       return ErrorType::get(Context);
 
-    if (!genericArg.getType())
-      return nullptr;
-
-    genericArgTypes.push_back(genericArg.getType());
-  }
-
-  // If we're completing a generic TypeAlias, then we map the types provided
-  // onto the underlying type.
-  if (auto *TAD = dyn_cast<TypeAliasDecl>(decl)) {
-    TypeSubstitutionMap subs;
-
-    // The type should look like SomeNominal<T, U>.Alias<V, W>.
-
-    // Get the substitutions for outer generic parameters from the parent
-    // type.
-    auto *unboundType = type->castTo<UnboundGenericType>();
-    if (auto parentType = unboundType->getParent())
-      subs = parentType->getContextSubstitutions(TAD->getDeclContext());
-
-    // Get the substitutions for the inner parameters.
-    auto signature = TAD->getGenericSignature();
-    for (unsigned i = 0, e = genericArgs.size(); i < e; i++) {
-      auto t = signature->getInnermostGenericParams()[i];
-      subs[t->getCanonicalType()->castTo<GenericTypeParamType>()] =
-        genericArgs[i].getType();
-    }
-
-    // Apply substitutions to the interface type of the typealias.
-    type = TAD->getDeclaredInterfaceType();
-    return type.subst(dc->getParentModule(), subs, SubstFlags::UseErrorType);
-  }
-  
-  // Form the bound generic type.
-  auto *UGT = type->castTo<UnboundGenericType>();
-  auto *BGT = BoundGenericType::get(cast<NominalTypeDecl>(decl),
-                                    UGT->getParent(), genericArgTypes);
-
-  // Check protocol conformance.
-  if (!BGT->hasTypeParameter() && !BGT->hasTypeVariable()) {
-    SourceLoc noteLoc = decl->getLoc();
-    if (noteLoc.isInvalid())
-      noteLoc = loc;
-
-    // FIXME: Record that we're checking substitutions, so we can't end up
-    // with infinite recursion.
-
-    // Check the generic arguments against the generic signature.
-    auto genericSig = decl->getGenericSignature();
-
-    // Collect the complete set of generic arguments.
-    assert(genericSig != nullptr);
-    auto substitutions = BGT->getContextSubstitutions(BGT->getDecl());
-
-    auto result = checkGenericArguments(
-        dc, loc, noteLoc, UGT, genericSig,
-        substitutions, unsatisfiedDependency);
+    auto origTy = genericSig->getInnermostGenericParams()[i];
+    auto substTy = genericArg.getType();
 
     // Unsatisfied dependency case.
-    if (result.first)
-      return Type();
+    if (!substTy)
+      return nullptr;
 
-    // Failure case.
-    if (!result.second)
-      return ErrorType::get(Context);
+    // Enter a substitution.
+    subs[origTy->getCanonicalType()->castTo<GenericTypeParamType>()] =
+      substTy;
 
-    if (useObjectiveCBridgeableConformancesOfArgs(dc, BGT,
-                                                  unsatisfiedDependency))
-        return Type();
+    hasTypeParameterOrVariable |=
+      (substTy->hasTypeParameter() || substTy->hasTypeVariable());
   }
 
-  return BGT;
+  // Check the generic arguments against the requirements of the declaration's
+  // generic signature.
+  if (!hasTypeParameterOrVariable) {
+    auto result =
+      checkGenericArguments(dc, loc, noteLoc, unboundType, genericSig,
+                            QueryTypeSubstitutionMap{subs},
+                            LookUpConformanceInModule{dc->getParentModule()},
+                            unsatisfiedDependency);
+
+    switch (result) {
+    case RequirementCheckResult::UnsatisfiedDependency:
+      return Type();
+    case RequirementCheckResult::Failure:
+      return ErrorType::get(Context);
+    case RequirementCheckResult::Success:
+      break;
+    }
+  }
+
+  // Apply the substitution map to the interface type of the declaration.
+  resultType = resultType.subst(QueryTypeSubstitutionMap{subs},
+                                LookUpConformanceInModule(dc->getParentModule()),
+                                SubstFlags::UseErrorType);
+
+  if (isa<NominalTypeDecl>(decl)) {
+    if (useObjectiveCBridgeableConformancesOfArgs(
+          dc, resultType->castTo<BoundGenericType>(),
+          unsatisfiedDependency))
+      return Type();
+  }
+
+  return resultType;
 }
 
 /// \brief Diagnose a use of an unbound generic type.
@@ -696,7 +710,7 @@ static void diagnoseUnboundGenericType(TypeChecker &tc, Type ty,SourceLoc loc) {
         diag.fixItInsertAfter(loc, genericArgsToAdd);
     }
   }
-  tc.diagnose(unbound->getDecl()->getLoc(), diag::generic_type_declared_here,
+  tc.diagnose(unbound->getDecl(), diag::generic_type_declared_here,
               unbound->getDecl()->getName());
 }
 
@@ -715,7 +729,7 @@ static Type resolveTypeDecl(TypeChecker &TC, TypeDecl *typeDecl, SourceLoc loc,
       return nullptr;
   } else {
     // Validate the declaration.
-    TC.validateDecl(typeDecl);
+    TC.validateDeclForNameLookup(typeDecl);
   }
 
   // If we didn't bail out with an unsatisfiedDependency,
@@ -982,14 +996,10 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
   // For lookups within the generic signature, look at the generic
   // parameters (only), then move up to the enclosing context.
   if (options.contains(TR_GenericSignature)) {
-    GenericParamList *genericParams;
-    if (auto *generic = dyn_cast<GenericTypeDecl>(DC)) {
-      genericParams = generic->getGenericParams();
-    } else if (auto *ext = dyn_cast<ExtensionDecl>(DC)) {
-      genericParams = ext->getGenericParams();
-    } else {
-      genericParams = cast<AbstractFunctionDecl>(DC)->getGenericParams();
-    }
+    GenericParamList *genericParams = nullptr;
+
+    if (DC->isInnermostContextGeneric())
+      genericParams = DC->getGenericParamsOfContext();
 
     if (genericParams) {
       auto matchingParam =
@@ -1079,7 +1089,26 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
                                 dyn_cast<GenericIdentTypeRepr>(comp), options,
                                 resolver, unsatisfiedDependency);
 
-    if (!type || type->hasError())
+    if (!type)
+      return type;
+
+    auto hasError = type->hasError();
+    if (options & TR_NonEnumInheritanceClauseOuterLayer) {
+      auto protocolOrClass =
+          hasError ? (isa<ProtocolDecl>(typeDecl) || isa<ClassDecl>(typeDecl))
+                   : (type->is<ProtocolType>() || type->is<ClassType>());
+      if (!protocolOrClass) {
+        auto diagnosedType = hasError ? typeDecl->getDeclaredInterfaceType() : type;
+        if (diagnosedType && /*FIXME:*/!hasError) {
+          TC.diagnose(comp->getIdLoc(),
+                      diag::inheritance_from_non_protocol_or_class,
+                      diagnosedType);
+          return ErrorType::get(diagnosedType);
+        }
+      }
+    }
+
+    if (hasError)
       return type;
 
     // If this is the first result we found, record it.
@@ -1090,7 +1119,7 @@ resolveTopLevelIdentTypeComponent(TypeChecker &TC, DeclContext *DC,
     }
 
     // Otherwise, check for an ambiguity.
-    if (!current->isEqual(type)) {
+    if (!resolver->areSameType(current, type)) {
       isAmbiguous = true;
       break;
     }
@@ -1311,6 +1340,16 @@ static Type resolveNestedIdentTypeComponent(
     return ErrorType::get(TC.Context);
   }
 
+  if (options & TR_NonEnumInheritanceClauseOuterLayer) {
+    auto protocolOrClass =
+        memberType->is<ProtocolType>() || memberType->is<ClassType>();
+    if (!protocolOrClass) {
+      TC.diagnose(comp->getIdLoc(),
+                  diag::inheritance_from_non_protocol_or_class, memberType);
+      return ErrorType::get(memberType);
+    }
+  }
+
   // If there are generic arguments, apply them now.
   if (auto genComp = dyn_cast<GenericIdentTypeRepr>(comp))
     memberType = TC.applyGenericArguments(
@@ -1350,8 +1389,9 @@ static Type resolveIdentTypeComponent(
 
   // All remaining components use qualified lookup.
 
+  auto parentOptions = options - TR_NonEnumInheritanceClauseOuterLayer;
   // Resolve the parent type.
-  Type parentTy = resolveIdentTypeComponent(TC, DC, parentComps, options,
+  Type parentTy = resolveIdentTypeComponent(TC, DC, parentComps, parentOptions,
                                             diagnoseErrors, resolver,
                                             unsatisfiedDependency);
   if (!parentTy || parentTy->hasError()) return parentTy;
@@ -2229,7 +2269,7 @@ Type TypeResolver::resolveSILBoxType(SILBoxTypeRepr *repr,
 
     params = genericSig->getGenericParams();
     if (repr->getGenericArguments().size()
-          != genericSig->getAllDependentTypes().size()) {
+          != genericSig->getSubstitutionListSize()) {
       TC.diagnose(repr->getLoc(), diag::sil_box_arg_mismatch);
       return ErrorType::get(Context);
     }
@@ -2240,7 +2280,8 @@ Type TypeResolver::resolveSILBoxType(SILBoxTypeRepr *repr,
     }
     
     bool ok = true;
-    genericSig->getSubstitutions(genericArgMap,
+    genericSig->getSubstitutions(
+      QueryTypeSubstitutionMap{genericArgMap},
       [&](CanType depTy, Type replacement, ProtocolType *proto)
       -> ProtocolConformanceRef {
         auto result = TC.conformsToProtocol(replacement, proto->getDecl(), DC,
@@ -2577,7 +2618,7 @@ Type TypeResolver::resolveDictionaryType(DictionaryTypeRepr *repr,
   if (auto dictTy = TC.getDictionaryType(repr->getBrackets().Start, keyTy, 
                                          valueTy)) {
     // Check the requirements on the generic arguments.
-    auto unboundTy = dictDecl->getDeclaredType();
+    auto unboundTy = dictDecl->getDeclaredType()->castTo<UnboundGenericType>();
     TypeLoc args[2] = { TypeLoc(repr->getKey()), TypeLoc(repr->getValue()) };
     args[0].setType(keyTy, true);
     args[1].setType(valueTy, true);
@@ -2642,13 +2683,19 @@ Type TypeResolver::resolveTupleType(TupleTypeRepr *repr,
   
   // If this is the top level of a function input list, peel off the
   // ImmediateFunctionInput marker and install a FunctionInput one instead.
-  //
-  // If we have a single ParenType though, don't clear these bits; we
-  // still want to parse the type contained therein as if it were in
-  // parameter position, meaning function types are not @escaping by
-  // default.
   auto elementOptions = options;
-  if (!repr->isParenType()) {
+  if (repr->isParenType()) {
+    // If we have a single ParenType, don't clear the context bits; we
+    // still want to parse the type contained therein as if it were in
+    // parameter position, meaning function types are not @escaping by
+    // default. We still want to reduce `ImmediateFunctionInput` to
+    // `FunctionInput` so that e.g. ((foo: Int)) -> Int is considered a
+    // tuple argument rather than a labeled Int argument.
+    if (isImmediateFunctionInput) {
+      elementOptions -= TR_ImmediateFunctionInput;
+      elementOptions |= TR_FunctionInput;
+    }
+  } else {
     elementOptions = withoutContext(elementOptions, true);
     if (isImmediateFunctionInput)
       elementOptions |= TR_FunctionInput;
@@ -2946,8 +2993,9 @@ Type TypeChecker::substMemberTypeWithBase(ModuleDecl *module,
   if (!parentTy)
     return memberType;
 
-  auto subs = parentTy->getContextSubstitutions(member->getDeclContext());
-  return memberType.subst(module, subs, SubstFlags::UseErrorType);
+  auto subs = parentTy->getContextSubstitutionMap(
+      module, member->getDeclContext());
+  return memberType.subst(subs, SubstFlags::UseErrorType);
 }
 
 Type TypeChecker::getSuperClassOf(Type type) {
@@ -2998,7 +3046,7 @@ static void describeObjCReason(TypeChecker &TC, const ValueDecl *VD,
 static void diagnoseFunctionParamNotRepresentable(
     TypeChecker &TC, const AbstractFunctionDecl *AFD, unsigned NumParams,
     unsigned ParamIndex, const ParamDecl *P, ObjCReason Reason) {
-  if (Reason == ObjCReason::DoNotDiagnose)
+  if (!shouldDiagnoseObjCReason(Reason))
     return;
 
   if (NumParams == 1) {
@@ -3024,7 +3072,7 @@ static bool isParamListRepresentableInObjC(TypeChecker &TC,
                                            ObjCReason Reason) {
   // If you change this function, you must add or modify a test in PrintAsObjC.
 
-  bool Diagnose = (Reason != ObjCReason::DoNotDiagnose);
+  bool Diagnose = shouldDiagnoseObjCReason(Reason);
 
   bool IsObjC = true;
   unsigned NumParams = PL->size();
@@ -3033,7 +3081,7 @@ static bool isParamListRepresentableInObjC(TypeChecker &TC,
     
     // Swift Varargs are not representable in Objective-C.
     if (param->isVariadic()) {
-      if (Diagnose && Reason != ObjCReason::DoNotDiagnose) {
+      if (Diagnose && shouldDiagnoseObjCReason(Reason)) {
         TC.diagnose(param->getStartLoc(), diag::objc_invalid_on_func_variadic,
                     getObjCDiagnosticAttrKind(Reason))
           .highlight(param->getSourceRange());
@@ -3120,7 +3168,7 @@ static bool checkObjCInExtensionContext(TypeChecker &tc,
 static bool checkObjCWithGenericParams(TypeChecker &TC,
                                        const AbstractFunctionDecl *AFD,
                                        ObjCReason Reason) {
-  bool Diagnose = (Reason != ObjCReason::DoNotDiagnose);
+  bool Diagnose = shouldDiagnoseObjCReason(Reason);
 
   if (AFD->getGenericParams()) {
     // Diagnose this problem, if asked to.
@@ -3141,7 +3189,7 @@ static bool checkObjCWithGenericParams(TypeChecker &TC,
 static bool checkObjCInForeignClassContext(TypeChecker &TC,
                                            const ValueDecl *VD,
                                            ObjCReason Reason) {
-  bool Diagnose = (Reason != ObjCReason::DoNotDiagnose);
+  bool Diagnose = shouldDiagnoseObjCReason(Reason);
 
   auto type = VD->getDeclContext()->getDeclaredInterfaceType();
   if (!type)
@@ -3209,7 +3257,7 @@ bool TypeChecker::isRepresentableInObjC(
 
   // If you change this function, you must add or modify a test in PrintAsObjC.
 
-  bool Diagnose = (Reason != ObjCReason::DoNotDiagnose);
+  bool Diagnose = shouldDiagnoseObjCReason(Reason);
 
   if (checkObjCInForeignClassContext(*this, AFD, Reason))
     return false;
@@ -3541,7 +3589,7 @@ bool TypeChecker::isRepresentableInObjC(const VarDecl *VD, ObjCReason Reason) {
   }
   bool Result = T->isRepresentableIn(ForeignLanguage::ObjectiveC,
                                      VD->getDeclContext());
-  bool Diagnose = (Reason != ObjCReason::DoNotDiagnose);
+  bool Diagnose = shouldDiagnoseObjCReason(Reason);
 
   if (Result && checkObjCInExtensionContext(*this, VD, Diagnose))
     return false;
@@ -3553,6 +3601,10 @@ bool TypeChecker::isRepresentableInObjC(const VarDecl *VD, ObjCReason Reason) {
     return Result;
 
   SourceRange TypeRange = VD->getTypeSourceRangeForDiagnostics();
+  // TypeRange can be invalid; e.g. '@objc let foo = SwiftType()'
+  if (TypeRange.isInvalid())
+    TypeRange = VD->getNameLoc();
+
   diagnose(VD->getLoc(), diag::objc_invalid_on_var,
            getObjCDiagnosticAttrKind(Reason))
       .highlight(TypeRange);
@@ -3568,7 +3620,7 @@ bool TypeChecker::isRepresentableInObjC(const SubscriptDecl *SD,
                                         ObjCReason Reason) {
   // If you change this function, you must add or modify a test in PrintAsObjC.
 
-  bool Diagnose = (Reason != ObjCReason::DoNotDiagnose);
+  bool Diagnose = shouldDiagnoseObjCReason(Reason);
 
   if (checkObjCInForeignClassContext(*this, SD, Reason))
     return false;
@@ -3658,8 +3710,9 @@ void TypeChecker::diagnoseTypeNotRepresentableInObjC(const DeclContext *DC,
   }
 
   // Special diagnostic for protocols and protocol compositions.
-  SmallVector<ProtocolDecl *, 4> Protocols;
-  if (T->isExistentialType(Protocols)) {
+  if (T->isExistentialType()) {
+    SmallVector<ProtocolDecl *, 4> Protocols;
+    T->getExistentialTypeProtocols(Protocols);
     if (Protocols.empty()) {
       // Any is not @objc.
       diagnose(TypeRange.Start, diag::not_objc_empty_protocol_composition);
@@ -3777,8 +3830,9 @@ public:
       type.findIf([&](Type type) -> bool {
         if (T->isInvalid())
           return false;
-        SmallVector<ProtocolDecl*, 2> protocols;
-        if (type->isExistentialType(protocols)) {
+        if (type->isExistentialType()) {
+          SmallVector<ProtocolDecl*, 2> protocols;
+          type->getExistentialTypeProtocols(protocols);
           for (auto *proto : protocols) {
             if (proto->existentialTypeSupported(&TC))
               continue;

@@ -53,25 +53,24 @@ enum _XCTThrowableBlockResult {
 /// and if it does consume the exception and return information about it.
 func _XCTRunThrowableBlock(_ block: () throws -> Void) -> _XCTThrowableBlockResult {
   var blockErrorOptional: Error?
-  
-  let d = _XCTRunThrowableBlockBridge({
+
+  let exceptionResult = _XCTRunThrowableBlockBridge({
     do {
       try block()
     } catch {
       blockErrorOptional = error
     }
   })
-  
+
   if let blockError = blockErrorOptional {
     return .failedWithError(error: blockError)
-  } else if d.count > 0 {
-    let t: String = d["type"]!
-    
-    if t == "objc" {
+  } else if let exceptionResult = exceptionResult {
+
+    if exceptionResult["type"] == "objc" {
       return .failedWithException(
-        className: d["className"]!,
-        name: d["name"]!,
-        reason: d["reason"]!)
+        className: exceptionResult["className"]!,
+        name: exceptionResult["name"]!,
+        reason: exceptionResult["reason"]!)
     } else {
       return .failedWithUnknownException
     }
@@ -297,8 +296,8 @@ public func XCTAssertEqual<T : Equatable>(_ expression1: @autoclosure () throws 
             let expressionValueStr1 = String(describing: expressionValue1Optional)
             let expressionValueStr2 = String(describing: expressionValue2Optional)
 
-            // FIXME: this file seems to use `as NSString` unnecesarily a lot,
-            // unlesss I'm missing something.
+            // FIXME: this file seems to use `as NSString` unnecessarily a lot,
+            // unless I'm missing something.
             _XCTRegisterFailure(true, _XCTFailureDescription(assertionType, 0, expressionValueStr1 as NSString, expressionValueStr2 as NSString), message, file, line)
         }
 

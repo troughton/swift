@@ -16,7 +16,6 @@
 
 #define DEBUG_TYPE "irgen"
 #include "swift/Subsystems.h"
-#include "swift/AST/AST.h"
 #include "swift/AST/DiagnosticsIRGen.h"
 #include "swift/AST/IRGenOptions.h"
 #include "swift/AST/LinkLibrary.h"
@@ -378,7 +377,8 @@ bool swift::performLLVM(IRGenOptions &Opts, DiagnosticEngine *Diags,
       if (DiagMutex) DiagMutex->unlock();
     );
 
-    ArrayRef<uint8_t> HashData(Result, sizeof(MD5::MD5Result));
+    ArrayRef<uint8_t> HashData(reinterpret_cast<uint8_t *>(&Result),
+                               sizeof(Result));
     if (Opts.OutputKind == IRGenOutputKind::ObjectFile &&
         !Opts.PrintInlineTree &&
         !needsRecompile(OutputFilename, HashData, HashGlobal, DiagMutex)) {
@@ -399,6 +399,7 @@ bool swift::performLLVM(IRGenOptions &Opts, DiagnosticEngine *Diags,
     llvm::sys::fs::OpenFlags OSFlags = llvm::sys::fs::F_None;
     std::error_code EC;
     RawOS.emplace(OutputFilename, EC, OSFlags);
+
     if (RawOS->has_error() || EC) {
       if (Diags) {
         if (DiagMutex)
@@ -498,7 +499,11 @@ swift::createTargetMachine(IRGenOptions &Opts, ASTContext &Ctx) {
 
   // Create a target machine.
   auto cmodel = CodeModel::Default;
-  if (Triple.isWindowsCygwinEnvironment())
+
+  // On Windows 64 bit, dlls are loaded above the max address for 32 bits.
+  // This means that a default CodeModel causes generated code to segfault
+  // when run.
+  if (Triple.isArch64Bit() && Triple.isOSWindows())
     cmodel = CodeModel::Large;
   if (Triple.isKnownWindowsMSVCEnvironment())
     cmodel = CodeModel::Large;
@@ -700,6 +705,9 @@ static std::unique_ptr<llvm::Module> performIRGeneration(IRGenOptions &Opts,
       }
     }
 
+    // Okay, emit any definitions that we suddenly need.
+    irgen.emitLazyDefinitions();
+
     // Register our info with the runtime if needed.
     if (Opts.UseJIT) {
       IGM.emitRuntimeRegistration();
@@ -711,9 +719,6 @@ static std::unique_ptr<llvm::Module> performIRGeneration(IRGenOptions &Opts,
       IGM.emitBuiltinReflectionMetadata();
       IGM.emitReflectionMetadataVersion();
     }
-
-    // Okay, emit any definitions that we suddenly need.
-    irgen.emitLazyDefinitions();
 
     // Emit symbols for eliminated dead methods.
     IGM.emitVTableStubs();
@@ -884,7 +889,8 @@ static void performParallelIRGeneration(IRGenOptions &Opts,
     }
   }
   
-  IRGenModule *PrimaryGM = irgen.getPrimaryIGM();
+  // Okay, emit any definitions that we suddenly need.
+  irgen.emitLazyDefinitions();
 
   irgen.emitProtocolConformances();
 
@@ -893,10 +899,9 @@ static void performParallelIRGeneration(IRGenOptions &Opts,
   // Emit reflection metadata for builtin and imported types.
   irgen.emitBuiltinReflectionMetadata();
 
-  // Okay, emit any definitions that we suddenly need.
-  irgen.emitLazyDefinitions();
-  
- // Emit symbols for eliminated dead methods.
+  IRGenModule *PrimaryGM = irgen.getPrimaryIGM();
+
+  // Emit symbols for eliminated dead methods.
   PrimaryGM->emitVTableStubs();
     
   // Verify type layout if we were asked to.
@@ -1070,6 +1075,9 @@ swift::createSwiftModuleObjectFile(SILModule &SILMod, StringRef Buffer,
     break;
   case llvm::Triple::MachO:
     Section = std::string(MachOASTSegmentName) + "," + MachOASTSectionName;
+    break;
+  case llvm::Triple::Wasm:
+    llvm_unreachable("web assembly object format is not supported.");
     break;
   }
   ASTSym->setSection(Section);

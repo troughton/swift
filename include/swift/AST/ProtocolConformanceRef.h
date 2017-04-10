@@ -19,12 +19,15 @@
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "swift/AST/TypeAlignments.h"
+#include "swift/AST/Type.h"
 
 namespace llvm {
   class raw_ostream;
 }
 
 namespace swift {
+
+class ProtocolConformance;
 
 /// A ProtocolConformanceRef is a handle to a protocol conformance which
 /// may be either concrete or abstract.
@@ -88,6 +91,23 @@ public:
   /// conformance represents.
   ProtocolConformanceRef getInherited(ProtocolDecl *parent) const;
 
+  /// Apply a substitution to the conforming type.
+  ProtocolConformanceRef subst(Type origType,
+                               TypeSubstitutionFn subs,
+                               LookupConformanceFn conformances) const;
+
+  /// Given a dependent type (expressed in terms of this conformance's
+  /// protocol), follow it from the conforming type.
+  Type getAssociatedType(Type origType, Type dependentType,
+                         LazyResolver *resolver = nullptr) const;
+
+  /// Given a dependent type (expressed in terms of this conformance's
+  /// protocol) and conformance, follow it from the conforming type.
+  ProtocolConformanceRef
+  getAssociatedConformance(Type origType, Type dependentType,
+                           ProtocolDecl *requirement,
+                           LazyResolver *resolver = nullptr) const;
+
   void dump() const;
   void dump(llvm::raw_ostream &out, unsigned indent = 0) const;
 
@@ -101,6 +121,12 @@ public:
   friend llvm::hash_code hash_value(ProtocolConformanceRef conformance) {
     return llvm::hash_value(conformance.Union.getOpaqueValue());
   }
+
+  static Type
+  getTypeWitnessByName(Type type,
+                       ProtocolConformanceRef conformance,
+                       Identifier name,
+                       LazyResolver *resolver);
 };
 
 } // end namespace swift

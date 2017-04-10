@@ -83,6 +83,9 @@ class ModuleFile : public LazyMemberLoader {
   /// Declaration contexts with delayed generic environments, which will be
   /// completed as a pending action.
   ///
+  /// This should only be used on the module returned by
+  /// getModuleFileForDelayedActions().
+  ///
   /// FIXME: This is needed because completing a generic environment can
   /// require the type checker, which might be gone if we delay generic
   /// environments too far. It is a hack.
@@ -93,7 +96,8 @@ class ModuleFile : public LazyMemberLoader {
     ModuleFile &MF;
 
   public:
-    DeserializingEntityRAII(ModuleFile &MF) : MF(MF) {
+    DeserializingEntityRAII(ModuleFile &mf)
+        : MF(mf.getModuleFileForDelayedActions()) {
       ++MF.NumCurrentDeserializingEntities;
     }
     ~DeserializingEntityRAII() {
@@ -107,6 +111,13 @@ class ModuleFile : public LazyMemberLoader {
     }
   };
   friend class DeserializingEntityRAII;
+
+  /// Picks a specific ModuleFile instance to serve as the "delayer" for the
+  /// entire module.
+  ///
+  /// This is usually \c this, but when there are partial swiftmodules all
+  /// loaded for the same module it may be different.
+  ModuleFile &getModuleFileForDelayedActions();
 
   /// Finish any pending actions that were waiting for the topmost entity to
   /// be deserialized.
@@ -153,11 +164,16 @@ private:
   /// All modules this module depends on.
   SmallVector<Dependency, 8> Dependencies;
 
+  struct SearchPath {
+    StringRef Path;
+    bool IsFramework;
+    bool IsSystem;
+  };
   /// Search paths this module may provide.
   ///
   /// This is not intended for use by frameworks, but may show up in debug
   /// modules.
-  std::vector<std::pair<StringRef, bool>> SearchPaths;
+  std::vector<SearchPath> SearchPaths;
 
   /// Info for the (lone) imported header for this module.
   struct {
@@ -312,17 +328,26 @@ private:
   using SerializedDeclTable =
       llvm::OnDiskIterableChainedHashTable<DeclTableInfo>;
 
+  class ExtensionTableInfo;
+  using SerializedExtensionTable =
+      llvm::OnDiskIterableChainedHashTable<ExtensionTableInfo>;
+
   class LocalDeclTableInfo;
   using SerializedLocalDeclTable =
       llvm::OnDiskIterableChainedHashTable<LocalDeclTableInfo>;
 
+  class NestedTypeDeclsTableInfo;
+  using SerializedNestedTypeDeclsTable =
+      llvm::OnDiskIterableChainedHashTable<NestedTypeDeclsTableInfo>;
+
   std::unique_ptr<SerializedDeclTable> TopLevelDecls;
   std::unique_ptr<SerializedDeclTable> OperatorDecls;
   std::unique_ptr<SerializedDeclTable> PrecedenceGroupDecls;
-  std::unique_ptr<SerializedDeclTable> ExtensionDecls;
   std::unique_ptr<SerializedDeclTable> ClassMembersByName;
   std::unique_ptr<SerializedDeclTable> OperatorMethodDecls;
+  std::unique_ptr<SerializedExtensionTable> ExtensionDecls;
   std::unique_ptr<SerializedLocalDeclTable> LocalTypeDecls;
+  std::unique_ptr<SerializedNestedTypeDeclsTable> NestedTypeDecls;
 
   class ObjCMethodTableInfo;
   using SerializedObjCMethodTable =
@@ -441,6 +466,16 @@ private:
   std::unique_ptr<ModuleFile::SerializedObjCMethodTable>
   readObjCMethodTable(ArrayRef<uint64_t> fields, StringRef blobData);
 
+  /// Read an on-disk local decl hash table stored in
+  /// index_block::ExtensionTableLayout format.
+  std::unique_ptr<SerializedExtensionTable>
+  readExtensionTable(ArrayRef<uint64_t> fields, StringRef blobData);
+
+  /// Read an on-disk local decl hash table stored in
+  /// index_block::NestedTypeDeclsLayout format.
+  std::unique_ptr<SerializedNestedTypeDeclsTable>
+  readNestedTypeDeclsTable(ArrayRef<uint64_t> fields, StringRef blobData);
+
   /// Reads the index block, which contains global tables.
   ///
   /// Returns false if there was an error.
@@ -466,9 +501,6 @@ private:
 
   ParameterList *readParameterList();
   
-  GenericParamList *maybeGetOrReadGenericParams(serialization::DeclID contextID,
-                                                DeclContext *DC);
-
   /// Reads a generic param list from \c DeclTypeCursor.
   ///
   /// If the record at the cursor is not a generic param list, returns null
@@ -483,8 +515,7 @@ private:
   /// Set up a (potentially lazy) generic environment for the given type,
   /// function or extension.
   void configureGenericEnvironment(
-                   llvm::PointerUnion3<GenericTypeDecl *, ExtensionDecl *,
-                                       AbstractFunctionDecl *> genericDecl,
+                   GenericContext *genericDecl,
                    serialization::GenericEnvironmentID envID);
 
   /// Populates the vector with members of a DeclContext from \c DeclTypeCursor.
@@ -579,6 +610,10 @@ public:
 
   /// Searches the module's local type decls for the given mangled name.
   TypeDecl *lookupLocalType(StringRef MangledName);
+
+  /// Searches the module's nested type decls table for the given member of
+  /// the given type.
+  TypeDecl *lookupNestedType(Identifier name, const ValueDecl *parent);
 
   /// Searches the module's operators for one with the given name and fixity.
   ///
@@ -683,7 +718,7 @@ public:
   virtual void finishNormalConformance(NormalProtocolConformance *conformance,
                                        uint64_t contextData) override;
 
-  GenericEnvironment *loadGenericEnvironment(const Decl *decl,
+  GenericEnvironment *loadGenericEnvironment(const DeclContext *decl,
                                              uint64_t contextData) override;
 
   Optional<StringRef> getGroupNameById(unsigned Id) const;

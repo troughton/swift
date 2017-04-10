@@ -27,14 +27,14 @@ work that could be done in the Swift 4 timeframe.
 ### Ergonomics
 
 It's worth noting that ergonomics and correctness are mutually-reinforcing.  An
-API that is easy to use—but incorrectly—cannot be considered an ergonomic
+API that is easy to use--but incorrectly--cannot be considered an ergonomic
 success.  Conversely, an API that's simply hard to use is also hard to use
-correctly.  Acheiving optimal performance without compromising ergonomics or
+correctly.  Achieving optimal performance without compromising ergonomics or
 correctness is a greater challenge.
 
 Consistency with the Swift language and idioms is also important for
 ergonomics. There are several places both in the standard library and in the
-foundation additions to `String` where patterns and practices found elsewhere
+Foundation additions to `String` where patterns and practices found elsewhere
 could be applied to improve usability and familiarity.
 
 ### API Surface Area
@@ -46,13 +46,13 @@ its overall complexity.
 
 **Method Arity** | **Standard Library** | **Foundation**
 ---|:---:|:---:
-0: `ƒ()` | 5 | 7
-1: `ƒ(:)` | 19 | 48
-2: `ƒ(::)` | 13 | 19
-3: `ƒ(:::)` | 5 | 11
-4: `ƒ(::::)` | 1 | 7
-5: `ƒ(:::::)` | - | 2
-6: `ƒ(::::::)` | - | 1
+0: `f()` | 5 | 7
+1: `f(:)` | 19 | 48
+2: `f(::)` | 13 | 19
+3: `f(:::)` | 5 | 11
+4: `f(::::)` | 1 | 7
+5: `f(:::::)` | - | 2
+6: `f(::::::)` | - | 1
 
 **API Kind** | **Standard Library** | **Foundation**
 ---|:---:|:---:
@@ -100,8 +100,8 @@ constitutes correct behavior in an extremely complex domain, so
 Unicode-correctness is, and will remain, a fundamental design principle behind
 Swift's `String`.  That said, the Unicode standard is an evolving document, so
 this objective reference-point is not fixed.  <sup id="a1">[1](#f1)</sup> While
-many of the most important operations—e.g. string hashing, equality, and
-non-localized comparison—[will be stable](#collation-semantics), the semantics
+many of the most important operations--e.g. string hashing, equality, and
+non-localized comparison--[will be stable](#collation-semantics), the semantics
 of others, such as grapheme breaking and localized comparison and case
 conversion, are expected to change as platforms are updated, so programs should
 be written so their correctness does not depend on precise stability of these
@@ -123,13 +123,13 @@ The first step in improving this situation is to regularize all localized
 operations as invocations of normal string operations with extra
 parameters. Among other things, this means:
 
-1. Doing away with `localizedXXX` methods 
-2. Providing a terse way to name the current locale as a parameter
+1. Doing away with `localizedXXX` methods.
+2. Providing a terse way to name the current locale as a parameter.
 3. Automatically [adjusting defaults](#operations-with-options) for options such
    as case sensitivity based on whether the operation is localized.
 4. Removing correctness traps like `localizedCaseInsensitiveCompare` (see
     guidance in the
-    [Internationalization and Localization Guide](https://developer.apple.com/library/content/documentation/MacOSX/Conceptual/BPInternational/InternationalizingYourCode/InternationalizingYourCode.html).
+    [Internationalization and Localization Guide](https://developer.apple.com/library/content/documentation/MacOSX/Conceptual/BPInternational/InternationalizingYourCode/InternationalizingYourCode.html)).
 
 Along with appropriate documentation updates, these changes will make localized
 operations more teachable, comprehensible, and approachable, thereby lowering a
@@ -185,27 +185,26 @@ sort ordering | locale, case/diacritic/width-insensitivity
 case conversion | locale
 pattern matching | locale, case/diacritic/width-insensitivity
 
-The defaults for case-, diacritic-, and width-insensitivity are different for
+The defaults for case-, diacritic-, and width-insensitivity are sometimes different for
 localized operations than for non-localized operations, so for example a
-localized sort should be case-insensitive by default, and a non-localized sort
-should be case-sensitive by default.  We propose a standard “language” of
+localized search should be case-insensitive by default, and a non-localized search
+should be case-sensitive by default.  We propose a standard "language" of
 defaulted parameters to be used for these purposes, with usage roughly like this:
 
 ```swift
-  x.compared(to: y, case: .sensitive, in: swissGerman)
-  
-  x.lowercased(in: .currentLocale)
-  
-  x.allMatches(
-    somePattern, case: .insensitive, diacritic: .insensitive)
+x.compared(to: y, case: .sensitive, in: swissGerman)
+
+x.lowercased(in: .currentLocale)
+
+x.allMatches(somePattern, case: .insensitive, diacritic: .insensitive)
 ```
 
 This usage might be supported by code like this:
 
 ```swift
 enum StringSensitivity {
-case sensitive
-case insensitive
+  case sensitive
+  case insensitive
 }
 
 extension Locale {
@@ -229,27 +228,27 @@ extension Unicode {
 
 #### Collation Semantics
 
-What Unicode says about collation—which is used in `<`, `==`, and hashing— turns
+What Unicode says about collation--which is used in `<`, `==`, and hashing-- turns
 out to be quite interesting, once you pick it apart.  The full Unicode Collation
 Algorithm (UCA) works like this:
 
-1. Fully normalize both strings
-2. Convert each string to a sequence of numeric triples to form a collation key
-3. “Flatten” the key by concatenating the sequence of first elements to the
-   sequence of second elements to the sequence of third elements
-4. Lexicographically compare the flattened keys 
+1. Fully normalize both strings.
+2. Convert each string to a sequence of numeric triples to form a collation key.
+3. "Flatten" the key by concatenating the sequence of first elements to the
+   sequence of second elements to the sequence of third elements.
+4. Lexicographically compare the flattened keys.
 
 While step 1 can usually
 be [done quickly](http://unicode.org/reports/tr15/#Description_Norm) and
 incrementally, step 2 uses a collation table that maps matching *sequences* of
-unicode scalars in the normalized string to *sequences* of triples, which get
+Unicode scalars in the normalized string to *sequences* of triples, which get
 accumulated into a collation key.  Predictably, this is where the real costs
 lie.
 
 *However*, there are some bright spots to this story.  First, as it turns out,
 string sorting (localized or not) should be done down to what's called
 the
-[“identical” level](http://unicode.org/reports/tr10/#Multi_Level_Comparison),
+["identical" level](http://unicode.org/reports/tr10/#Multi_Level_Comparison),
 which adds a step 3a: append the string's normalized form to the flattened
 collation key.  At first blush this just adds work, but consider what it does
 for equality: two strings that normalize the same, naturally, will collate the
@@ -261,7 +260,7 @@ entirely skip the expensive part of collation for equality comparison.
 Next, naturally, anything that applies to equality also applies to hashing: it
 is sufficient to hash the string's normalized form, bypassing collation keys.
 This should provide significant speedups over the current implementation.
-Perhaps more importantly, since comparison down to the “identical” level applies
+Perhaps more importantly, since comparison down to the "identical" level applies
 even to localized strings, it means that hashing and equality can be implemented
 exactly the same way for localized and non-localized text, and hash tables with
 localized keys will remain valid across current-locale changes.
@@ -279,14 +278,14 @@ implementation has apparently been very well optimized.
 
 Following this scheme everywhere would also allow us to make sorting behavior
 consistent across platforms.  Currently, we sort `String` according to the UCA,
-except that—*only on Apple platforms*—pairs of ASCII characters are ordered by
+except that--*only on Apple platforms*--pairs of ASCII characters are ordered by
 unicode scalar value.
 
 #### Syntax
 
 Because the current `Comparable` protocol expresses all comparisons with binary
-operators, string comparisons—which may require
-additional [options](#operations-with-options)—do not fit smoothly into the
+operators, string comparisons--which may require
+additional [options](#operations-with-options)--do not fit smoothly into the
 existing syntax.  At the same time, we'd like to solve other problems with
 comparison, as outlined
 in
@@ -301,8 +300,8 @@ an operator `<=>`:
 enum SortOrder { case before, same, after }
 
 protocol Comparable : Equatable {
- func compared(to: Self) -> SortOrder
- ...
+  func compared(to: Self) -> SortOrder
+  ...
 }
 ```
 
@@ -312,8 +311,9 @@ across the library.
 
 ```swift
 extension String {
- func compared(to: Self) -> SortOrder
-
+  func compared(to: Self) -> SortOrder {
+    ...
+  }
 }
 ```
 
@@ -342,17 +342,17 @@ strings.
 This quirk aside, every aspect of strings-as-collections-of-graphemes appears to
 comport perfectly with Unicode. We think the concatenation problem is tolerable,
 because the cases where it occurs all represent partially-formed constructs. The
-largest class—isolated combining characters such as ◌́ (U+0301 COMBINING ACUTE
-ACCENT)—are explicitly called out in the Unicode standard as
-“[degenerate](http://unicode.org/reports/tr29/#Grapheme_Cluster_Boundaries)” or
-“[defective](http://www.unicode.org/versions/Unicode9.0.0/ch03.pdf)”. The other
-cases—such as a string ending in a zero-width joiner or half of a regional
-indicator—appear to be equally transient and unlikely outside of a text editor.
+largest class--isolated combining characters such as ◌́ (U+0301 COMBINING ACUTE
+ACCENT)--are explicitly called out in the Unicode standard as
+"[degenerate](http://unicode.org/reports/tr29/#Grapheme_Cluster_Boundaries)" or
+"[defective](http://www.unicode.org/versions/Unicode9.0.0/ch03.pdf)". The other
+cases--such as a string ending in a zero-width joiner or half of a regional
+indicator--appear to be equally transient and unlikely outside of a text editor.
 
 Admitting these cases encourages exploration of grapheme composition and is
-consistent with what appears to be an overall Unicode philosophy that “no
-special provisions are made to get marginally better behavior for… cases that
-never occur in practice.” <sup id="a2">[2](#f2)</sup> Furthermore, it seems
+consistent with what appears to be an overall Unicode philosophy that "no
+special provisions are made to get marginally better behavior for... cases that
+never occur in practice." <sup id="a2">[2](#f2)</sup> Furthermore, it seems
 unlikely to disturb the semantics of any plausible algorithms. We can handle
 these cases by documenting them, explicitly stating that the elements of a
 `String` are an emergent property based on Unicode rules.
@@ -383,7 +383,7 @@ The benefits of restoring `Collection` conformance are substantial:
     from whole-string ordering comparison, equality comparison, and
     case-conversion, respectively.  `reverse` operates correctly on graphemes,
     keeping diacritics moored to their base characters and leaving emoji intact.
-    Other methods such as `indexOf` and `contains` make obvious sense. A few
+    Other methods such as `index(of:)` and `contains` make obvious sense. A few
     `Collection` methods, like `min` and `max`, may not be particularly useful
     on `String`, but we don't consider that to be a problem worth solving, in
     the same way that we wouldn't try to suppress `min` and `max` on a
@@ -402,19 +402,19 @@ The benefits of restoring `Collection` conformance are substantial:
     Because of its collection-like behavior, users naturally think of `String`
     in collection terms, but run into frustrating limitations where it fails to
     conform and are left to wonder where all the differences lie.  Many simply
-    “correct” this limitation by declaring a trivial conformance:
+    "correct" this limitation by declaring a trivial conformance:
     
     ```swift
-  extension String : BidirectionalCollection {}
+    extension String : BidirectionalCollection {}
     ```
     
     Even if we removed indexing-by-element from `String`, users could still do
     this:
     
     ```swift
-      extension String : BidirectionalCollection {
-        subscript(i: Index) -> Character { return characters[i] }
-      }
+    extension String : BidirectionalCollection {
+      subscript(i: Index) -> Character { return characters[i] }
+    }
     ```
     
     It would be much better to legitimize the conformance to `Collection` and
@@ -439,8 +439,8 @@ do any introspection, including interoperation with ASCII.  To fix this, we shou
    that contain 0 or 2+ graphemes).
  - (Lower priority) expose some operations, such as `func uppercase() ->
    String`, `var isASCII: Bool`, and, to the extent they can be sensibly
-   generalized, queries of unicode properties that should also be exposed on
-   `UnicodeScalar` such as `isAlphabetic` and `isGraphemeBase` .
+   generalized, queries of Unicode properties that should also be exposed on
+   `UnicodeScalar` such as `isAlphabetic` and `isGraphemeBase`.
 
 Despite its name, `CharacterSet` currently operates on the Swift `UnicodeScalar`
 type. This means it is usable on `String`, but only by going through the unicode
@@ -451,21 +451,22 @@ grapheme clusters. <sup id="a5">[5](#f5)</sup>
 
 ### Unification of Slicing Operations
 
-Creating substrings is a basic part of String processing, but the slicing
+Creating substrings is a basic part of string processing, but the slicing
 operations that we have in Swift are inconsistent in both their spelling and
-their naming: 
+their naming:
 
   * Slices with two explicit endpoints are done with subscript, and support
     in-place mutation:
     
     ```swift
-        s[i..<j].mutate()
+    s[i..<j].mutate()
     ```
 
   * Slicing from an index to the end, or from the start to an index, is done
     with a method and does not support in-place mutation:
+    
     ```swift
-        s.prefix(upTo: i).readOnly()
+    s.prefix(upTo: i).readOnly()
     ```
 
 Prefix and suffix operations should be migrated to be subscripting operations
@@ -569,8 +570,8 @@ property) explicitly of type `String`, a type conversion will be performed, and
 at this point the substring buffer is copied and the original string's storage
 can be released.
 
-A `String` that was not its own `Substring` could be one word—a single tagged
-pointer—without requiring additional allocations. `Substring`s would be a view
+A `String` that was not its own `Substring` could be one word--a single tagged
+pointer--without requiring additional allocations. `Substring`s would be a view
 onto a `String`, so are 3 words - pointer to owner, pointer to start, and a
 length. The small string optimization for `Substring` would take advantage of
 the larger size, probably with a less compressed encoding for speed.
@@ -579,9 +580,10 @@ The downside of having two types is the inconvenience of sometimes having a
 `Substring` when you need a `String`, and vice-versa. It is likely this would
 be a significantly bigger problem than with `Array` and `ArraySlice`, as
 slicing of `String` is such a common operation. It is especially relevant to
-existing code that assumes `String` is the currency type. To ease the pain of
-type mismatches, `Substring` should be a subtype of `String` in the same way
-that `Int` is a subtype of `Optional<Int>`. This would give users an implicit
+existing code that assumes `String` is the currency type -- that is, the default
+string type used for everyday exchange between APIs. To ease the pain of type
+mismatches, `Substring` should be a subtype of `String` in the same way that
+`Int` is a subtype of `Optional<Int>`. This would give users an implicit
 conversion from `Substring` to `String`, as well as the usual implicit
 conversions such as `[Substring]` to `[String]` that other subtype
 relationships receive.
@@ -596,7 +598,7 @@ standard library will traffic in generic models of
 
 In this model, **if a user is unsure about which type to use, `String` is always
 a reasonable default**. A `Substring` passed where `String` is expected will be
-implicitly copied. When compared to the “same type, copied storage” model, we
+implicitly copied. When compared to the "same type, copied storage" model, we
 have effectively deferred the cost of copying from the point where a substring
 is created until it must be converted to `String` for use with an API.
 
@@ -605,11 +607,11 @@ if for performance reasons you are tempted to add a `Range` argument to your
 method as well as a `String` to avoid unnecessary copies, you should instead
 use `Substring`.
 
-##### The “Empty Subscript”
+##### The "Empty Subscript"
 
 To make it easy to call such an optimized API when you only have a `String` (or
 to call any API that takes a `Collection`'s `SubSequence` when all you have is
-the `Collection`), we propose the following “empty subscript” operation,
+the `Collection`), we propose the following "empty subscript" operation,
 
 ```swift
 extension Collection {
@@ -638,7 +640,7 @@ takesAnArrayOfSubstring(arrayOfString.map { $0[] })
 
 As we have seen, all three options above have downsides, but it's possible
 these downsides could be eliminated/mitigated by the compiler. We are proposing
-one such mitigation—implicit conversion—as part of the the "different type,
+one such mitigation--implicit conversion--as part of the "different type,
 shared storage" option, to help avoid the cognitive load on developers of
 having to deal with a separate `Substring` type.
 
@@ -658,7 +660,7 @@ consistent rule that could be applied in the general case for detecting when a
 substring is truly being stored long-term.
 
 To avoid the cost of copying substrings under "same type, copied storage", the
-optimizer could be enhanced to to reduce the impact of some of those copies.
+optimizer could be enhanced to reduce the impact of some of those copies.
 For example, this code could be optimized to pull the invariant substring out
 of the loop:
 
@@ -683,9 +685,9 @@ the overall algorithm quadratic:
 
 ```swift
 extension String {
-    func containsChar(_ x: Character) -> Bool {
-        return !isEmpty && (first == x || dropFirst().containsChar(x))
-    }
+  func containsChar(_ x: Character) -> Bool {
+    return !isEmpty && (first == x || dropFirst().containsChar(x))
+  }
 }
 ```
 
@@ -695,12 +697,12 @@ efficient (assuming they remember):
 
 ```swift
 extension String {
-    // add optional argument tracking progress through the string
-    func containsCharacter(_ x: Character, atOrAfter idx: Index? = nil) -> Bool {
-        let idx = idx ?? startIndex
-        return idx != endIndex
-            && (self[idx] == x || containsCharacter(x, atOrAfter: index(after: idx)))
-    }
+  // add optional argument tracking progress through the string
+  func containsCharacter(_ x: Character, atOrAfter idx: Index? = nil) -> Bool {
+    let idx = idx ?? startIndex
+    return idx != endIndex
+      && (self[idx] == x || containsCharacter(x, atOrAfter: index(after: idx)))
+  }
 }
 ```
 
@@ -743,8 +745,8 @@ let iToJ = Range(nsr, in: s)    // Equivalent to i..<j
 With `Substring` and `String` being distinct types and sharing almost all
 interface and semantics, and with the highest-performance string processing
 requiring knowledge of encoding and layout that the currency types can't
-provide, it becomes important to capture the common “string API” in a protocol.
-Since Unicode conformance is a key feature of string processing in swift, we
+provide, it becomes important to capture the common "string API" in a protocol.
+Since Unicode conformance is a key feature of string processing in Swift, we
 call that protocol `Unicode`:
 
 **Note:** The following assumes several features that are planned but not yet implemented in
@@ -762,7 +764,7 @@ protocol Unicode
   var codeUnits: CodeUnits { get }
   
   associatedtype UnicodeScalars 
-    : BidirectionalCollection  where Element == UnicodeScalar
+    : BidirectionalCollection where Element == UnicodeScalar
   var unicodeScalars: UnicodeScalars { get }
 
   associatedtype ExtendedASCII 
@@ -786,9 +788,9 @@ extension Unicode {
 
 extension Unicode : RangeReplaceableCollection where CodeUnits :
   RangeReplaceableCollection {
-    // Satisfy protocol requirement
-    mutating func replaceSubrange<C : Collection>(_: Range<Index>, with: C) 
-      where C.Element == Element
+  // Satisfy protocol requirement
+  mutating func replaceSubrange<C : Collection>(_: Range<Index>, with: C) 
+    where C.Element == Element
   
   // ... define high-level mutating string operations, e.g. replace ...
 }
@@ -811,19 +813,19 @@ protocols in protocols.
 
 #### Low-Level Textual Analysis
 
-We should provide convenient APIs processing strings by character.  For example,
-it should be easy to cleanly express, “if this string starts with `"f"`, process
-the rest of the string as follows…”  Swift is well-suited to expressing this
+We should provide convenient APIs for processing strings by character.  For example,
+it should be easy to cleanly express, "if this string starts with `"f"`, process
+the rest of the string as follows..."  Swift is well-suited to expressing this
 common pattern beautifully, but we need to add the APIs.  Here are two examples
 of the sort of code that might be possible given such APIs:
 
 ```swift
-if let firstLetter = input.droppingPrefix(alphabeticCharacter) {
+if let firstLetter = input.dropPrefix(alphabeticCharacter) {
   somethingWith(input) // process the rest of input
 }
 
 if let (number, restOfInput) = input.parsingPrefix(Int.self) {
-   ...
+  ...
 }
 ```
 
@@ -835,10 +837,10 @@ point is to make sure matching-and-consuming jobs are well-supported.
 Many of the current methods that do matching are overloaded to do the same
 logical operations in different ways, with the following axes:
 
-- Logical Operation: `find`, `split`, `replace`, match at start
-- Kind of pattern: `CharacterSet`, `String`, a regex, a closure
+- Logical Operation: `find`, `split`, `replace`, match at start.
+- Kind of pattern: `CharacterSet`, `String`, a regex, a closure.
 - Options, e.g. case/diacritic sensitivity, locale.  Sometimes a part of
-  the method name, and sometimes an argument
+  the method name, and sometimes an argument.
 - Whole string or subrange.
 
 We should represent these aspects as orthogonal, composable components,
@@ -870,7 +872,7 @@ the string being searched, if needed, can easily be recovered as the
 Note also that matching operations are useful for collections in general, and
 would fall out of this proposal:
 
-```
+```swift
 // replace subsequences of contiguous NaNs with zero
 forces.replace(oneOrMore([Float.nan]), [0.0])
 ```
@@ -878,7 +880,7 @@ forces.replace(oneOrMore([Float.nan]), [0.0])
 #### Regular Expressions
 
 Addressing regular expressions is out of scope for this proposal.
-That said, it is important that to note the pattern matching protocol mentioned
+That said, it is important to note that the pattern matching protocol mentioned
 above provides a suitable foundation for regular expressions, and types such as
 `NSRegularExpression` can easily be retrofitted to conform to it.  In the
 future, support for regular expression literals in the compiler could allow for
@@ -886,8 +888,8 @@ compile-time syntax checking and optimization.
 
 ### String Indices
 
-`String` currently has four views—`characters`, `unicodeScalars`, `utf8`, and
-`utf16`—each with its own opaque index type.  The APIs used to translate indices
+`String` currently has four views--`characters`, `unicodeScalars`, `utf8`, and
+`utf16`--each with its own opaque index type.  The APIs used to translate indices
 between views add needless complexity, and the opacity of indices makes them
 difficult to serialize.
 
@@ -924,7 +926,7 @@ let i = String.Index(codeUnitOffset: offset)
 Index interchange between `String` and its `unicodeScalars`, `codeUnits`,
 and [`extendedASCII`](#parsing-ascii-structure) views can be made entirely
 seamless by having them share an index type (semantics of indexing a `String`
-between grapheme cluster boundaries are TBD—it can either trap or be forgiving).
+between grapheme cluster boundaries are TBD--it can either trap or be forgiving).
 Having a common index allows easy traversal into the interior of graphemes,
 something that is often needed, without making it likely that someone will do it
 by accident.
@@ -982,7 +984,7 @@ development.
 
 #### Printf-Style Formatting
 
-`String.format` is designed on the `printf` model: it takes a format string with
+`String(format:)` is designed on the `printf` model: it takes a format string with
 textual placeholders for substitution, and an arbitrary list of other arguments.
 The syntax and meaning of these placeholders has a long history in
 C, but for anyone who doesn't use them regularly they are cryptic and complex,
@@ -1011,7 +1013,7 @@ design pattern demands more from users than it should:
 
 These may seem like small issues, but the experience of Apple localization
 experts is that the total drag of these factors on programmers is such that they
-tend to reach for `String.format` instead.
+tend to reach for `String(format:)` instead.
 
 #### String Interpolation
 
@@ -1130,7 +1132,7 @@ This proposal depends on two new features in the Swift language:
 1. **Generic subscripts**, to
    enable [unified slicing syntax](#unification-of-slicing-operations).
 
-2. **A [subtype relationship](#different-type--shared-storage)** between
+2. **A [subtype relationship](#different-type-shared-storage)** between
    `Substring` and `String`, enabling framework APIs to traffic solely in
    `String` while still making it possible to avoid copies by handling
    `Substring`s where necessary.
@@ -1146,7 +1148,7 @@ on the top-level Swift namespace.
 
 - The ability to handle `UTF-8`-encoded strings (models of `Unicode`) is not in
   question here; this is about what encodings must be storable, without
-  transcoding, in the common currency type called “`String`”.
+  transcoding, in the common currency type called "`String`".
 - ASCII, Latin-1, UCS-2, and UTF-16 are UTF-16 subsets.  UTF-8 is not.
 - If we have a way to get at a `String`'s code units, we need a concrete type in
   which to express them in the API of `String`, which is a concrete type
@@ -1161,10 +1163,10 @@ on the top-level Swift namespace.
 ### Do we need a type-erasable base protocol for UnicodeEncoding?
 
 UnicodeEncoding has an associated type, but it may be important to be able to
-traffic in completely dynamic encoding values, e.g. for “tell me the most
-efficient encoding for this string.”
+traffic in completely dynamic encoding values, e.g. for "tell me the most
+efficient encoding for this string."
 
-### Should there be a string “facade?”
+### Should there be a string "facade?"
 
 One possible design alternative makes `Unicode` a vehicle for expressing
 the storage and encoding of code units, but does not attempt to give it an API
@@ -1204,11 +1206,11 @@ struct String<U: Unicode = StringStorage>
 typealias Substring = String<StringStorage.SubSequence>
 ```
 
-One advantage of such a design is that naïve users will always extend “the right
-type” (`String`) without thinking, and the new APIs will show up on `Substring`,
+One advantage of such a design is that naïve users will always extend "the right
+type" (`String`) without thinking, and the new APIs will show up on `Substring`,
 `MyUTF8String`, etc.  That said, it also has downsides that should not be
 overlooked, not least of which is the confusability of the meaning of the word
-“string.”  Is it referring to the generic or the concrete type?
+"string."  Is it referring to the generic or the concrete type?
 
 ### `TextOutputStream` and `TextOutputStreamable`
 
@@ -1229,7 +1231,7 @@ This area will require some design work.
 
 ### `StaticString`
 
-`StaticString` was added as a byproduct of standard library developed and kept
+`StaticString` was added as a byproduct of standard library development and kept
 around because it seemed useful, but it was never truly *designed* for client
 programmers.  We need to decide what happens with it.  Presumably *something*
 should fill its role, and that should conform to `Unicode`.
@@ -1268,8 +1270,8 @@ little benefit. [↩](#a2)
 
 <b id="f5">5</b> The queries supported by `NSCharacterSet` map directly onto
 properties in a table that's indexed by unicode scalar value.  This table is
-part of the Unicode standard.  Some of these queries (e.g., “is this an
-uppercase character?”) may have fairly obvious generalizations to grapheme
+part of the Unicode standard.  Some of these queries (e.g., "is this an
+uppercase character?") may have fairly obvious generalizations to grapheme
 clusters, but exactly how to do it is a research topic and *ideally* we'd either
 establish the existing practice that the Unicode committee would standardize, or
 the Unicode committee would do the research and we'd implement their

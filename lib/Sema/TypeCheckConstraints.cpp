@@ -26,8 +26,8 @@
 #include "swift/AST/Initializer.h"
 #include "swift/AST/NameLookup.h"
 #include "swift/AST/PrettyStackTrace.h"
+#include "swift/AST/SubstitutionMap.h"
 #include "swift/AST/TypeCheckerDebugConsumer.h"
-#include "swift/Basic/Fallthrough.h"
 #include "swift/Parse/Lexer.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -478,6 +478,12 @@ resolveDeclRefExpr(UnresolvedDeclRefExpr *UDRE, DeclContext *DC) {
 
     ValueDecl *D = Result.Decl;
     if (!D->hasInterfaceType()) validateDecl(D);
+
+    // FIXME: Circularity hack.
+    if (!D->hasInterfaceType()) {
+      AllDeclRefs = false;
+      continue;
+    }
 
     // FIXME: The source-location checks won't make sense once
     // EnableASTScopeLookup is the default.
@@ -1382,8 +1388,10 @@ bool GenericRequirementsCheckListener::shouldCheck(RequirementKind kind,
   return true;
 }
 
-void GenericRequirementsCheckListener::diagnosed(
-    const Requirement *withRequirement) {}
+void GenericRequirementsCheckListener::satisfiedConformance(
+                                          Type depTy, Type replacementTy,
+                                          ProtocolConformanceRef conformance) {
+}
 
 bool TypeChecker::
 solveForExpression(Expr *&expr, DeclContext *dc, Type convertType,
@@ -2096,9 +2104,11 @@ bool TypeChecker::typeCheckForEachBinding(DeclContext *dc, ForEachStmt *stmt) {
           cast<AssociatedTypeDecl>(
             sequenceProto->lookupDirect(ctx.Id_Iterator).front());
 
+        auto subs = sequenceType->getContextSubstitutionMap(
+          cs.DC->getParentModule(),
+          sequenceProto);
         iteratorType = iteratorAssocType->getDeclaredInterfaceType()
-            .subst(cs.DC->getParentModule(),
-                   sequenceType->getContextSubstitutions(sequenceProto));
+          .subst(subs);
 
         if (iteratorType) {
           auto iteratorProto =
@@ -2114,7 +2124,6 @@ bool TypeChecker::typeCheckForEachBinding(DeclContext *dc, ForEachStmt *stmt) {
           elementType = iteratorType->getTypeOfMember(
                           cs.DC->getParentModule(),
                           elementAssocType,
-                          &tc,
                           elementAssocType->getDeclaredInterfaceType());
         }
       }
@@ -3310,10 +3319,8 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
 
   bool toArchetype = toType->is<ArchetypeType>();
   bool fromArchetype = fromType->is<ArchetypeType>();
-  SmallVector<ProtocolDecl*, 2> toProtocols;
-  bool toExistential = toType->isExistentialType(toProtocols);
-  SmallVector<ProtocolDecl*, 2> fromProtocols;
-  bool fromExistential = fromType->isExistentialType(fromProtocols);
+  bool toExistential = toType->isExistentialType();
+  bool fromExistential = fromType->isExistentialType();
   
   // If we're doing a metatype cast, it can only be existential if we're
   // casting to/from the existential metatype. 'T.self as P.Protocol'
@@ -3361,16 +3368,18 @@ CheckedCastKind TypeChecker::typeCheckCheckedCast(Type fromType,
   // We can conditionally cast from NSError to an Error-conforming
   // type.  This is handled in the runtime, so it doesn't need a special cast
   // kind.
-  if (auto errorTypeProto = Context.getProtocol(KnownProtocolKind::Error)) {
-    if (conformsToProtocol(toType, errorTypeProto, dc,
-                           (ConformanceCheckFlags::InExpression|
-                            ConformanceCheckFlags::Used)))
-      if (auto NSErrorTy = getNSErrorType(dc))
-        if (isSubtypeOf(fromType, NSErrorTy, dc)
-            // Don't mask "always true" warnings if NSError is cast to
-            // Error itself.
-            && !isSubtypeOf(fromType, toType, dc))
-          return CheckedCastKind::ValueCast;
+  if (Context.LangOpts.EnableObjCInterop) {
+    if (auto errorTypeProto = Context.getProtocol(KnownProtocolKind::Error)) {
+      if (conformsToProtocol(toType, errorTypeProto, dc,
+                             (ConformanceCheckFlags::InExpression|
+                              ConformanceCheckFlags::Used)))
+        if (auto NSErrorTy = getNSErrorType(dc))
+          if (isSubtypeOf(fromType, NSErrorTy, dc)
+              // Don't mask "always true" warnings if NSError is cast to
+              // Error itself.
+              && !isSubtypeOf(fromType, toType, dc))
+            return CheckedCastKind::ValueCast;
+    }
   }
 
   // The runtime doesn't support casts to CF types and always lets them succeed.

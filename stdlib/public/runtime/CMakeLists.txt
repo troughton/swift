@@ -18,6 +18,13 @@ if(SWIFT_RUNTIME_ENABLE_LEAK_CHECKER)
   set(swift_runtime_leaks_sources Leaks.mm)
 endif()
 
+if(SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS)
+  list(APPEND swift_runtime_compile_flags
+    "-DSWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS=1")
+endif()
+
+set(section_magic_compile_flags ${swift_runtime_compile_flags})
+
 list(APPEND swift_runtime_compile_flags
      "-D__SWIFT_CURRENT_DYLIB=swiftCore")
 
@@ -25,8 +32,8 @@ set(swift_runtime_objc_sources
     ErrorObject.mm
     SwiftObject.mm
     SwiftValue.mm
-    Remangle.cpp
-    Reflection.mm)
+    Reflection.mm
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/Remangler.cpp")
 
 set(swift_runtime_sources
     AnyHashableSupport.cpp
@@ -51,15 +58,22 @@ set(swift_runtime_sources
     Once.cpp
     Portability.cpp
     ProtocolConformance.cpp
-    RuntimeEntrySymbols.cpp)
+    RefCount.cpp
+    RuntimeEntrySymbols.cpp
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/OldDemangler.cpp"
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/Demangler.cpp"
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/NodePrinter.cpp"
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/Context.cpp"
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/ManglingUtils.cpp"
+    "${SWIFT_SOURCE_DIR}/lib/Demangling/Punycode.cpp")
 
 # Acknowledge that the following sources are known.
 set(LLVM_OPTIONAL_SOURCES
-    Remangle.cpp
     swift_sections.S
     MutexPThread.cpp
     MutexWin32.cpp
     CygwinPort.cpp
+    ImageInspectionInit.cpp
     ImageInspectionELF.cpp
     ImageInspectionStatic.cpp
     StaticBinaryELF.cpp
@@ -76,7 +90,7 @@ if(SWIFT_BUILD_STATIC_STDLIB AND "${sdk}" STREQUAL "LINUX")
   set(static_binary_lnk_file_list)
   string(TOLOWER "${sdk}" lowercase_sdk)
 
-  # These two libaries are only used with the static swiftcore
+  # These two libraries are only used with the static swiftcore
   add_library(swiftImageInspectionStatic STATIC
               ImageInspectionStatic.cpp
               StaticBinaryELF.cpp)
@@ -96,10 +110,12 @@ if(SWIFT_BUILD_STATIC_STDLIB AND "${sdk}" STREQUAL "LINUX")
   add_custom_command_target(swift_static_binary_${sdk}_args
     COMMAND
       "${CMAKE_COMMAND}" -E copy
-      "${SWIFT_SOURCE_DIR}/utils/${lowercase}/static-executable-args.lnk"
+      "${SWIFT_SOURCE_DIR}/utils/static-executable-args.lnk"
       "${SWIFTSTATICLIB_DIR}/${linkfile}"
     OUTPUT
-      "${SWIFTSTATICLIB_DIR}/${linkfile}")
+      "${SWIFTSTATICLIB_DIR}/${linkfile}"
+    DEPENDS
+      "${SWIFT_SOURCE_DIR}/utils/static-executable-args.lnk")
 
   list(APPEND static_binary_lnk_file_list ${swift_static_binary_${sdk}_args})
   swift_install_in_component(stdlib
@@ -133,19 +149,26 @@ endforeach()
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
 elseif ("${CMAKE_SYSTEM_NAME}" STREQUAL "CYGWIN")
 else()
+  add_swift_library(section_magic_loader OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
+      ImageInspectionInit.cpp
+      C_COMPILE_FLAGS ${section_magic_compile_flags}
+      TARGET_SDKS "${ELFISH_SDKS}"
+      LINK_FLAGS ${swift_runtime_linker_flags}
+      INSTALL_IN_COMPONENT never_install)
   add_swift_library(section_magic_begin OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
       swift_sections.S
-      C_COMPILE_FLAGS ${swift_runtime_compile_flags} "-DSWIFT_BEGIN"
+      C_COMPILE_FLAGS ${section_magic_compile_flags} "-DSWIFT_BEGIN"
       TARGET_SDKS "${ELFISH_SDKS}"
       LINK_FLAGS ${swift_runtime_linker_flags}
       INSTALL_IN_COMPONENT never_install)
   add_swift_library(section_magic_end OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
       swift_sections.S
-      C_COMPILE_FLAGS ${swift_runtime_compile_flags} "-DSWIFT_END"
+      C_COMPILE_FLAGS ${section_magic_compile_flags} "-DSWIFT_END"
       LINK_FLAGS ${swift_runtime_linker_flags}
       TARGET_SDKS "${ELFISH_SDKS}"
       INSTALL_IN_COMPONENT never_install)
 endif()
+
 
 set(object_target_list)
 foreach(sdk ${ELFISH_SDKS})
@@ -153,30 +176,81 @@ foreach(sdk ${ELFISH_SDKS})
     set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
     set(arch_suffix "${SWIFT_SDK_${sdk}_LIB_SUBDIR}-${arch}")
 
-    set(section_magic_begin_name "section_magic_begin-${arch_suffix}")
-    set(section_magic_end_name "section_magic_end-${arch_suffix}")
+    set(section_magic_loader_obj "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/section_magic_loader-${arch_suffix}.dir/ImageInspectionInit.cpp${CMAKE_C_OUTPUT_EXTENSION}")
+    set(section_magic_begin_obj "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/section_magic_begin-${arch_suffix}.dir/swift_sections.S${CMAKE_C_OUTPUT_EXTENSION}")
+    set(section_magic_end_obj "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/section_magic_end-${arch_suffix}.dir/swift_sections.S${CMAKE_C_OUTPUT_EXTENSION}")
 
-    add_custom_command_target(section_magic_${arch_suffix}_objects
+    set(ld_EXECUTABLE ${CMAKE_LINKER})
+    if(SWIFT_SDK_${sdk}_ARCH_${arch}_LINKER)
+      set(ld_EXECUTABLE ${SWIFT_SDK_${sdk}_ARCH_${arch}_LINKER})
+    endif()
+
+    add_custom_command_target(section_magic_${arch_suffix}_begin_object
       COMMAND
-          "${CMAKE_COMMAND}" -E copy
-          "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${section_magic_begin_name}.dir/swift_sections.S${CMAKE_C_OUTPUT_EXTENSION}"
-          "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
-      COMMAND
-          "${CMAKE_COMMAND}" -E copy
-          "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${section_magic_end_name}.dir/swift_sections.S${CMAKE_C_OUTPUT_EXTENSION}"
-          "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
+          # Merge ImageInspectionInit.o + swift_sections.S(BEGIN) => swift_begin.o
+          ${ld_EXECUTABLE} -r -o "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
+          "${section_magic_begin_obj}" "${section_magic_loader_obj}"
       OUTPUT
           "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
+      DEPENDS
+          "${section_magic_begin_obj}"
+          "${section_magic_loader_obj}")
+
+    add_custom_command_target(section_magic_${arch_suffix}_end_object
+      COMMAND
+          "${CMAKE_COMMAND}" -E copy
+          "${section_magic_end_obj}"
+          "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
+      OUTPUT
           "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
       DEPENDS
-          ${section_magic_begin_name}
-          ${section_magic_end_name})
+          "${section_magic_end_obj}")
 
-    list(APPEND object_target_list "${section_magic_${arch_suffix}_objects}")
+    list(APPEND object_target_list
+        "${section_magic_${arch_suffix}_begin_object}"
+        "${section_magic_${arch_suffix}_end_object}")
 
     swift_install_in_component(stdlib
-        FILES "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o" "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
-        DESTINATION "lib/swift/${arch_subdir}")
+        FILES
+            "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
+            "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
+        DESTINATION
+            "lib/swift/${arch_subdir}")
+
+    if(SWIFT_BUILD_STATIC_STDLIB)
+      # Static lib versions of swift_begin.o and swift_end.o
+      add_custom_command_target(static_section_magic_${arch_suffix}_begin_object
+        COMMAND
+            "${CMAKE_COMMAND}" -E copy
+            "${section_magic_begin_obj}"
+            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_begin.o"
+        OUTPUT
+            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_begin.o"
+        DEPENDS
+            "${section_magic_begin_obj}")
+
+      add_custom_command_target(static_section_magic_${arch_suffix}_end_object
+        COMMAND
+            "${CMAKE_COMMAND}" -E copy
+            "${section_magic_end_obj}"
+            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_end.o"
+        OUTPUT
+            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_end.o"
+        DEPENDS
+            "${section_magic_end_obj}")
+
+      list(APPEND object_target_list
+            "${static_section_magic_${arch_suffix}_begin_object}"
+            "${static_section_magic_${arch_suffix}_end_object}")
+
+      swift_install_in_component(stdlib
+          FILES
+              "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_begin.o"
+              "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_end.o"
+          DESTINATION
+              "lib/swift_static/${arch_subdir}")
+    endif()
+
   endforeach()
 endforeach()
 

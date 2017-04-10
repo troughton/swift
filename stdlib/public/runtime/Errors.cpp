@@ -33,7 +33,7 @@
 #include "ImageInspection.h"
 #include "swift/Runtime/Debug.h"
 #include "swift/Runtime/Mutex.h"
-#include "swift/Basic/Demangle.h"
+#include "swift/Demangling/Demangle.h"
 #include "swift/Basic/LLVM.h"
 #include "llvm/ADT/StringRef.h"
 #if !defined(_MSC_VER)
@@ -152,7 +152,7 @@ static void dumpStackTraceEntry(unsigned index, void *framePC) {
 // The layout of this struct is CrashReporter ABI, so there are no ABI concerns
 // here.
 extern "C" {
-CRASH_REPORTER_CLIENT_HIDDEN
+LLVM_LIBRARY_VISIBILITY
 struct crashreporter_annotations_t gCRAnnotations
 __attribute__((__section__("__DATA," CRASHREPORTER_ANNOTATIONS_SECTION))) = {
     CRASHREPORTER_ANNOTATIONS_VERSION, 0, 0, 0, 0, 0, 0, 0};
@@ -264,11 +264,48 @@ swift::fatalError(uint32_t flags, const char *format, ...)
   abort();
 }
 
+// Report a warning to system console and stderr.
+void
+swift::warning(uint32_t flags, const char *format, ...)
+{
+  va_list args;
+  va_start(args, format);
+
+  char *log;
+  swift_vasprintf(&log, format, args);
+
+  reportNow(flags, log);
+
+  free(log);
+}
+
 // Crash when a deleted method is called by accident.
 SWIFT_RUNTIME_EXPORT
 LLVM_ATTRIBUTE_NORETURN
-extern "C" void
+void
 swift_deletedMethodError() {
   swift::fatalError(/* flags = */ 0,
                     "fatal error: call of deleted method\n");
+}
+
+
+// Crash due to a retain count overflow.
+// FIXME: can't pass the object's address from InlineRefCounts without hacks
+void swift::swift_abortRetainOverflow() {
+  swift::fatalError(FatalErrorFlags::ReportBacktrace,
+                    "fatal error: object was retained too many times");
+}
+
+// Crash due to retain of a dead unowned reference.
+// FIXME: can't pass the object's address from InlineRefCounts without hacks
+void swift::swift_abortRetainUnowned(const void *object) {
+  if (object) {
+    swift::fatalError(FatalErrorFlags::ReportBacktrace,
+                      "fatal error: attempted to read an unowned reference but "
+                      "object %p was already deallocated", object);
+  } else {
+    swift::fatalError(FatalErrorFlags::ReportBacktrace,
+                      "fatal error: attempted to read an unowned reference but "
+                      "the object was already deallocated");
+  }
 }

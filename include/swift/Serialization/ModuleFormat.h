@@ -54,7 +54,7 @@ const uint16_t VERSION_MAJOR = 0;
 /// in source control, you should also update the comment to briefly
 /// describe what change you made. The content of this comment isn't important;
 /// it just ensures a conflict if two people change the module format.
-const uint16_t VERSION_MINOR = 307; // Last change: layout requirements
+const uint16_t VERSION_MINOR = 331; // Last change: type witness substitutions
 
 using DeclID = PointerEmbeddedInt<unsigned, 31>;
 using DeclIDField = BCFixed<31>;
@@ -549,6 +549,7 @@ namespace input_block {
   using SearchPathLayout = BCRecordLayout<
     SEARCH_PATH,
     BCFixed<1>, // framework?
+    BCFixed<1>, // system?
     BCBlob      // path
   >;
 }
@@ -642,12 +643,8 @@ namespace decls_block {
 
   using ArchetypeTypeLayout = BCRecordLayout<
     ARCHETYPE_TYPE,
-    BCFixed<1>,          // whether this is a primary archetype or not
-    TypeIDField,         // parent if non-primary, generic env if primary
-    DeclIDField,         // associated type decl if non-primary, name if primary
-    TypeIDField,         // superclass
-    BCArray<DeclIDField> // conformances
-    // Trailed by the nested types record.
+    GenericEnvironmentIDField, // generic environment
+    TypeIDField                // interface type
   >;
 
   using OpenedExistentialTypeLayout = BCRecordLayout<
@@ -660,16 +657,6 @@ namespace decls_block {
     TypeIDField          // self type
   >;
 
-  using ArchetypeNestedTypeNamesLayout = BCRecordLayout<
-    ARCHETYPE_NESTED_TYPE_NAMES,
-    BCArray<IdentifierIDField>
-  >;
-
-  using ArchetypeNestedTypesLayout = BCRecordLayout<
-    ARCHETYPE_NESTED_TYPES,
-    BCArray<TypeIDField>
-  >;
-  
   using ProtocolCompositionTypeLayout = BCRecordLayout<
     PROTOCOL_COMPOSITION_TYPE,
     BCArray<TypeIDField> // protocols
@@ -844,8 +831,7 @@ namespace decls_block {
     BCFixed<1>,             // objc?
     GenericEnvironmentIDField, // generic environment
     AccessibilityKindField, // accessibility
-    BCVBR<4>,               // number of protocols
-    BCArray<DeclIDField>    // protocols and inherited types
+    BCArray<DeclIDField>    // inherited types
     // Trailed by the generic parameters (if any), the members record, and
     // the default witness table record
   >;
@@ -975,8 +961,8 @@ namespace decls_block {
     ENUM_ELEMENT_DECL,
     IdentifierIDField, // name
     DeclContextIDField,// context decl
-    TypeIDField, // argument type
     TypeIDField, // interface type
+    BCFixed<1>,  // has argument type?
     BCFixed<1>,  // implicit?
     EnumElementRawValueKindField,  // raw value kind
     BCFixed<1>,  // negative raw value?
@@ -989,6 +975,7 @@ namespace decls_block {
     BCFixed<1>,  // implicit?
     BCFixed<1>,  // objc?
     StorageKindField,   // StorageKind
+    GenericEnvironmentIDField, // generic environment
     TypeIDField, // interface type
     DeclIDField, // getter
     DeclIDField, // setter
@@ -1001,7 +988,9 @@ namespace decls_block {
     AccessibilityKindField, // accessibility
     AccessibilityKindField, // setter accessibility, if applicable
     BCArray<IdentifierIDField> // name components
-    // The indices pattern trails the record.
+    // Trailed by:
+    // - generic parameters, if any
+    // - the indices pattern
   >;
 
   using ExtensionLayout = BCRecordLayout<
@@ -1098,13 +1087,13 @@ namespace decls_block {
 
   using GenericEnvironmentLayout = BCRecordLayout<
     GENERIC_ENVIRONMENT,
-    BCArray<TypeIDField>         // (sugared interface type, contextual type)
+    BCArray<TypeIDField>         // sugared interface types
   >;
 
   using SILGenericEnvironmentLayout = BCRecordLayout<
     SIL_GENERIC_ENVIRONMENT,
     BCArray<TypeIDField>         // (generic parameter name, sugared interface
-                                 //  type, contextual type) triples
+                                 //  type) pairs
   >;
 
   using GenericRequirementLayout = BCRecordLayout<
@@ -1146,7 +1135,6 @@ namespace decls_block {
     DeclContextIDField, // the decl that provided this conformance
     BCVBR<5>, // value mapping count
     BCVBR<5>, // type mapping count
-    BCVBR<5>, // inherited conformances count
     BCArray<DeclIDField>
     // The array contains archetype-value pairs, then type declarations.
     // Inherited conformances follow, then the substitution records for the
@@ -1192,14 +1180,15 @@ namespace decls_block {
   using XRefTypePathPieceLayout = BCRecordLayout<
     XREF_TYPE_PATH_PIECE,
     IdentifierIDField, // name
-    BCFixed<1>         // only in nominal
+    BCFixed<1>         // restrict to protocol extension
   >;
 
   using XRefValuePathPieceLayout = BCRecordLayout<
     XREF_VALUE_PATH_PIECE,
     TypeIDField,       // type
     IdentifierIDField, // name
-    BCFixed<1>         // restrict to protocol extension
+    BCFixed<1>,        // restrict to protocol extension
+    BCFixed<1>         // static?
   >;
 
   using XRefInitializerPathPieceLayout = BCRecordLayout<
@@ -1364,6 +1353,7 @@ namespace decls_block {
   using ObjCDeclAttrLayout = BCRecordLayout<
     ObjC_DECL_ATTR,
     BCFixed<1>, // implicit flag
+    BCFixed<1>, // Swift 3 inferred
     BCFixed<1>, // implicit name flag
     BCVBR<4>,   // # of arguments (+1) or zero if no name
     BCArray<IdentifierIDField>
@@ -1463,7 +1453,8 @@ namespace index_block {
     SIL_LAYOUT_OFFSETS,
 
     PRECEDENCE_GROUPS,
-    
+    NESTED_TYPE_DECLS,
+
     LastRecordKind = PRECEDENCE_GROUPS,
   };
   
@@ -1488,10 +1479,22 @@ namespace index_block {
     BCBlob       // actual names
   >;
 
+  using ExtensionTableLayout = BCRecordLayout<
+    EXTENSIONS, // record ID
+    BCVBR<16>,  // table offset within the blob (see below)
+    BCBlob  // map from identifier strings to decl kinds / decl IDs
+  >;
+
   using ObjCMethodTableLayout = BCRecordLayout<
     OBJC_METHODS,  // record ID
     BCVBR<16>,     // table offset within the blob (see below)
     BCBlob         // map from Objective-C selectors to methods with that selector
+  >;
+
+  using NestedTypeDeclsLayout = BCRecordLayout<
+    NESTED_TYPE_DECLS, // record ID
+    BCVBR<16>,  // table offset within the blob (see below)
+    BCBlob  // map from identifier strings to decl kinds / decl IDs
   >;
 
   using EntryPointLayout = BCRecordLayout<

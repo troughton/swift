@@ -19,6 +19,7 @@
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/Initializer.h"
+#include "swift/AST/Pattern.h"
 
 using namespace swift;
 
@@ -137,21 +138,23 @@ public:
   static AbstractFunction decomposeFunction(Expr *fn) {
     assert(fn->getValueProvidingExpr() == fn);
 
-    // Look through Optional unwraps
     while (true) {
+      // Look through Optional unwraps.
       if (auto conversion = dyn_cast<ForceValueExpr>(fn)) {
         fn = conversion->getSubExpr()->getValueProvidingExpr();
       } else if (auto conversion = dyn_cast<BindOptionalExpr>(fn)) {
         fn = conversion->getSubExpr()->getValueProvidingExpr();
+      // Look through function conversions.
+      } else if (auto conversion = dyn_cast<FunctionConversionExpr>(fn)) {
+        fn = conversion->getSubExpr()->getValueProvidingExpr();
+      // Look through base-ignored qualified references (Module.methodName).
+      } else if (auto baseIgnored = dyn_cast<DotSyntaxBaseIgnoredExpr>(fn)) {
+        fn = baseIgnored->getRHS();
       } else {
         break;
       }
     }
-    // Look through function conversions.
-    while (auto conversion = dyn_cast<FunctionConversionExpr>(fn)) {
-      fn = conversion->getSubExpr()->getValueProvidingExpr();
-    }
-
+    
     // Normal function references.
     if (auto declRef = dyn_cast<DeclRefExpr>(fn)) {
       ValueDecl *decl = declRef->getDecl();

@@ -376,7 +376,7 @@ public:
   }
 
   hash_code visitOpenExistentialRefInst(OpenExistentialRefInst *X) {
-    auto ArchetypeTy = cast<ArchetypeType>(X->getType().getSwiftRValueType());
+    auto ArchetypeTy = X->getType().castTo<ArchetypeType>();
     auto ConformsTo = ArchetypeTy->getConformsTo();
     return llvm::hash_combine(
         X->getKind(), X->getOperand(),
@@ -406,11 +406,9 @@ bool llvm::DenseMapInfo<SimpleValue>::isEqual(SimpleValue LHS,
 
     // Consider the types of two open_existential_ref instructions to be equal,
     // if the sets of protocols they conform to are equal.
-    auto LHSArchetypeTy =
-        cast<ArchetypeType>(LHSI->getType().getSwiftRValueType());
+    auto LHSArchetypeTy = LHSI->getType().castTo<ArchetypeType>();
     auto LHSConformsTo = LHSArchetypeTy->getConformsTo();
-    auto RHSArchetypeTy =
-        cast<ArchetypeType>(RHSI->getType().getSwiftRValueType());
+    auto RHSArchetypeTy = RHSI->getType().castTo<ArchetypeType>();
     auto RHSConformsTo = RHSArchetypeTy->getConformsTo();
     return LHSConformsTo == RHSConformsTo;
   }
@@ -599,15 +597,23 @@ namespace {
 /// archetypes. Replace such types by performing type substitutions
 /// according to the provided type substitution map.
 static void updateBasicBlockArgTypes(SILBasicBlock *BB,
-                                     const SubstitutionMap &TypeSubstMap) {
+                                     ArchetypeType *OldOpenedArchetype,
+                                     ArchetypeType *NewOpenedArchetype) {
   // Check types of all BB arguments.
   for (auto *Arg : BB->getPHIArguments()) {
-    if (!Arg->getType().getSwiftRValueType()->hasOpenedExistential())
+    if (!Arg->getType().hasOpenedExistential())
       continue;
     // Type of this BB argument uses an opened existential.
     // Try to apply substitutions to it and if it produces a different type,
     // use this type as new type of the BB argument.
-    auto NewArgType = Arg->getType().subst(BB->getModule(), TypeSubstMap);
+    auto OldArgType = Arg->getType();
+    auto NewArgType = OldArgType.subst(BB->getModule(),
+                                       [&](SubstitutableType *type) -> Type {
+                                         if (type == OldOpenedArchetype)
+                                           return NewOpenedArchetype;
+                                         return type;
+                                       },
+                                       MakeAbstractConformanceForGenericType());
     if (NewArgType == Arg->getType())
       continue;
     // Replace the type of this BB argument. The type of a BBArg
@@ -644,9 +650,7 @@ bool CSE::processOpenExistentialRef(SILInstruction *Inst, ValueBase *V,
   llvm::SmallSetVector<SILInstruction *, 16> Candidates;
   auto OldOpenedArchetype = getOpenedArchetypeOf(Inst);
   auto NewOpenedArchetype = getOpenedArchetypeOf(dyn_cast<SILInstruction>(V));
-  SubstitutionMap TypeSubstMap;
-  TypeSubstMap.addSubstitution(CanArchetypeType(OldOpenedArchetype),
-                               NewOpenedArchetype);
+
   // Collect all candidates that may contain opened archetypes
   // that need to be replaced.
   for (auto Use : Inst->getUses()) {
@@ -671,7 +675,9 @@ bool CSE::processOpenExistentialRef(SILInstruction *Inst, ValueBase *V,
       if (Successor->args_empty())
         continue;
       // If a BB has any arguments, update their types if necessary.
-      updateBasicBlockArgTypes(Successor, TypeSubstMap);
+      updateBasicBlockArgTypes(Successor,
+                               OldOpenedArchetype,
+                               NewOpenedArchetype);
     }
   }
   // Now process candidates.
@@ -697,16 +703,13 @@ bool CSE::processOpenExistentialRef(SILInstruction *Inst, ValueBase *V,
     // True if a candidate depends on the old opened archetype.
     bool DependsOnOldOpenedArchetype = !Candidate->getTypeDependentOperands().empty();
     if (!Candidate->use_empty() &&
-        Candidate->getType().getSwiftRValueType()->hasOpenedExistential()) {
+        Candidate->getType().hasOpenedExistential()) {
       // Check if the result type of the candidate depends on the opened
       // existential in question.
       auto ResultDependsOnOldOpenedArchetype =
           Candidate->getType().getSwiftRValueType().findIf(
               [&OldOpenedArchetype](Type t) -> bool {
-                if (auto *archetypeTy = t->getAs<ArchetypeType>())
-                  if (archetypeTy == OldOpenedArchetype)
-                    return true;
-                return false;
+                return (CanType(t) == OldOpenedArchetype);
               });
       if (ResultDependsOnOldOpenedArchetype) {
         DependsOnOldOpenedArchetype |= ResultDependsOnOldOpenedArchetype;
@@ -1010,7 +1013,9 @@ static bool tryToCSEOpenExtCall(OpenExistentialAddrInst *From,
   }
 
   auto FnTy = ToAI->getSubstCalleeSILType();
-  auto ResTy = FnTy.castTo<SILFunctionType>()->getSILResult();
+  SILFunctionConventions fnConv(FnTy.castTo<SILFunctionType>(),
+                                Builder.getModule());
+  auto ResTy = fnConv.getSILResultType();
 
   ApplyInst *NAI = Builder.createApply(ToAI->getLoc(), ToWMI, FnTy, ResTy,
                                        ToAI->getSubstitutions(), Args,

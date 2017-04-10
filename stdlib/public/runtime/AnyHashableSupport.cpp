@@ -14,6 +14,7 @@
 #include "swift/Basic/Lazy.h"
 #include "swift/Runtime/Concurrent.h"
 #include "swift/Runtime/Debug.h"
+#include "swift/Runtime/HeapObject.h"
 #include "swift/Runtime/Metadata.h"
 #include "Private.h"
 #include "SwiftValue.h"
@@ -123,7 +124,7 @@ const Metadata *swift::hashable_support::findHashableBaseType(
 }
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" void _swift_stdlib_makeAnyHashableUsingDefaultRepresentation(
+void _swift_stdlib_makeAnyHashableUsingDefaultRepresentation(
   const OpaqueValue *value,
   const void *anyHashableResultPointer,
   const Metadata *T,
@@ -131,7 +132,7 @@ extern "C" void _swift_stdlib_makeAnyHashableUsingDefaultRepresentation(
 );
 
 SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" void _swift_stdlib_makeAnyHashableUpcastingToHashableBaseType(
+void _swift_stdlib_makeAnyHashableUpcastingToHashableBaseType(
   OpaqueValue *value,
   const void *anyHashableResultPointer,
   const Metadata *type,
@@ -154,6 +155,22 @@ extern "C" void _swift_stdlib_makeAnyHashableUpcastingToHashableBaseType(
 
       if (auto unboxedHashableWT =
               swift_conformsToProtocol(type, &HashableProtocolDescriptor)) {
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+        ValueBuffer unboxedCopyBuf;
+        // Allocate buffer.
+        OpaqueValue *unboxedValueCopy =
+            unboxedType->allocateBufferIn(&unboxedCopyBuf);
+        // initWithCopy.
+        unboxedType->vw_initializeWithCopy(
+            unboxedValueCopy, const_cast<OpaqueValue *>(unboxedValue));
+
+        _swift_stdlib_makeAnyHashableUpcastingToHashableBaseType(
+            unboxedValueCopy, anyHashableResultPointer, unboxedType,
+            unboxedHashableWT);
+        // Deallocate buffer.
+        unboxedType->deallocateBufferIn(&unboxedCopyBuf);
+        type->vw_destroy(value);
+#else
         ValueBuffer unboxedCopyBuf;
         auto unboxedValueCopy = unboxedType->vw_initializeBufferWithCopy(
             &unboxedCopyBuf, const_cast<OpaqueValue *>(unboxedValue));
@@ -162,6 +179,7 @@ extern "C" void _swift_stdlib_makeAnyHashableUpcastingToHashableBaseType(
             unboxedHashableWT);
         unboxedType->vw_deallocateBuffer(&unboxedCopyBuf);
         type->vw_destroy(value);
+#endif
         return;
       }
     }

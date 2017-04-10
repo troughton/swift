@@ -29,6 +29,7 @@
 #include "swift/AST/Type.h"
 #include "swift/AST/ForeignErrorConvention.h"
 #include "swift/Basic/StringExtras.h"
+#include "swift/Strings.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/Basic/IdentifierTable.h"
@@ -40,6 +41,7 @@
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/Support/Path.h"
 #include <set>
 
 namespace llvm {
@@ -271,9 +273,12 @@ public:
   const bool ImportForwardDeclarations;
   const bool InferImportAsMember;
   const bool DisableSwiftBridgeAttr;
+  const bool BridgingHeaderExplicitlyRequested;
+  const bool DisableAdapterModules;
 
   bool IsReadingBridgingPCH;
   llvm::SmallVector<clang::serialization::SubmoduleID, 2> PCHImportedSubmodules;
+  llvm::SmallVector<const clang::Module*, 2> DeferredHeaderImports;
 
   const Version CurrentVersion;
 
@@ -293,13 +298,18 @@ private:
   /// (through the Swift name lookup module file extension).
   LookupTableMap LookupTables;
 
+  /// \brief The fake buffer used to import modules.
+  ///
+  /// FIXME: Horrible hack for loadModule().
+  clang::FileID DummyImportBuffer;
+
   /// \brief A count of the number of load module operations.
+  ///
   /// FIXME: Horrible, horrible hack for \c loadModule().
   unsigned ImportCounter = 0;
 
-  /// \brief The value of \c ImportCounter last time when imported modules were
-  /// verified.
-  unsigned VerifiedImportCounter = 0;
+  /// \brief Used to avoid running the AST verifier over the same declarations.
+  size_t VerifiedDeclsCounter = 0;
 
   /// \brief Clang compiler invocation.
   std::shared_ptr<clang::CompilerInvocation> Invocation;
@@ -378,6 +388,10 @@ public:
   llvm::DenseMap<std::pair<ObjCSelector, char>, unsigned>
     ActiveSelectors;
 
+  clang::CompilerInstance *getClangInstance() {
+    return Instance.get();
+  }
+
 private:
   /// \brief Generation number that is used for crude versioning.
   ///
@@ -410,37 +424,12 @@ public:
   LookupTableMap &getLookupTables() { return LookupTables; }
 
 private:
-  class EnumConstantDenseMapInfo {
-  public:
-    using PairTy = std::pair<const clang::EnumDecl *, llvm::APSInt>;
-    using PointerInfo = llvm::DenseMapInfo<const clang::EnumDecl *>;
-    static inline PairTy getEmptyKey() {
-      return {PointerInfo::getEmptyKey(), llvm::APSInt(/*bitwidth=*/1)};
-    }
-    static inline PairTy getTombstoneKey() {
-      return {PointerInfo::getTombstoneKey(), llvm::APSInt(/*bitwidth=*/1)};
-    }
-    static unsigned getHashValue(const PairTy &pair) {
-      return llvm::combineHashValue(PointerInfo::getHashValue(pair.first),
-                                    llvm::hash_value(pair.second));
-    }
-    static bool isEqual(const PairTy &lhs, const PairTy &rhs) {
-      return lhs == rhs;
-    }
-  };
-
   /// A mapping from imported declarations to their "alternate" declarations,
   /// for cases where a single Clang declaration is imported to two
   /// different Swift declarations.
   llvm::DenseMap<Decl *, TinyPtrVector<ValueDecl *>> AlternateDecls;
 
 public:
-  /// \brief Keep track of enum constant values that have been imported.
-  llvm::DenseMap<std::pair<const clang::EnumDecl *, llvm::APSInt>,
-                 EnumElementDecl *,
-                 EnumConstantDenseMapInfo>
-    EnumConstantValues;
-
   /// \brief Keep track of initializer declarations that correspond to
   /// imported methods.
   llvm::DenseMap<
@@ -549,6 +538,11 @@ private:
   /// after having set up a suitable Clang instance.
   std::unique_ptr<importer::NameImporter> nameImporter = nullptr;
 
+  /// If there is a single .PCH file imported into the __ObjC module, this
+  /// is the filename of that PCH. When other files are imported, this should
+  /// be llvm::None.
+  Optional<std::string> SinglePCHImport = None;
+
 public:
   importer::NameImporter &getNameImporter() {
     assert(nameImporter && "haven't finished initialization");
@@ -632,8 +626,10 @@ public:
   ///
   /// \param D The Clang declaration whose name should be imported.
   importer::ImportedName importFullName(const clang::NamedDecl *D,
-                                        Version version) {
-    return getNameImporter().importName(D, version);
+                                        Version version,
+                                        clang::DeclarationName givenName =
+                                          clang::DeclarationName()) {
+    return getNameImporter().importName(D, version, givenName);
   }
 
   /// Print an imported name as a string suitable for the swift_name attribute,
@@ -729,6 +725,10 @@ public:
   /// be represented in Swift.
   Decl *importMirroredDecl(const clang::NamedDecl *decl, DeclContext *dc,
                            Version version, ProtocolDecl *proto);
+
+  /// \brief Utility function for building simple generic signatures.
+  GenericSignature *buildGenericSignature(GenericParamList *genericParams,
+                                          DeclContext *dc);
 
   /// \brief Utility function for building simple generic environments.
   GenericEnvironment *buildGenericEnvironment(GenericParamList *genericParams,
@@ -834,13 +834,15 @@ public:
 
   /// \brief Retrieves the Swift wrapper for the given Clang module, creating
   /// it if necessary.
-  ClangModuleUnit *getWrapperForModule(ClangImporter &importer,
-                                       const clang::Module *underlying);
+  ClangModuleUnit *getWrapperForModule(const clang::Module *underlying);
 
   /// \brief Constructs a Swift module for the given Clang module.
-  ModuleDecl *finishLoadingClangModule(ClangImporter &importer,
-                                   const clang::Module *clangModule,
-                                   bool preferAdapter);
+  ModuleDecl *finishLoadingClangModule(const clang::Module *clangModule,
+                                       bool preferAdapter);
+
+  /// \brief Call finishLoadingClangModule on each deferred import collected
+  /// while scanning a bridging header or PCH.
+  void handleDeferredImports();
 
   /// \brief Retrieve the named Swift type, e.g., Int32.
   ///
@@ -1019,6 +1021,9 @@ public:
   /// \param clangDecl The underlying declaration.
   /// \param isFromSystemModule Whether to apply special rules that only apply
   ///   to system APIs.
+  /// \param importedName How to import the name of the method. This is still
+  ///   important to satisfy the AST verifier, even though the method is an
+  ///   accessor.
   /// \param[out] params The patterns visible inside the function body.
   ///
   /// \returns the imported function type, or null if the type cannot be
@@ -1027,6 +1032,7 @@ public:
                                 const clang::ObjCPropertyDecl *property,
                                 const clang::ObjCMethodDecl *clangDecl,
                                 bool isFromSystemModule,
+                                importer::ImportedName importedName,
                                 ParameterList **params);
 
   /// \brief Determine whether the given typedef-name is "special", meaning
@@ -1120,6 +1126,8 @@ public:
     D->setAccessibility(access);
     if (auto ASD = dyn_cast<AbstractStorageDecl>(D))
       ASD->setSetterAccessibility(access);
+    // All imported decls are constructed fully validated.
+    D->setValidationStarted();
     return D;
   }
 
@@ -1161,6 +1169,24 @@ public:
 
   /// Dump the Swift-specific name lookup tables we generate.
   void dumpSwiftLookupTables();
+
+  void setSinglePCHImport(Optional<std::string> PCHFilename) {
+    if (PCHFilename.hasValue()) {
+      assert(llvm::sys::path::extension(PCHFilename.getValue())
+                 .endswith(PCH_EXTENSION) &&
+             "Single PCH imported filename doesn't have .pch extension!");
+    }
+    SinglePCHImport = PCHFilename;
+  }
+
+  /// If there was is a single .pch bridging header without other imported
+  /// files, we can provide the PCH filename for declaration caching,
+  /// especially in code completion.
+  StringRef getSinglePCHImport() const {
+    if (SinglePCHImport.hasValue())
+      return *SinglePCHImport;
+    return StringRef();
+  }
 };
 
 namespace importer {

@@ -431,6 +431,13 @@ mapParsedParameters(Parser &parser,
                            param.FirstName, param.FirstNameLoc);
     }
 
+    // Warn when an unlabeled parameter follows a variadic parameter
+    if (ellipsisLoc.isValid() && elements.back()->isVariadic() &&
+        param.FirstName.empty()) {
+      parser.diagnose(param.FirstNameLoc,
+                      diag::unlabeled_parameter_following_variadic_parameter);
+    }
+    
     // If this parameter had an ellipsis, check whether it's the last parameter.
     if (param.EllipsisLoc.isValid()) {
       if (ellipsisLoc.isValid()) {
@@ -476,26 +483,44 @@ Parser::parseSingleParameterClause(ParameterContextKind paramContext,
   if (!Tok.is(tok::l_paren)) {
     // If we don't have the leading '(', complain.
     Diag<> diagID;
+    bool skipIdentifier = false;
     switch (paramContext) {
     case ParameterContextKind::Function:
     case ParameterContextKind::Operator:
       diagID = diag::func_decl_without_paren;
       break;
     case ParameterContextKind::Subscript:
-      diagID = diag::expected_lparen_subscript;
+      skipIdentifier = Tok.is(tok::identifier) &&
+                       peekToken().is(tok::l_paren);
+      diagID = skipIdentifier ? diag::subscript_has_name
+                              : diag::expected_lparen_subscript;
       break;
     case ParameterContextKind::Initializer:
-      diagID = diag::expected_lparen_initializer;
+      skipIdentifier = Tok.is(tok::identifier) &&
+                       peekToken().is(tok::l_paren);
+      diagID = skipIdentifier ? diag::initializer_has_name
+                              : diag::expected_lparen_initializer;
       break;
     case ParameterContextKind::Closure:
     case ParameterContextKind::Curried:
       llvm_unreachable("should never be here");
     }
 
-    auto diag = diagnose(Tok, diagID);
-    if (Tok.isAny(tok::l_brace, tok::arrow, tok::kw_throws, tok::kw_rethrows))
-      diag.fixItInsertAfter(PreviousLoc, "()");
+    {
+      auto diag = diagnose(Tok, diagID);
+      if (Tok.isAny(tok::l_brace, tok::arrow, tok::kw_throws, tok::kw_rethrows))
+        diag.fixItInsertAfter(PreviousLoc, "()");
 
+      if (skipIdentifier)
+        diag.fixItRemove(Tok.getLoc());
+    }
+
+    // We might diagnose again down here, so make sure 'diag' is out of scope.
+    if (skipIdentifier) {
+      consumeToken();
+      skipSingle();
+    }
+    
     // Create an empty parameter list to recover.
     return makeParserErrorResult(
         ParameterList::createEmpty(Context, PreviousLoc, PreviousLoc));
@@ -765,6 +790,10 @@ ParserResult<Pattern> Parser::parsePattern() {
     Identifier name;
     SourceLoc loc = consumeIdentifier(&name);
     bool isLet = InVarOrLetPattern != IVOLP_InVar;
+
+    if (Tok.isIdentifierOrUnderscore() && !Tok.isContextualDeclKeyword())
+      diagnoseConsecutiveIDs(name.str(), loc, isLet ? "constant" : "variable");
+
     return makeParserResult(createBindingFromPattern(loc, name, isLet));
   }
     
@@ -919,7 +948,7 @@ parseOptionalPatternTypeAnnotation(ParserResult<Pattern> result,
   // In an if-let, the actual type of the expression is Optional of whatever
   // was written.
   if (isOptional)
-    repr = new (Context) OptionalTypeRepr(repr, Tok.isNot(tok::eof) ? Tok.getLoc() : PreviousLoc);
+    repr = new (Context) OptionalTypeRepr(repr, SourceLoc());
 
   return makeParserResult(new (Context) TypedPattern(P, repr));
 }
@@ -952,7 +981,8 @@ ParserResult<Pattern> Parser::parseMatchingPattern(bool isExprBasic) {
     if (castType.isNull() || castType.hasCodeCompletion())
       return nullptr;
     return makeParserResult(new (Context) IsPattern(isLoc, castType.get(),
-                                                    nullptr));
+                                                    nullptr,
+                                                    CheckedCastKind::Unresolved));
   }
 
   // matching-pattern ::= expr

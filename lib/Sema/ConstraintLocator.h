@@ -75,6 +75,8 @@ public:
     TupleElement,
     /// \brief A tuple element referenced by name.
     NamedTupleElement,
+    /// \brief An optional payload.
+    OptionalPayload,
     /// \brief A generic argument.
     /// FIXME: Add support for named generic arguments?
     GenericArgument,
@@ -91,8 +93,6 @@ public:
     SubscriptIndex,
     /// \brief The result of a subscript expression.
     SubscriptResult,
-    /// \brief An argument to string interpolation.
-    InterpolationArgument,
     /// \brief The lookup for a constructor member.
     ConstructorMember,
     /// \brief Rvalue adjustment.
@@ -133,6 +133,7 @@ public:
     case AssociatedType:
     case FunctionArgument:
     case FunctionResult:
+    case OptionalPayload:
     case Member:
     case MemberRefBase:
     case UnresolvedMember:
@@ -155,7 +156,6 @@ public:
       return 0;
 
     case GenericArgument:
-    case InterpolationArgument:
     case NamedTupleElement:
     case TupleElement:
       return 1;
@@ -191,6 +191,7 @@ public:
     case ConstructorMember:
     case InstanceType:
     case Load:
+    case OptionalPayload:
     case Member:
     case MemberRefBase:
     case UnresolvedMember:
@@ -204,7 +205,6 @@ public:
     case Archetype:
     case AssociatedType:
     case GenericArgument:
-    case InterpolationArgument:
     case NamedTupleElement:
     case TupleElement:
     case Requirement:
@@ -333,12 +333,6 @@ public:
     /// its position.
     static PathElement getGenericArgument(unsigned position) {
       return PathElement(GenericArgument, position);
-    }
-
-    /// \brief Retrieve a path element for an argument to string
-    /// interpolation.
-    static PathElement getInterpolationArgument(unsigned position) {
-      return PathElement(InterpolationArgument, position);
     }
 
     /// \brief Retrieve the kind of path element.

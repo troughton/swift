@@ -32,7 +32,6 @@ typealias BadA<T : Int> = MyType<String, T>  // expected-error {{inheritance fro
 
 typealias BadB<T where T == Int> = MyType<String, T>  // expected-error {{associated types may not have a generic parameter list}}
 // expected-error@-1 {{same-type requirement makes generic parameter 'T' non-generic}}
-// expected-error@-2 {{same-type requirement makes generic parameter 'T' non-generic}}
 
 typealias BadC<T,T> = MyType<String, T>  // expected-error {{definition conflicts with previous value}}
 // expected-note @-1 {{previous definition of 'T' is here}}
@@ -165,6 +164,11 @@ class GenericClass<T> {
       return TA(a: x, b: y)
     }
   }
+
+  // Stupid corner case -- underlying type is not dependent
+  typealias NotDependent<T> = Int
+
+  func misleadingCode(_: NotDependent<String>) {}
 }
 
 let gc = GenericClass<Double>()
@@ -341,3 +345,16 @@ func f(x: S.G1<Int>, y: S.G2<Int>) {
   takesMyType(x: x)
   takesMyType(y: y)
 }
+
+//
+// Generic typealiases with requirements
+//
+
+typealias Element<S> = S.Iterator.Element where S : Sequence
+
+func takesInt(_: Element<[Int]>) {}
+
+takesInt(10)
+
+func failsRequirementCheck(_: Element<Int>) {}
+// expected-error@-1 {{type 'Int' does not conform to protocol 'Sequence'}}

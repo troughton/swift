@@ -17,7 +17,6 @@
 #ifndef SWIFT_AST_SUBSTITUTION_H
 #define SWIFT_AST_SUBSTITUTION_H
 
-#include "swift/AST/SubstitutionMap.h"
 #include "swift/AST/Type.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/Optional.h"
@@ -28,6 +27,7 @@ namespace llvm {
 
 namespace swift {
   class GenericEnvironment;
+  class SubstitutionMap;
 
 /// Substitution - A substitution into a generic specialization.
 class Substitution {
@@ -54,20 +54,7 @@ public:
              const PrintOptions &PO = PrintOptions()) const;
   void dump() const;
   void dump(llvm::raw_ostream &os, unsigned indent = 0) const;
-  
-  /// Apply a substitution to this substitution's replacement type and
-  /// conformances.
-  Substitution subst(ModuleDecl *module,
-                     const SubstitutionMap &subMap) const;
-  Substitution subst(ModuleDecl *module,
-                     TypeSubstitutionFn subs,
-                     LookupConformanceFn conformances) const;
-
-private:
-  friend class ProtocolConformance;
 };
-
-void dump(const ArrayRef<Substitution> &subs);
 
 } // end namespace swift
 

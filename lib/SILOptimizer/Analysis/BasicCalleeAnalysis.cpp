@@ -13,10 +13,10 @@
 #include "swift/SILOptimizer/Analysis/BasicCalleeAnalysis.h"
 
 #include "swift/AST/Decl.h"
-#include "swift/Basic/Fallthrough.h"
 #include "swift/Basic/Statistic.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/SILOptimizer/Utils/Local.h"
+#include "llvm/Support/Compiler.h"
 
 #include <algorithm>
 
@@ -202,7 +202,7 @@ CalleeList CalleeCache::getCalleeListForCalleeKind(SILValue Callee) const {
 
   case ValueKind::ThinToThickFunctionInst:
     Callee = cast<ThinToThickFunctionInst>(Callee)->getOperand();
-    SWIFT_FALLTHROUGH;
+    LLVM_FALLTHROUGH;
 
   case ValueKind::FunctionRefInst:
     return CalleeList(cast<FunctionRefInst>(Callee)->getReferencedFunction());
@@ -235,10 +235,9 @@ CalleeList CalleeCache::getCalleeList(SILInstruction *I) const {
   assert((isa<StrongReleaseInst>(I) || isa<ReleaseValueInst>(I)) &&
          "A deallocation instruction expected");
   auto Ty = I->getOperand(0)->getType();
-  while (Ty.getSwiftRValueType()->getAnyOptionalObjectType())
-    Ty = M.Types.getLoweredType(Ty.getSwiftRValueType()
-                                    .getAnyOptionalObjectType());
-  auto Class = Ty.getSwiftRValueType().getClassOrBoundGenericClass();
+  while (auto payloadTy = Ty.getAnyOptionalObjectType())
+    Ty = payloadTy;
+  auto Class = Ty.getClassOrBoundGenericClass();
   if (!Class || Class->hasClangNode() || !Class->hasDestructor())
     return CalleeList();
   SILDeclRef Destructor = SILDeclRef(Class->getDestructor());

@@ -26,8 +26,18 @@ import Foundation
 // CHECK-NEXT: - (nonnull instancetype)init OBJC_DESIGNATED_INITIALIZER;
 // CHECK-NEXT: @end
 class Test : NSObject {
-  func makeArray(_: ZZStringAlias) -> [ZZStringAlias] { return [] }
-  func usePoint(_: ZZPoint) {}
-  func useAlignment(_: ZZAlignment) {}
-  func useObjects(_: ZZClass) -> [ZZProto] { return [] }
+  @objc func makeArray(_: ZZStringAlias) -> [ZZStringAlias] { return [] }
+  @objc func usePoint(_: ZZPoint) {}
+  @objc func useAlignment(_: ZZAlignment) {}
+  @objc func useObjects(_: ZZClass) -> [ZZProto] { return [] }
 }
+
+@objc
+public enum TestE : Int{
+	@objc(A2)
+	case A1
+	case B1
+}
+// CHECK: typedef SWIFT_ENUM(NSInteger, TestE)
+// CHECK-NEXT: {{^}} A2 SWIFT_COMPILE_NAME("A1") = 0,
+// CHECK-NEXT: {{^}} TestEB1 = 1,

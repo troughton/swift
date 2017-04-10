@@ -83,6 +83,9 @@ func testSelector(_ c1: C1, p1: P1, obj: AnyObject) {
   let sel2: Selector
   sel2 = sel1
   _ = sel2
+
+  let dict: [Selector: Int] = [:]
+  let _: Int? = dict[#selector(c1.method1)]
 }
 
 func testAmbiguity() {
@@ -126,7 +129,7 @@ case #selector(C1.method1)?:
 }
 
 @objc class SR1827 {
-  func bar() {}
+  @objc func bar() {}
 }
 
 switch optionalSel {

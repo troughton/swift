@@ -12,7 +12,8 @@
 
 #import <XCTest/XCTest.h>
 #include "swift/Runtime/Metadata.h"
-#include "swift/Basic/Demangle.h"
+#include "swift/Demangling/Demangle.h"
+#include "swift/Demangling/ManglingUtils.h"
 #include "swift/Strings.h"
 
 // NOTE: This is a temporary workaround.
@@ -32,7 +33,7 @@ static char *scanIdentifier(const char *&mangled)
     if (*mangled == '0') goto fail;  // length may not be zero
 
     size_t length = 0;
-    while (swift::Demangle::isDigit(*mangled)) {
+    while (swift::Mangle::isDigit(*mangled)) {
       size_t oldlength = length;
       length *= 10;
       length += *mangled++ - '0';
@@ -133,17 +134,15 @@ fail:
 //
 // If no exception is thrown by the block, returns an empty dictionary.
 
-XCT_EXPORT NSDictionary *_XCTRunThrowableBlockBridge(void (^block)());
+XCT_EXPORT NSDictionary<NSString *, NSString *> *_XCTRunThrowableBlockBridge(void (^block)());
 
-NSDictionary *_XCTRunThrowableBlockBridge(void (^block)())
+NSDictionary<NSString *, NSString *> *_XCTRunThrowableBlockBridge(void (^block)())
 {
-    NSDictionary *result;
+    NSDictionary<NSString *, NSString *> *result = nil;
 
     @try {
         block();
-        result = @{};
     }
-
     @catch (NSException *exception) {
         result = @{
                    @"type": @"objc",
@@ -152,12 +151,11 @@ NSDictionary *_XCTRunThrowableBlockBridge(void (^block)())
                    @"reason": exception.reason,
                    };
     }
-
     @catch (...) {
         result = @{
                    @"type": @"unknown",
                    };
     }
 
-    return [result retain];
+    return result;
 }

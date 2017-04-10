@@ -15,12 +15,12 @@ public func testStaticGlobal() {
 }
 
 // rdar://problem/21361469
-// CHECK: define {{.*}}void @_TF9c_globals17testCaptureGlobalFT_T_() [[SWIFT_FUNC_ATTR:#[0-9]+]] {
+// CHECK: define {{.*}}void @_T09c_globals17testCaptureGlobalyyF() [[SWIFT_FUNC_ATTR:#[0-9]+]] {
 public func testCaptureGlobal() {
   var f: Float = 0
   var i: CInt = 0
   var s: UnsafePointer<CChar>! = nil
-  // CHECK-LABEL: define linkonce_odr hidden void @_TFF9c_globals17testCaptureGlobalFT_T_U_FT_T_{{.*}} {
+  // CHECK-LABEL: define internal swiftcc void @_T09c_globals17testCaptureGlobalyyFyycfU_{{.*}} {
   blackHole({ () -> Void in
     // CHECK: @staticFloat
     // CHECK: @staticInt

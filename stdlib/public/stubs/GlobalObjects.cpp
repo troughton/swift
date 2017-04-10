@@ -26,21 +26,21 @@ namespace swift {
 // FIXME(ABI)#76 : does this declaration need SWIFT_RUNTIME_STDLIB_INTERFACE?
 // _direct type metadata for Swift._EmptyArrayStorage
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" ClassMetadata CLASS_METADATA_SYM(s18_EmptyArrayStorage);
+ClassMetadata CLASS_METADATA_SYM(s18_EmptyArrayStorage);
 
 // _direct type metadata for Swift._RawNativeDictionaryStorage
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" ClassMetadata CLASS_METADATA_SYM(s27_RawNativeDictionaryStorage);
+ClassMetadata CLASS_METADATA_SYM(s27_RawNativeDictionaryStorage);
 
 // _direct type metadata for Swift._RawNativeSetStorage
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" ClassMetadata CLASS_METADATA_SYM(s20_RawNativeSetStorage);
+ClassMetadata CLASS_METADATA_SYM(s20_RawNativeSetStorage);
 } // namespace swift
 
 swift::_SwiftEmptyArrayStorage swift::_swiftEmptyArrayStorage = {
   // HeapObject header;
   {
-    &CLASS_METADATA_SYM(s18_EmptyArrayStorage), // isa pointer
+    &swift::CLASS_METADATA_SYM(s18_EmptyArrayStorage), // isa pointer
   },
   
   // _SwiftArrayBodyStorage body;
@@ -55,7 +55,7 @@ swift::_SwiftEmptyArrayStorage swift::_swiftEmptyArrayStorage = {
 swift::_SwiftEmptyDictionaryStorage swift::_swiftEmptyDictionaryStorage = {
   // HeapObject header;
   {
-    &CLASS_METADATA_SYM(s27_RawNativeDictionaryStorage), // isa pointer
+    &swift::CLASS_METADATA_SYM(s27_RawNativeDictionaryStorage), // isa pointer
   },
   
   // _SwiftDictionaryBodyStorage body;
@@ -83,7 +83,7 @@ swift::_SwiftEmptyDictionaryStorage swift::_swiftEmptyDictionaryStorage = {
 swift::_SwiftEmptySetStorage swift::_swiftEmptySetStorage = {
   // HeapObject header;
   {
-    &CLASS_METADATA_SYM(s20_RawNativeSetStorage), // isa pointer
+    &swift::CLASS_METADATA_SYM(s20_RawNativeSetStorage), // isa pointer
   },
   
   // _SwiftDictionaryBodyStorage body;

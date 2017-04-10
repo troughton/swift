@@ -45,9 +45,7 @@ using namespace swift;
 
 namespace {
 
-enum class OptGroup {
-  Unknown, Diagnostics, Performance
-};
+enum class OptGroup { Unknown, Diagnostics, Performance, Lowering };
 
 } // end anonymous namespace
 
@@ -79,6 +77,10 @@ static llvm::cl::opt<bool>
 EnableSILOwnershipOpt("enable-sil-ownership",
                  llvm::cl::desc("Compile the module with sil-ownership initially enabled for all functions"));
 
+static llvm::cl::opt<bool>
+EnableSILOpaqueValues("enable-sil-opaque-values",
+                      llvm::cl::desc("Compile the module with sil-opaque-values enabled."));
+
 static llvm::cl::opt<std::string>
 ResourceDir("resource-dir",
     llvm::cl::desc("The directory that holds the compiler resource files"));
@@ -93,10 +95,11 @@ Target("target", llvm::cl::desc("target triple"));
 
 static llvm::cl::opt<OptGroup> OptimizationGroup(
     llvm::cl::desc("Predefined optimization groups:"),
-    llvm::cl::values(clEnumValN(OptGroup::Diagnostics, "diagnostics",
-                                "Run diagnostic passes"),
-                     clEnumValN(OptGroup::Performance, "O",
-                                "Run performance passes")),
+    llvm::cl::values(
+        clEnumValN(OptGroup::Diagnostics, "diagnostics",
+                   "Run diagnostic passes"),
+        clEnumValN(OptGroup::Performance, "O", "Run performance passes"),
+        clEnumValN(OptGroup::Lowering, "lowering", "Run lowering passes")),
     llvm::cl::init(OptGroup::Unknown));
 
 static llvm::cl::list<PassKind>
@@ -117,6 +120,10 @@ VerifyMode("verify",
 static llvm::cl::opt<unsigned>
 AssertConfId("assert-conf-id", llvm::cl::Hidden,
              llvm::cl::init(0));
+
+static llvm::cl::opt<bool>
+DisableSILLinking("disable-sil-linking",
+                  llvm::cl::desc("Disable SIL linking"));
 
 static llvm::cl::opt<int>
 SILInlineThreshold("sil-inline-threshold", llvm::cl::Hidden,
@@ -212,7 +219,11 @@ int main(int argc, char **argv) {
 
   // Give the context the list of search paths to use for modules.
   Invocation.setImportSearchPaths(ImportPaths);
-  Invocation.setFrameworkSearchPaths(FrameworkPaths);
+  std::vector<SearchPathOptions::FrameworkSearchPath> FramePaths;
+  for (const auto &path : FrameworkPaths) {
+    FramePaths.push_back({path, /*isSystem=*/false});
+  }
+  Invocation.setFrameworkSearchPaths(FramePaths);
   // Set the SDK path and target if given.
   if (SDKPath.getNumOccurrences() == 0) {
     const char *SDKROOT = getenv("SDKROOT");
@@ -233,11 +244,14 @@ int main(int argc, char **argv) {
   Invocation.getLangOptions().DisableAvailabilityChecking = true;
   Invocation.getLangOptions().EnableAccessControl = false;
   Invocation.getLangOptions().EnableObjCAttrRequiresFoundation = false;
+  Invocation.getLangOptions().EnableObjCInterop =
+    llvm::Triple(Target).isOSDarwin();
 
   Invocation.getLangOptions().ASTVerifierProcessCount =
       ASTVerifierProcessCount;
   Invocation.getLangOptions().ASTVerifierProcessId =
       ASTVerifierProcessId;
+  Invocation.getLangOptions().EnableSILOpaqueValues = EnableSILOpaqueValues;
 
   // Setup the SIL Options.
   SILOptions &SILOpts = Invocation.getSILOptions();
@@ -314,7 +328,7 @@ int main(int argc, char **argv) {
     std::unique_ptr<SerializedSILLoader> SL = SerializedSILLoader::create(
         CI.getASTContext(), CI.getSILModule(), nullptr);
 
-    if (extendedInfo.isSIB())
+    if (extendedInfo.isSIB() || DisableSILLinking)
       SL->getAllForModule(CI.getMainModule()->getName(), nullptr);
     else
       SL->getAll();
@@ -329,6 +343,8 @@ int main(int argc, char **argv) {
     runSILDiagnosticPasses(*CI.getSILModule());
   } else if (OptimizationGroup == OptGroup::Performance) {
     runSILOptimizationPasses(*CI.getSILModule());
+  } else if (OptimizationGroup == OptGroup::Lowering) {
+    runSILLoweringPasses(*CI.getSILModule());
   } else {
     auto *SILMod = CI.getSILModule();
     {
@@ -382,7 +398,8 @@ int main(int argc, char **argv) {
   // diagnostics.  Check now to ensure that they meet our expectations.
   if (VerifyMode) {
     HadError = verifyDiagnostics(CI.getSourceMgr(), CI.getInputBufferIDs(),
-                                 /*autoApplyFixes*/false);
+                                 /*autoApplyFixes*/false,
+                                 /*ignoreUnknown*/false);
     DiagnosticEngine &diags = CI.getDiags();
     if (diags.hasFatalErrorOccurred() &&
         !Invocation.getDiagnosticOptions().ShowDiagnosticsAfterFatalError) {

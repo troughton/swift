@@ -127,14 +127,11 @@ private:
   GenericEnvironment *GenericEnv;
 
   /// The forwarding substitutions, lazily computed.
-  Optional<ArrayRef<Substitution>> ForwardingSubs;
+  Optional<SubstitutionList> ForwardingSubs;
 
   /// The collection of all BasicBlocks in the SILFunction. Empty for external
   /// function references.
   BlockListType BlockList;
-
-  /// The declcontext of this function.
-  DeclContext *DeclCtx;
 
   /// The owning declaration of this function's clang node, if applicable.
   ValueDecl *ClangNodeOwner = nullptr;
@@ -147,14 +144,10 @@ private:
   unsigned Bare : 1;
 
   /// The function's transparent attribute.
-  unsigned Transparent : 1; // FIXME: pack this somewhere
+  unsigned Transparent : 1;
 
-  /// The function's fragile attribute.
-  ///
-  /// Fragile means that the function can be inlined into another module.
-  /// Currently this flag is set for public transparent functions and for all
-  /// functions in the stdlib.
-  unsigned Fragile : 1;
+  /// The function's serialized attribute.
+  unsigned Serialized : 2;
 
   /// Specifies if this function is a thunk or a reabstraction thunk.
   ///
@@ -215,35 +208,26 @@ private:
   /// after the pass runs, we only see a semantic-arc world.
   bool HasQualifiedOwnership = true;
 
-  SILFunction(SILModule &module, SILLinkage linkage,
-              StringRef mangledName, CanSILFunctionType loweredType,
-              GenericEnvironment *genericEnv,
-              Optional<SILLocation> loc,
-              IsBare_t isBareSILFunction,
-              IsTransparent_t isTrans,
-              IsFragile_t isFragile,
-              IsThunk_t isThunk,
-              ClassVisibility_t classVisibility,
+  SILFunction(SILModule &module, SILLinkage linkage, StringRef mangledName,
+              CanSILFunctionType loweredType, GenericEnvironment *genericEnv,
+              Optional<SILLocation> loc, IsBare_t isBareSILFunction,
+              IsTransparent_t isTrans, IsSerialized_t isSerialized,
+              IsThunk_t isThunk, ClassVisibility_t classVisibility,
               Inline_t inlineStrategy, EffectsKind E,
               SILFunction *insertBefore,
-              const SILDebugScope *debugScope,
-              DeclContext *DC);
+              const SILDebugScope *debugScope);
 
-  static SILFunction *create(SILModule &M, SILLinkage linkage, StringRef name,
-                             CanSILFunctionType loweredType,
-                             GenericEnvironment *genericEnv,
-                             Optional<SILLocation> loc,
-                             IsBare_t isBareSILFunction,
-                             IsTransparent_t isTrans,
-                             IsFragile_t isFragile,
-                             IsThunk_t isThunk = IsNotThunk,
-                             ClassVisibility_t classVisibility = NotRelevant,
-                             Inline_t inlineStrategy = InlineDefault,
-                             EffectsKind EffectsKindAttr =
-                               EffectsKind::Unspecified,
-                             SILFunction *InsertBefore = nullptr,
-                             const SILDebugScope *DebugScope = nullptr,
-                             DeclContext *DC = nullptr);
+  static SILFunction *
+  create(SILModule &M, SILLinkage linkage, StringRef name,
+         CanSILFunctionType loweredType, GenericEnvironment *genericEnv,
+         Optional<SILLocation> loc, IsBare_t isBareSILFunction,
+         IsTransparent_t isTrans, IsSerialized_t isSerialized,
+         IsThunk_t isThunk = IsNotThunk,
+         ClassVisibility_t classVisibility = NotRelevant,
+         Inline_t inlineStrategy = InlineDefault,
+         EffectsKind EffectsKindAttr = EffectsKind::Unspecified,
+         SILFunction *InsertBefore = nullptr,
+         const SILDebugScope *DebugScope = nullptr);
 
 public:
   ~SILFunction();
@@ -255,6 +239,9 @@ public:
   }
   CanSILFunctionType getLoweredFunctionType() const {
     return LoweredType;
+  }
+  SILFunctionConventions getConventions() const {
+    return SILFunctionConventions(LoweredType, getModule());
   }
 
   bool isNoReturnFunction() const;
@@ -355,12 +342,18 @@ public:
   }
 
   // Returns true if the function has indirect out parameters.
-  bool hasIndirectResults() const {
-    return getLoweredFunctionType()->getNumIndirectResults() > 0;
+  bool hasIndirectFormalResults() const {
+    return getLoweredFunctionType()->hasIndirectFormalResults();
   }
 
   /// Returns true if this function either has a self metadata argument or
   /// object that Self metadata may be derived from.
+  ///
+  /// Note that this is not the same as hasSelfParam().
+  ///
+  /// For closures that capture DynamicSelfType, hasSelfMetadataParam()
+  /// is true and hasSelfParam() is false. For methods on value types,
+  /// hasSelfParam() is true and hasSelfMetadataParam() is false.
   bool hasSelfMetadataParam() const;
 
   /// Return the mangled name of this SILFunction.
@@ -386,7 +379,8 @@ public:
   /// Returns true if this function can be inlined into a fragile function
   /// body.
   bool hasValidLinkageForFragileInline() const {
-    return isFragile() || isThunk() == IsReabstractionThunk;
+    return (isSerialized() == IsSerialized ||
+            isSerialized() == IsSerializable);
   }
 
   /// Returns true if this function can be referenced from a fragile function
@@ -433,10 +427,9 @@ public:
   bool isExternallyUsedSymbol() const;
 
   /// Get the DeclContext of this function. (Debug info only).
-  DeclContext *getDeclContext() const { return DeclCtx; }
-  void setDeclContext(Decl *D);
-  void setDeclContext(Expr *E);
-  void setDeclCtx(DeclContext *D) { DeclCtx = D; }
+  DeclContext *getDeclContext() const {
+    return getLocation().getAsDeclContext();
+  }
 
   /// \returns True if the function is marked with the @_semantics attribute
   /// and has special semantics that the optimizer can use to optimize the
@@ -517,9 +510,9 @@ public:
   IsTransparent_t isTransparent() const { return IsTransparent_t(Transparent); }
   void setTransparent(IsTransparent_t isT) { Transparent = isT; }
 
-  /// Get this function's fragile attribute.
-  IsFragile_t isFragile() const { return IsFragile_t(Fragile); }
-  void setFragile(IsFragile_t isFrag) { Fragile = isFrag; }
+  /// Get this function's serialized attribute.
+  IsSerialized_t isSerialized() const { return IsSerialized_t(Serialized); }
+  void setSerialized(IsSerialized_t isSerialized) { Serialized = isSerialized; }
 
   /// Get this function's thunk attribute.
   IsThunk_t isThunk() const { return IsThunk_t(Thunk); }
@@ -626,7 +619,7 @@ public:
 
   /// Return the identity substitutions necessary to forward this call if it is
   /// generic.
-  ArrayRef<Substitution> getForwardingSubstitutions();
+  SubstitutionList getForwardingSubstitutions();
 
   //===--------------------------------------------------------------------===//
   // Block List Access
@@ -721,13 +714,13 @@ public:
   ArrayRef<SILArgument *> getIndirectResults() const {
     assert(!empty() && "Cannot get arguments of a function without a body");
     return begin()->getArguments().slice(
-        0, getLoweredFunctionType()->getNumIndirectResults());
+        0, getConventions().getNumIndirectSILResults());
   }
 
   ArrayRef<SILArgument *> getArgumentsWithoutIndirectResults() const {
     assert(!empty() && "Cannot get arguments of a function without a body");
     return begin()->getArguments().slice(
-        getLoweredFunctionType()->getNumIndirectResults());
+        getConventions().getNumIndirectSILResults());
   }
 
   const SILArgument *getSelfArgument() const {

@@ -160,6 +160,7 @@ namespace {
     bool simplifyBranchBlock(BranchInst *BI);
     bool simplifyCondBrBlock(CondBranchInst *BI);
     bool simplifyCheckedCastBranchBlock(CheckedCastBranchInst *CCBI);
+    bool simplifyCheckedCastValueBranchBlock(CheckedCastValueBranchInst *CCBI);
     bool simplifyCheckedCastAddrBranchBlock(CheckedCastAddrBranchInst *CCABI);
     bool simplifyTryApplyBlock(TryApplyInst *TAI);
     bool simplifySwitchValueBlock(SwitchValueInst *SVI);
@@ -396,7 +397,7 @@ static SILInstruction *createEnumElement(SILBuilder &Builder,
   auto EnumVal = SEI->getOperand();
   // Do we have a payload.
   auto EnumTy = EnumVal->getType();
-  if (EnumElement->hasArgumentType()) {
+  if (EnumElement->getArgumentInterfaceType()) {
     auto Ty = EnumTy.getEnumElementType(EnumElement, SEI->getModule());
     SILValue UED(Builder.createUncheckedEnumData(SEI->getLoc(), EnumVal,
                                                  EnumElement, Ty));
@@ -1580,7 +1581,7 @@ bool SimplifyCFG::simplifySwitchEnumUnreachableBlocks(SwitchEnumInst *SEI) {
     return true;
   }
 
-  if (!Element || !Element->hasArgumentType() || Dest->args_empty()) {
+  if (!Element || !Element->getArgumentInterfaceType() || Dest->args_empty()) {
     assert(Dest->args_empty() && "Unexpected argument at destination!");
 
     SILBuilderWithScope(SEI).createBranch(SEI->getLoc(), Dest);
@@ -1809,6 +1810,35 @@ bool SimplifyCFG::simplifyCheckedCastBranchBlock(CheckedCastBranchInst *CCBI) {
   return MadeChange;
 }
 
+bool SimplifyCFG::simplifyCheckedCastValueBranchBlock(
+    CheckedCastValueBranchInst *CCBI) {
+  auto SuccessBB = CCBI->getSuccessBB();
+  auto FailureBB = CCBI->getFailureBB();
+  auto ThisBB = CCBI->getParent();
+
+  bool MadeChange = false;
+  CastOptimizer CastOpt(
+      [&MadeChange](SILInstruction *I,
+                    ValueBase *V) { /* ReplaceInstUsesAction */
+                                    MadeChange = true;
+      },
+      [&MadeChange](SILInstruction *I) { /* EraseInstAction */
+                                         MadeChange = true;
+                                         I->eraseFromParent();
+      },
+      [&]() { /* WillSucceedAction */
+              MadeChange |= removeIfDead(FailureBB);
+              addToWorklist(ThisBB);
+      },
+      [&]() { /* WillFailAction */
+              MadeChange |= removeIfDead(SuccessBB);
+              addToWorklist(ThisBB);
+      });
+
+  MadeChange |= bool(CastOpt.simplifyCheckedCastValueBranchInst(CCBI));
+  return MadeChange;
+}
+
 bool
 SimplifyCFG::
 simplifyCheckedCastAddrBranchBlock(CheckedCastAddrBranchInst *CCABI) {
@@ -1865,38 +1895,20 @@ static bool isTryApplyOfConvertFunction(TryApplyInst *TAI,
   // Check if it is a conversion of a non-throwing function into
   // a throwing function. If this is the case, replace by a
   // simple apply.
-  auto OrigFnTy = dyn_cast<SILFunctionType>(CFI->getConverted()->getType().
-                                            getSwiftRValueType());
+  auto OrigFnTy = CFI->getConverted()->getType().getAs<SILFunctionType>();
   if (!OrigFnTy || OrigFnTy->hasErrorResult())
     return false;
   
-  auto TargetFnTy = dyn_cast<SILFunctionType>(CFI->getType().
-                                              getSwiftRValueType());
+  auto TargetFnTy = CFI->getType().getAs<SILFunctionType>();
   if (!TargetFnTy || !TargetFnTy->hasErrorResult())
     return false;
-
-  // Check if the converted function type has the same number of arguments.
-  // Currently this is always the case, but who knows what convert_function can
-  // do in the future?
-  unsigned numParams = OrigFnTy->getParameters().size();
-  if (TargetFnTy->getParameters().size() != numParams)
-    return false;
-
-  // Check that the argument types are matching.
-  for (unsigned Idx = 0; Idx < numParams; Idx++) {
-    if (!canCastValueToABICompatibleType(
-          TAI->getModule(),
-          OrigFnTy->getParameters()[Idx].getSILType(),
-          TargetFnTy->getParameters()[Idx].getSILType()))
-      return false;
-  }
 
   // Look through the conversions and find the real callee.
   Callee = getActualCallee(CFI->getConverted());
   CalleeType = Callee->getType();
   
   // If it a call of a throwing callee, bail.
-  auto CalleeFnTy = dyn_cast<SILFunctionType>(CalleeType.getSwiftRValueType());
+  auto CalleeFnTy = CalleeType.getAs<SILFunctionType>();
   if (!CalleeFnTy || CalleeFnTy->hasErrorResult())
     return false;
   
@@ -1930,60 +1942,40 @@ bool SimplifyCFG::simplifyTryApplyBlock(TryApplyInst *TAI) {
   if (isTryApplyOfConvertFunction(TAI, Callee, CalleeType) ||
       isTryApplyWithUnreachableError(TAI, Callee, CalleeType)) {
 
-    auto CalleeFnTy = cast<SILFunctionType>(CalleeType.getSwiftRValueType());
-
-    auto ResultTy = CalleeFnTy->getSILResult();
+    auto CalleeFnTy = CalleeType.castTo<SILFunctionType>();
+    SILFunctionConventions calleeConv(CalleeFnTy, TAI->getModule());
+    auto ResultTy = calleeConv.getSILResultType();
     auto OrigResultTy = TAI->getNormalBB()->getArgument(0)->getType();
-
-    // Bail if the cast between the actual and expected return types cannot
-    // be handled.
-    if (!canCastValueToABICompatibleType(TAI->getModule(),
-                                         ResultTy, OrigResultTy))
-      return false;
 
     SILBuilderWithScope Builder(TAI);
 
-    auto TargetFnTy = dyn_cast<SILFunctionType>(
-                        CalleeType.getSwiftRValueType());
+    auto TargetFnTy = CalleeFnTy;
     if (TargetFnTy->isPolymorphic()) {
       TargetFnTy = TargetFnTy->substGenericArgs(TAI->getModule(),
                                                 TAI->getSubstitutions());
     }
+    SILFunctionConventions targetConv(TargetFnTy, TAI->getModule());
 
-    auto OrigFnTy = dyn_cast<SILFunctionType>(
-        TAI->getCallee()->getType().getSwiftRValueType());
+    auto OrigFnTy = TAI->getCallee()->getType().getAs<SILFunctionType>();
     if (OrigFnTy->isPolymorphic()) {
       OrigFnTy = OrigFnTy->substGenericArgs(TAI->getModule(),
                                             TAI->getSubstitutions());
     }
-
-    unsigned numArgs = TAI->getNumArguments();
-
-    // First check if it is possible to convert all arguments.
-    // Currently we believe that castValueToABICompatibleType can handle all
-    // cases, so this check should never fail. We just do it to be absolutely
-    // sure that we don't crash.
-    for (unsigned i = 0; i < numArgs; ++i) {
-      if (!canCastValueToABICompatibleType(TAI->getModule(),
-                                           OrigFnTy->getSILArgumentType(i),
-                                           TargetFnTy->getSILArgumentType(i))) {
-        return false;
-      }
-    }
+    SILFunctionConventions origConv(OrigFnTy, TAI->getModule());
 
     SmallVector<SILValue, 8> Args;
+    unsigned numArgs = TAI->getNumArguments();
     for (unsigned i = 0; i < numArgs; ++i) {
       auto Arg = TAI->getArgument(i);
       // Cast argument if required.
       Arg = castValueToABICompatibleType(&Builder, TAI->getLoc(), Arg,
-                                         OrigFnTy->getSILArgumentType(i),
-                                         TargetFnTy->getSILArgumentType(i))
-        .getValue();
+                                         origConv.getSILArgumentType(i),
+                                         targetConv.getSILArgumentType(i));
       Args.push_back(Arg);
     }
 
-    assert (CalleeFnTy->getNumSILArguments() == Args.size() &&
-            "The number of arguments should match");
+    assert(calleeConv.getNumSILArguments() == Args.size()
+           && "The number of arguments should match");
 
     DEBUG(llvm::dbgs() << "replace with apply: " << *TAI);
     ApplyInst *NewAI = Builder.createApply(TAI->getLoc(), Callee,
@@ -1996,8 +1988,7 @@ bool SimplifyCFG::simplifyTryApplyBlock(TryApplyInst *TAI) {
     auto *NormalBB = TAI->getNormalBB();
 
     auto CastedResult = castValueToABICompatibleType(&Builder, Loc, NewAI,
-                                                     ResultTy, OrigResultTy)
-                                                    .getValue();
+                                                     ResultTy, OrigResultTy);
 
     Builder.createBranch(Loc, NormalBB, { CastedResult });
     TAI->eraseFromParent();
@@ -2193,6 +2184,10 @@ bool SimplifyCFG::simplifyBlocks() {
       break;
     case TermKind::CheckedCastBranchInst:
       Changed |= simplifyCheckedCastBranchBlock(cast<CheckedCastBranchInst>(TI));
+      break;
+    case TermKind::CheckedCastValueBranchInst:
+      Changed |= simplifyCheckedCastValueBranchBlock(
+          cast<CheckedCastValueBranchInst>(TI));
       break;
     case TermKind::CheckedCastAddrBranchInst:
       Changed |= simplifyCheckedCastAddrBranchBlock(cast<CheckedCastAddrBranchInst>(TI));
@@ -2522,7 +2517,7 @@ bool ArgumentSplitter::createNewArguments() {
 
   // Only handle struct and tuple type.
   SILType Ty = Arg->getType();
-  if (!Ty.getStructOrBoundGenericStruct() && !Ty.getAs<TupleType>())
+  if (!Ty.getStructOrBoundGenericStruct() && !Ty.is<TupleType>())
     return false;
 
   // Get the first level projection for the struct or tuple type.

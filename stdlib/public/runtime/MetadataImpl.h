@@ -47,6 +47,9 @@
 #if SWIFT_OBJC_INTEROP
 #include "swift/Runtime/ObjCBridge.h"
 #endif
+
+#include "WeakReference.h"
+
 #include <cstring>
 #include <type_traits>
 
@@ -188,6 +191,11 @@ template <class Impl, class T> struct RetainableBoxBase {
   static constexpr size_t stride = sizeof(T);
   static constexpr bool isPOD = false;
   static constexpr bool isBitwiseTakable = true;
+#ifdef SWIFT_STDLIB_USE_NONATOMIC_RC
+  static constexpr bool isAtomic = false;
+#else
+  static constexpr bool isAtomic = true;
+#endif
 
   static void destroy(T *addr) {
     Impl::release(*addr);
@@ -259,12 +267,20 @@ template <class Impl, class T> struct RetainableBoxBase {
 struct SwiftRetainableBox :
     RetainableBoxBase<SwiftRetainableBox, HeapObject*> {
   static HeapObject *retain(HeapObject *obj) {
-    swift_retain(obj);
+    if (isAtomic) {
+      swift_retain(obj);
+    } else {
+      swift_nonatomic_retain(obj);
+    }
     return obj;
   }
 
   static void release(HeapObject *obj) {
-    swift_release(obj);
+    if (isAtomic) {
+      swift_release(obj);
+    } else {
+      swift_nonatomic_release(obj);
+    }
   }
 };
 
@@ -272,12 +288,20 @@ struct SwiftRetainableBox :
 struct SwiftUnownedRetainableBox :
     RetainableBoxBase<SwiftUnownedRetainableBox, HeapObject*> {
   static HeapObject *retain(HeapObject *obj) {
-    swift_unownedRetain(obj);
+    if (isAtomic) {
+      swift_unownedRetain(obj);
+    } else {
+      swift_nonatomic_unownedRetain(obj);
+    }
     return obj;
   }
 
   static void release(HeapObject *obj) {
-    swift_unownedRelease(obj);
+    if (isAtomic) {
+      swift_unownedRelease(obj);
+    } else {
+      swift_nonatomic_unownedRelease(obj);
+    }
   }
 
 #if SWIFT_OBJC_INTEROP
@@ -465,7 +489,11 @@ struct UnknownRetainableBox : RetainableBoxBase<UnknownRetainableBox, void*> {
     swift_unknownRetain(obj);
     return obj;
 #else
-    swift_retain(static_cast<HeapObject *>(obj));
+    if (isAtomic) {
+      swift_retain(static_cast<HeapObject *>(obj));
+    } else {
+      swift_nonatomic_retain(static_cast<HeapObject *>(obj));
+    }
     return static_cast<HeapObject *>(obj);
 #endif
   }
@@ -474,7 +502,11 @@ struct UnknownRetainableBox : RetainableBoxBase<UnknownRetainableBox, void*> {
 #if SWIFT_OBJC_INTEROP
     swift_unknownRelease(obj);
 #else
-    swift_release(static_cast<HeapObject *>(obj));
+    if (isAtomic) {
+      swift_release(static_cast<HeapObject *>(obj));
+    } else {
+      swift_nonatomic_release(static_cast<HeapObject *>(obj));
+    }
 #endif
   }
 };
@@ -743,6 +775,7 @@ template <class Impl> struct BufferValueWitnessesBase {
     Impl::deallocateBuffer(buffer, self);
   }
 
+#ifndef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
   static OpaqueValue *initializeBufferWithCopyOfBuffer(ValueBuffer *dest,
                                                        ValueBuffer *src,
                                                        const Metadata *self) {
@@ -750,6 +783,7 @@ template <class Impl> struct BufferValueWitnessesBase {
                                           Impl::projectBuffer(src, self),
                                           self);
   }
+#endif
 
   static OpaqueValue *initializeBufferWithCopy(ValueBuffer *dest,
                                                OpaqueValue *src,
@@ -800,6 +834,14 @@ struct BufferValueWitnesses<Impl, Size, Alignment, FixedPacking::OffsetZero>
                                     reinterpret_cast<OpaqueValue*>(src),
                                     self);
   }
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  static OpaqueValue *initializeBufferWithCopyOfBuffer(ValueBuffer *dest,
+                                                       ValueBuffer *src,
+                                                       const Metadata *self) {
+    return Impl::initializeWithCopy(reinterpret_cast<OpaqueValue *>(dest),
+                                    reinterpret_cast<OpaqueValue *>(src), self);
+  }
+#endif
   static void deallocateBuffer(ValueBuffer *buffer, const Metadata *self) {}
 };
 
@@ -825,9 +867,41 @@ struct BufferValueWitnesses<Impl, Size, Alignment, FixedPacking::Allocate>
   static OpaqueValue *initializeBufferWithTakeOfBuffer(ValueBuffer *dest,
                                                        ValueBuffer *src,
                                                        const Metadata *self) {
+
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  auto wtable = self->getValueWitnesses();
+  auto *srcReference = *reinterpret_cast<HeapObject**>(src);
+  *reinterpret_cast<HeapObject**>(dest) = srcReference;
+
+  // Project the address of the value in the buffer.
+  unsigned alignMask = wtable->getAlignmentMask();
+  // Compute the byte offset of the object in the box.
+  unsigned byteOffset = (sizeof(HeapObject) + alignMask) & ~alignMask;
+  auto *bytePtr =
+      reinterpret_cast<char *>(srcReference);
+  return reinterpret_cast<OpaqueValue *>(bytePtr + byteOffset);
+#else
     dest->PrivateData[0] = src->PrivateData[0];
     return (OpaqueValue*) dest->PrivateData[0];
+#endif
   }
+
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  static OpaqueValue *initializeBufferWithCopyOfBuffer(ValueBuffer *dest,
+                                                       ValueBuffer *src,
+                                                       const Metadata *self) {
+    auto wtable = self->getValueWitnesses();
+    auto reference = src->PrivateData[0];
+    dest->PrivateData[0] = reference;
+    swift_retain(reinterpret_cast<HeapObject *>(reference));
+    // Project the address of the value in the buffer.
+    unsigned alignMask = wtable->getAlignmentMask();
+    // Compute the byte offset of the object in the box.
+    unsigned byteOffset = (sizeof(HeapObject) + alignMask) & ~alignMask;
+    auto *bytePtr = reinterpret_cast<char *>(reference);
+    return reinterpret_cast<OpaqueValue *>(bytePtr + byteOffset);
+  }
+#endif
 };
 
 /// A class which provides BufferValueWitnesses for types that are not
@@ -849,6 +923,7 @@ struct NonFixedBufferValueWitnesses : BufferValueWitnessesBase<Impl> {
 
   static OpaqueValue *projectBuffer(ValueBuffer *buffer, const Metadata *self) {
     auto vwtable = self->getValueWitnesses();
+    (void)vwtable;
     if (!IsKnownAllocated && vwtable->isValueInline()) {
       return reinterpret_cast<OpaqueValue*>(buffer);
     } else {
@@ -867,8 +942,27 @@ struct NonFixedBufferValueWitnesses : BufferValueWitnessesBase<Impl> {
   static OpaqueValue *initializeBufferWithTakeOfBuffer(ValueBuffer *dest,
                                                        ValueBuffer *src,
                                                        const Metadata *self) {
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
     auto vwtable = self->getValueWitnesses();
-    if (!IsKnownAllocated && !vwtable->isValueInline()) {
+    (void)vwtable;
+    if (!IsKnownAllocated && vwtable->isValueInline()) {
+      return Impl::initializeWithTake(reinterpret_cast<OpaqueValue*>(dest),
+                                      reinterpret_cast<OpaqueValue*>(src),
+                                      self);
+    } else {
+      auto reference = src->PrivateData[0];
+      dest->PrivateData[0] = reference;
+      // Project the address of the value in the buffer.
+      unsigned alignMask = vwtable->getAlignmentMask();
+      // Compute the byte offset of the object in the box.
+      unsigned byteOffset = (sizeof(HeapObject) + alignMask) & ~alignMask;
+      auto *bytePtr = reinterpret_cast<char *>(reference);
+      return reinterpret_cast<OpaqueValue *>(bytePtr + byteOffset);
+    }
+#else
+    auto vwtable = self->getValueWitnesses();
+    (void)vwtable;
+    if (!IsKnownAllocated && vwtable->isValueInline()) {
       return Impl::initializeWithTake(reinterpret_cast<OpaqueValue*>(dest),
                                       reinterpret_cast<OpaqueValue*>(src),
                                       self);
@@ -876,7 +970,32 @@ struct NonFixedBufferValueWitnesses : BufferValueWitnessesBase<Impl> {
       dest->PrivateData[0] = src->PrivateData[0];
       return (OpaqueValue*) dest->PrivateData[0];
     }
+#endif
   }
+
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+  static OpaqueValue *initializeBufferWithCopyOfBuffer(ValueBuffer *dest,
+                                                       ValueBuffer *src,
+                                                       const Metadata *self) {
+    auto vwtable = self->getValueWitnesses();
+    (void)vwtable;
+    if (!IsKnownAllocated && vwtable->isValueInline()) {
+      return Impl::initializeWithCopy(reinterpret_cast<OpaqueValue*>(dest),
+                                      reinterpret_cast<OpaqueValue*>(src),
+                                      self);
+    } else {
+      auto reference = src->PrivateData[0];
+      dest->PrivateData[0] = reference;
+      swift_retain(reinterpret_cast<HeapObject*>(reference));
+      // Project the address of the value in the buffer.
+      unsigned alignMask = vwtable->getAlignmentMask();
+      // Compute the byte offset of the object in the box.
+      unsigned byteOffset = (sizeof(HeapObject) + alignMask) & ~alignMask;
+      auto *bytePtr = reinterpret_cast<char *>(reference);
+      return reinterpret_cast<OpaqueValue *>(bytePtr + byteOffset);
+    }
+  }
+#endif
 };
 
 /// A class which provides default implementations of various value

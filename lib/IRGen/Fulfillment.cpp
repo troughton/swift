@@ -19,8 +19,10 @@
 #include "IRGenModule.h"
 
 #include "swift/AST/Decl.h"
+#include "swift/AST/SubstitutionMap.h"
 #include "swift/SIL/TypeLowering.h"
 #include "GenericRequirement.h"
+#include "ProtocolInfo.h"
 
 using namespace swift;
 using namespace irgen;
@@ -38,6 +40,7 @@ static bool isLeafTypeMetadata(CanType type) {
   case TypeKind::ID:
 #define TYPE(ID, SUPER)
 #include "swift/AST/TypeNodes.def"
+  case TypeKind::Error:
     llvm_unreachable("kind is invalid for a canonical type");
 
 #define ARTIFICIAL_TYPE(ID, SUPER) \
@@ -177,22 +180,20 @@ bool FulfillmentMap::searchWitnessTable(IRGenModule &IGM,
 
   bool hadFulfillment = false;
 
-  auto nextInheritedIndex = 0;
-  for (auto inherited : protocol->getInheritedProtocols(nullptr)) {
-    auto index = nextInheritedIndex++;
+  auto &pi = IGM.getProtocolInfo(protocol);
 
-    // Ignore protocols that don't have witness tables.
-    if (!Lowering::TypeConverter::protocolRequiresWitnessTable(inherited))
-      continue;
+  for (auto &entry : pi.getWitnessEntries()) {
+    if (!entry.isBase()) continue;
 
+    ProtocolDecl *inherited = entry.getBase();
     MetadataPath inheritedPath = path;
-    inheritedPath.addInheritedProtocolComponent(index);
+    inheritedPath.addInheritedProtocolComponent(pi.getBaseWitnessIndex(&entry));
     hadFulfillment |= searchWitnessTable(IGM, type, inherited,
                                          source, std::move(inheritedPath),
                                          keys, interestingConformances);
   }
 
-  // If we're not limited the set of interesting conformances, or if
+  // If we're not limiting the set of interesting conformances, or if
   // this is an interesting conformance, record it.
   if (!interestingConformances || interestingConformances->count(protocol)) {
     hadFulfillment |= addFulfillment({type, protocol}, source, std::move(path));
@@ -242,7 +243,7 @@ bool FulfillmentMap::searchBoundGenericTypeMetadata(IRGenModule &IGM,
 
   GenericTypeRequirements requirements(IGM, type->getDecl());
   requirements.enumerateFulfillments(
-      IGM, type->gatherAllSubstitutions(IGM.getSwiftModule(), nullptr),
+      IGM, type->getContextSubstitutionMap(IGM.getSwiftModule(), type->getDecl()),
       [&](unsigned reqtIndex, CanType arg,
           Optional<ProtocolConformanceRef> conf) {
     // Skip uninteresting type arguments.

@@ -19,8 +19,9 @@
 #include "swift/AST/DiagnosticsIRGen.h"
 #include "swift/AST/IRGenOptions.h"
 #include "swift/Basic/Dwarf.h"
-#include "swift/Basic/ManglingMacros.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "swift/ClangImporter/ClangImporter.h"
+#include "swift/IRGen/Linking.h"
 #include "swift/Runtime/RuntimeFnWrappersGen.h"
 #include "swift/Runtime/Config.h"
 #include "clang/AST/ASTContext.h"
@@ -28,6 +29,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CodeGen/CodeGenABITypes.h"
 #include "clang/CodeGen/ModuleBuilder.h"
+#include "clang/CodeGen/SwiftCallingConv.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/HeaderSearch.h"
@@ -47,7 +49,6 @@
 #include "GenType.h"
 #include "IRGenModule.h"
 #include "IRGenDebugInfo.h"
-#include "Linking.h"
 
 #include <initializer_list>
 
@@ -60,11 +61,12 @@ const unsigned DefaultAS = 0;
 /// A helper for creating LLVM struct types.
 static llvm::StructType *createStructType(IRGenModule &IGM,
                                           StringRef name,
-                                  std::initializer_list<llvm::Type*> types) {
+                                  std::initializer_list<llvm::Type*> types,
+                                          bool packed = false) {
   return llvm::StructType::create(IGM.getLLVMContext(),
                                   ArrayRef<llvm::Type*>(types.begin(),
                                                         types.size()),
-                                  name);
+                                  name, packed);
 };
 
 /// A helper for creating pointer-to-struct types.
@@ -117,11 +119,6 @@ static clang::CodeGenerator *createClangCodeGenerator(ASTContext &Context,
   return ClangCodeGen;
 }
 
-/// A helper for determining if the triple uses the DLL storage
-static bool useDllStorage(const llvm::Triple &Triple) {
-  return Triple.isOSBinFormatCOFF() && !Triple.isOSCygMing();
-}
-
 IRGenModule::IRGenModule(IRGenerator &irgen,
                          std::unique_ptr<llvm::TargetMachine> &&target,
                          SourceFile *SF, llvm::LLVMContext &LLVMContext,
@@ -131,10 +128,8 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
                                             ModuleName)),
       Module(*ClangCodeGen->GetModule()), LLVMContext(Module.getContext()),
       DataLayout(target->createDataLayout()), Triple(Context.LangOpts.Target),
-      TargetMachine(std::move(target)), OutputFilename(OutputFilename),
-#ifndef NDEBUG
-      EligibleConfs(getSILModule()),
-#endif
+      TargetMachine(std::move(target)), silConv(irgen.SIL),
+      OutputFilename(OutputFilename),
       TargetInfo(SwiftTargetInfo::get(*this)), DebugInfo(nullptr),
       ModuleHash(nullptr), ObjCInterop(Context.LangOpts.EnableObjCInterop),
       Types(*new TypeConverter(*this)) {
@@ -271,13 +266,9 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
     FunctionPtrTy,
     RefCountedPtrTy,
   });
-  WitnessFunctionPairTy = createStructType(*this, "swift.function", {
-    FunctionPtrTy,
-    WitnessTablePtrTy,
-  });
-  
-  OpaquePtrTy = llvm::StructType::create(LLVMContext, "swift.opaque")
-                  ->getPointerTo(DefaultAS);
+
+  OpaqueTy = llvm::StructType::create(LLVMContext, "swift.opaque");
+  OpaquePtrTy = OpaqueTy->getPointerTo(DefaultAS);
 
   ProtocolConformanceRecordTy
     = createStructType(*this, "swift.protocol_conformance", {
@@ -386,10 +377,17 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
   else
     RegisterPreservingCC = DefaultCC;
 
+  SwiftCC = SWIFT_LLVM_CC(SwiftCC);
+  UseSwiftCC = (SwiftCC == llvm::CallingConv::Swift);
+
   if (IRGen.Opts.DebugInfoKind > IRGenDebugInfoKind::None)
     DebugInfo = new IRGenDebugInfo(IRGen.Opts, *CI, *this, Module, SF);
 
   initClangTypeConverter();
+
+  IsSwiftErrorInRegister =
+    clang::CodeGen::swiftcall::isSwiftErrorLoweredInRegister(
+      ClangCodeGen->CGM());
 }
 
 IRGenModule::~IRGenModule() {
@@ -713,12 +711,47 @@ Lowering::TypeConverter &IRGenModule::getSILTypes() const {
   return IRGen.SIL.Types;
 }
 
+clang::CodeGen::CodeGenModule &IRGenModule::getClangCGM() const {
+  return ClangCodeGen->CGM();
+}
+
 llvm::Module *IRGenModule::getModule() const {
   return ClangCodeGen->GetModule();
 }
 
 llvm::Module *IRGenModule::releaseModule() {
   return ClangCodeGen->ReleaseModule();
+}
+
+bool IRGenerator::canEmitWitnessTableLazily(SILWitnessTable *wt) {
+  if (Opts.UseJIT)
+    return false;
+
+  NominalTypeDecl *ConformingTy =
+    wt->getConformance()->getType()->getNominalOrBoundGenericNominal();
+
+  switch (ConformingTy->getEffectiveAccess()) {
+    case Accessibility::Private:
+    case Accessibility::FilePrivate:
+      return true;
+
+    case Accessibility::Internal:
+      return PrimaryIGM->getSILModule().isWholeModule();
+
+    default:
+      return false;
+  }
+  llvm_unreachable("switch does not handle all cases");
+}
+
+void IRGenerator::addLazyWitnessTable(const ProtocolConformance *Conf) {
+  if (SILWitnessTable *wt = SIL.lookUpWitnessTable(Conf)) {
+    // Add it to the queue if it hasn't already been put there.
+    if (canEmitWitnessTableLazily(wt) &&
+        LazilyEmittedWitnessTables.insert(wt).second) {
+      LazyWitnessTables.push_back(wt);
+    }
+  }
 }
 
 llvm::AttributeSet IRGenModule::getAllocAttrs() {
@@ -1025,8 +1058,8 @@ bool IRGenModule::finalize() {
     // We have to create the variable now (before we emit the global lists).
     // But we want to calculate the hash later because later we can do it
     // multi-threaded.
-    llvm::MD5::MD5Result zero = { 0 };
-    ArrayRef<uint8_t> ZeroArr(zero, sizeof(llvm::MD5::MD5Result));
+    llvm::MD5::MD5Result zero{};
+    ArrayRef<uint8_t> ZeroArr(reinterpret_cast<uint8_t *>(&zero), sizeof(zero));
     auto *ZeroConst = llvm::ConstantDataArray::get(Module.getContext(), ZeroArr);
     ModuleHash = new llvm::GlobalVariable(Module, ZeroConst->getType(), true,
                                           llvm::GlobalValue::PrivateLinkage,

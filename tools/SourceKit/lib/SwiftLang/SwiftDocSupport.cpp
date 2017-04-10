@@ -124,7 +124,7 @@ class AnnotatingPrinter : public StreamPrinter {
   }
 
   void deinitDefaultMapToUse(const Decl*D) {
-    if (D->getKind() == DeclKind::Extension) {
+    if (isa<ExtensionDecl>(D)) {
       DefaultMapToUse = nullptr;
     }
   }
@@ -154,17 +154,17 @@ public:
   bool shouldContinuePre(const Decl *D, Optional<BracketOptions> Bracket) {
     assert(Bracket.hasValue());
     if (!Bracket.getValue().shouldOpenExtension(D) &&
-        D->getKind() == DeclKind::Extension)
+        isa<ExtensionDecl>(D))
       return false;
     return true;
   }
 
   bool shouldContinuePost(const Decl *D, Optional<BracketOptions> Bracket) {
     assert(Bracket.hasValue());
-    if (!Bracket.getValue().shouldCloseNominal(D) && dyn_cast<NominalTypeDecl>(D))
+    if (!Bracket.getValue().shouldCloseNominal(D) && isa<NominalTypeDecl>(D))
       return false;
     if (!Bracket.getValue().shouldCloseExtension(D) &&
-        D->getKind() == DeclKind::Extension)
+        isa<ExtensionDecl>(D))
       return false;
     return true;
   }
@@ -377,6 +377,9 @@ static bool initDocEntityInfo(const Decl *D, const Decl *SynthesizedTarget,
     }
 
     initDocGenericParams(D, Info);
+
+    llvm::raw_svector_ostream LocalizationKeyOS(Info.LocalizationKey);
+    ide::getLocalizationKey(D, LocalizationKeyOS);
 
     if (auto *VD = dyn_cast<ValueDecl>(D)) {
       llvm::raw_svector_ostream OS(Info.FullyAnnotatedDecl);
@@ -984,8 +987,8 @@ public:
   }
 
   bool visitDeclReference(ValueDecl *D, CharSourceRange Range,
-                          TypeDecl *CtorTyRef, Type Ty,
-                          SemaReferenceKind Kind) override {
+                          TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef, Type Ty,
+                          ReferenceMetaData Data) override {
     unsigned StartOffset = getOffset(Range.getStart());
     References.emplace_back(D, StartOffset, Range.getByteLength(), Ty);
     return true;
@@ -994,8 +997,8 @@ public:
   bool visitSubscriptReference(ValueDecl *D, CharSourceRange Range,
                                bool IsOpenBracket) override {
     // Treat both open and close brackets equally
-    return visitDeclReference(D, Range, nullptr, Type(),
-                              SemaReferenceKind::SubscriptRef);
+    return visitDeclReference(D, Range, nullptr, nullptr, Type(),
+                      ReferenceMetaData(SemaReferenceKind::SubscriptRef, None));
   }
 
   bool isLocal(Decl *D) const {

@@ -85,7 +85,7 @@ static void emitCompareBuiltin(IRGenFunction &IGF, Explosion &result,
 static void emitTypeTraitBuiltin(IRGenFunction &IGF,
                                  Explosion &out,
                                  Explosion &args,
-                                 ArrayRef<Substitution> substitutions,
+                                 SubstitutionList substitutions,
                                  TypeTraitResult (TypeBase::*trait)()) {
   assert(substitutions.size() == 1
          && "type trait should have gotten single type parameter");
@@ -118,7 +118,7 @@ getLoweredTypeAndTypeInfo(IRGenModule &IGM, Type unloweredType) {
 void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
                             SILType resultType,
                             Explosion &args, Explosion &out,
-                            ArrayRef<Substitution> substitutions) {
+                            SubstitutionList substitutions) {
   // Decompose the function's name into a builtin name and type list.
   const BuiltinInfo &Builtin = IGF.getSILModule().getBuiltinInfo(FnId);
 
@@ -215,9 +215,9 @@ void irgen::emitBuiltinCall(IRGenFunction &IGF, Identifier FnId,
 
       if (FuncNamePtr) {
         llvm::SmallVector<llvm::Value *, 2> Indices(2, NameGEP->getOperand(1));
-        NameGEP = llvm::GetElementPtrInst::CreateInBounds(
-            FuncNamePtr, makeArrayRef(Indices), "",
-            IGF.Builder.GetInsertBlock());
+        NameGEP = llvm::ConstantExpr::getGetElementPtr(
+            ((llvm::PointerType *)FuncNamePtr->getType())->getElementType(),
+            FuncNamePtr, makeArrayRef(Indices));
       }
     }
 
@@ -843,6 +843,31 @@ if (Builtin.ID == BuiltinValueKind::id) { \
     out.add(globalString);
     return;
   }
-  
+
+  if (Builtin.ID == BuiltinValueKind::TSanInoutAccess) {
+    auto address = args.claimNext();
+    IGF.emitTSanInoutAccessCall(address);
+    return;
+  }
+
+  if (Builtin.ID == BuiltinValueKind::Swift3ImplicitObjCEntrypoint) {
+    llvm::Value *args[2];
+    auto argIter = IGF.CurFn->arg_begin();
+
+    // self
+    args[0] = &*argIter++;
+    if (args[0]->getType() != IGF.IGM.ObjCPtrTy)
+      args[0] = IGF.Builder.CreateBitCast(args[0], IGF.IGM.ObjCPtrTy);
+
+    // _cmd
+    args[1] = &*argIter;
+    if (args[1]->getType() != IGF.IGM.ObjCSELTy)
+      args[1] = IGF.Builder.CreateBitCast(args[1], IGF.IGM.ObjCSELTy);
+
+    IGF.Builder.CreateCall(IGF.IGM.getSwift3ImplicitObjCEntrypointFn(), args);
+    return;
+  }
+
+
   llvm_unreachable("IRGen unimplemented for this builtin!");
 }

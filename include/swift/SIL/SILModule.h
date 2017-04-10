@@ -72,6 +72,18 @@ enum class SILStage {
   /// dataflow errors, and some instructions must be canonicalized to simpler
   /// forms.
   Canonical,
+
+  /// \brief Lowered SIL, which has been prepared for IRGen and will no longer
+  /// be passed to canonical SIL transform passes.
+  ///
+  /// In lowered SIL, the SILType of all SILValues is its SIL storage
+  /// type. Explicit storage is required for all address-only and resilient
+  /// types.
+  ///
+  /// Generating the initial Raw SIL is typically referred to as lowering (from
+  /// the AST). To disambiguate, refer to the process of generating the lowered
+  /// stage of SIL as "address lowering".
+  Lowered,
 };
 
 /// \brief A SIL module. The SIL module owns all of the SILFunctions generated
@@ -188,6 +200,9 @@ private:
   /// optimizations can assume that they see the whole module.
   bool wholeModule;
 
+  /// True if this SILModule is being completely serialized.
+  bool WholeModuleSerialized;
+
   /// The options passed into this SILModule.
   SILOptions &Options;
 
@@ -198,7 +213,7 @@ private:
   // Intentionally marked private so that we need to use 'constructSIL()'
   // to construct a SILModule.
   SILModule(ModuleDecl *M, SILOptions &Options, const DeclContext *associatedDC,
-            bool wholeModule);
+            bool wholeModule, bool wholeModuleSerialized);
 
   SILModule(const SILModule&) = delete;
   void operator=(const SILModule&) = delete;
@@ -254,7 +269,7 @@ public:
   /// source file, starting from the specified element number.
   ///
   /// If \p makeModuleFragile is true, all functions and global variables of
-  /// the module are marked as fragile. This is used for compiling the stdlib.
+  /// the module are marked as serialized. This is used for compiling the stdlib.
   static std::unique_ptr<SILModule>
   constructSIL(ModuleDecl *M, SILOptions &Options, FileUnit *sf = nullptr,
                Optional<unsigned> startElem = None,
@@ -263,10 +278,12 @@ public:
 
   /// \brief Create and return an empty SIL module that we can
   /// later parse SIL bodies directly into, without converting from an AST.
-  static std::unique_ptr<SILModule> createEmptyModule(ModuleDecl *M,
-                                                      SILOptions &Options,
-                                                      bool WholeModule = false) {
-    return std::unique_ptr<SILModule>(new SILModule(M, Options, M, WholeModule));
+  static std::unique_ptr<SILModule>
+  createEmptyModule(ModuleDecl *M, SILOptions &Options,
+                    bool WholeModule = false,
+                    bool WholeModuleSerialized = false) {
+    return std::unique_ptr<SILModule>(
+        new SILModule(M, Options, M, WholeModule, WholeModuleSerialized));
   }
 
   /// Get the Swift module associated with this SIL module.
@@ -293,6 +310,9 @@ public:
   bool isWholeModule() const {
     return wholeModule;
   }
+
+  /// Returns true if everything in this SILModule is being serialized.
+  bool isWholeModuleSerialized() const { return WholeModuleSerialized; }
 
   SILOptions &getOptions() const { return Options; }
 
@@ -430,18 +450,26 @@ public:
   bool linkFunction(StringRef Name,
                     LinkingMode LinkAll = LinkingMode::LinkNormal);
 
-  /// Check if a given function exists in the module,
-  /// i.e. it can be linked by linkFunction.
+  /// Check if a given function exists in any of the modules with a
+  /// required linkage, i.e. it can be linked by linkFunction.
   ///
   /// \return null if this module has no such function. Otherwise
   /// the declaration of a function.
-  SILFunction *hasFunction(StringRef Name, SILLinkage Linkage);
+  SILFunction *findFunction(StringRef Name, SILLinkage Linkage);
+
+  /// Check if a given function exists in any of the modules.
+  /// i.e. it can be linked by linkFunction.
+  bool hasFunction(StringRef Name);
 
   /// Link in all Witness Tables in the module.
   void linkAllWitnessTables();
 
   /// Link in all VTables in the module.
   void linkAllVTables();
+
+  /// Link all definitions in all segments that are logically part of
+  /// the same AST module.
+  void linkAllFromCurrentModule();
 
   /// \brief Return the declaration of a utility function that can,
   /// but needn't, be shared between modules.
@@ -450,7 +478,7 @@ public:
                                          CanSILFunctionType type,
                                          IsBare_t isBareSILFunction,
                                          IsTransparent_t isTransparent,
-                                         IsFragile_t isFragile,
+                                         IsSerialized_t isSerialized,
                                          IsThunk_t isThunk);
 
   /// \brief Return the declaration of a function, or create it if it doesn't
@@ -461,7 +489,7 @@ public:
                                    CanSILFunctionType type,
                                    IsBare_t isBareSILFunction,
                                    IsTransparent_t isTransparent,
-                                   IsFragile_t isFragile,
+                                   IsSerialized_t isSerialized,
                                    IsThunk_t isThunk = IsNotThunk,
                                    SILFunction::ClassVisibility_t CV =
                                            SILFunction::NotRelevant);
@@ -481,12 +509,12 @@ public:
       SILLinkage linkage, StringRef name, CanSILFunctionType loweredType,
       GenericEnvironment *genericEnv, Optional<SILLocation> loc,
       IsBare_t isBareSILFunction, IsTransparent_t isTrans,
-      IsFragile_t isFragile, IsThunk_t isThunk = IsNotThunk,
+      IsSerialized_t isSerialized, IsThunk_t isThunk = IsNotThunk,
       SILFunction::ClassVisibility_t classVisibility = SILFunction::NotRelevant,
       Inline_t inlineStrategy = InlineDefault,
       EffectsKind EK = EffectsKind::Unspecified,
       SILFunction *InsertBefore = nullptr,
-      const SILDebugScope *DebugScope = nullptr, DeclContext *DC = nullptr);
+      const SILDebugScope *DebugScope = nullptr);
 
   /// Look up the SILWitnessTable representing the lowering of a protocol
   /// conformance, and collect the substitutions to apply to the referenced
@@ -589,6 +617,22 @@ public:
   /// Allocate memory using the module's internal allocator.
   void *allocate(unsigned Size, unsigned Align) const;
 
+  template <typename T> T *allocate(unsigned Count) const {
+    return static_cast<T *>(allocate(sizeof(T) * Count, alignof(T)));
+  }
+
+  template <typename T>
+  MutableArrayRef<T> allocateCopy(ArrayRef<T> Array) const {
+    MutableArrayRef<T> result(allocate<T>(Array.size()), Array.size());
+    std::uninitialized_copy(Array.begin(), Array.end(), result.begin());
+    return result;
+  }
+
+  StringRef allocateCopy(StringRef Str) const {
+    auto result = allocateCopy<char>({Str.data(), Str.size()});
+    return {result.data(), result.size()};
+  }
+
   /// Allocate memory for an instruction using the module's internal allocator.
   void *allocateInst(unsigned Size, unsigned Align) const;
 
@@ -607,6 +651,14 @@ public:
   /// \returns Returns builtin info of BuiltinValueKind::None kind if the
   /// declaration is not a builtin.
   const BuiltinInfo &getBuiltinInfo(Identifier ID);
+
+  /// Returns true if the builtin or intrinsic is no-return.
+  bool isNoReturnBuiltinOrIntrinsic(Identifier Name);
+
+  /// Returns true if the default atomicity of the module is Atomic.
+  bool isDefaultAtomic() const {
+    return ! getOptions().AssumeSingleThreaded;
+  }
 };
 
 inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const SILModule &M){

@@ -580,6 +580,16 @@ Type TypeChecker::getUnopenedTypeOfReference(ValueDecl *value, Type baseType,
 
   Type requestedType = getTypeOfRValue(value, wantInterfaceType);
 
+  // If we're dealing with contextual types, and we referenced this type from
+  // a different context, map the type.
+  if (!wantInterfaceType && requestedType->hasArchetype()) {
+    auto valueDC = value->getDeclContext();
+    if (valueDC != UseDC) {
+      Type mapped = valueDC->mapTypeOutOfContext(requestedType);
+      requestedType = UseDC->mapTypeIntoContext(mapped);
+    }
+  }
+
   // Qualify storage declarations with an lvalue when appropriate.
   // Otherwise, they yield rvalues (and the access must be a load).
   if (auto *storage = dyn_cast<AbstractStorageDecl>(value)) {
@@ -591,20 +601,17 @@ Type TypeChecker::getUnopenedTypeOfReference(ValueDecl *value, Type baseType,
       // Subscript decls have function type.  For the purposes of later type
       // checker consumption, model this as returning an lvalue.
       assert(isa<SubscriptDecl>(storage));
-      auto *RFT = requestedType->castTo<FunctionType>();
+      auto *RFT = requestedType->castTo<AnyFunctionType>();
       return FunctionType::get(RFT->getInput(),
                                LValueType::get(RFT->getResult()),
                                RFT->getExtInfo());
     }
-  }
 
-  // If we're dealing with contextual types, and we referenced this type from
-  // a different context, map the type.
-  if (!wantInterfaceType && requestedType->hasArchetype()) {
-    auto valueDC = value->getDeclContext();
-    if (valueDC != UseDC) {
-      Type mapped = valueDC->mapTypeOutOfContext(requestedType);
-      requestedType = UseDC->mapTypeIntoContext(mapped);
+    // FIXME: Fix downstream callers.
+    if (auto *genericFn = requestedType->getAs<GenericFunctionType>()) {
+      return FunctionType::get(genericFn->getInput(),
+                               genericFn->getResult(),
+                               genericFn->getExtInfo());
     }
   }
 

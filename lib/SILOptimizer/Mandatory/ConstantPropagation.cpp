@@ -13,6 +13,7 @@
 #define DEBUG_TYPE "constant-propagation"
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/AST/DiagnosticsSIL.h"
+#include "swift/AST/Expr.h"
 #include "swift/SIL/PatternMatch.h"
 #include "swift/SIL/SILBuilder.h"
 #include "swift/SIL/SILInstruction.h"
@@ -699,7 +700,7 @@ case BuiltinValueKind::id:
     APFloat TruncVal(
         DestTy->castTo<BuiltinFloatType>()->getAPFloatSemantics());
     APFloat::opStatus ConversionStatus = TruncVal.convertFromAPInt(
-        SrcVal, /*isSigned=*/true, APFloat::rmNearestTiesToEven);
+        SrcVal, /*IsSigned=*/true, APFloat::rmNearestTiesToEven);
 
     SILLocation Loc = BI->getLoc();
     const ApplyExpr *CE = Loc.getAsASTNode<ApplyExpr>();

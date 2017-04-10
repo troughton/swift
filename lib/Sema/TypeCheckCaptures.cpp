@@ -19,6 +19,7 @@
 #include "swift/AST/ASTVisitor.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/Decl.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/TypeWalker.h"
 #include "swift/Basic/Defer.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -192,7 +193,9 @@ public:
 
     // If VD is a noescape decl, then the closure we're computing this for
     // must also be noescape.
-    if (VD->hasInterfaceType() &&
+    if (AFR.hasType() &&
+        !AFR.getType()->hasError() &&
+        VD->hasInterfaceType() &&
         VD->getInterfaceType()->is<AnyFunctionType>() &&
         VD->getInterfaceType()->castTo<AnyFunctionType>()->isNoEscape() &&
         !capture.isNoEscape() &&

@@ -78,6 +78,12 @@
 // RUN: %FileCheck %s -check-prefix=CLASS_PEI_PE < %t.txt
 // RUN: %FileCheck %s -check-prefix=WITH_PEI < %t.txt
 
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOCOL_PA -code-completion-keywords=false > %t.txt
+// RUN: %FileCheck %s -check-prefix=PROTOCOL_PA < %t.txt
+
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOCOL_PA_EXT -code-completion-keywords=false > %t.txt
+// RUN: %FileCheck %s -check-prefix=PROTOCOL_PA_EXT < %t.txt
+
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=NESTED_NOMINAL -code-completion-keywords=false > %t.txt
 // RUN: %FileCheck %s -check-prefix=NESTED_NOMINAL < %t.txt
 
@@ -94,11 +100,14 @@
 // RUN: %FileCheck %s -check-prefix=OMIT_KEYWORD3< %t.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD4 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD4_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD5 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD1
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD6 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD2
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD7 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD3
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD8 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD8_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD9 -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD9_LET -code-completion-keywords=false | %FileCheck %s -check-prefix=OMIT_KEYWORD4
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=OMIT_KEYWORD10 -code-completion-keywords=false | %FileCheck %s -check-prefix=WITH_PA_NO_PROTOFUNCA
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=HAS_THROWING -code-completion-keywords=false | %FileCheck %s -check-prefix=HAS_THROWING
@@ -117,6 +126,10 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER8 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER8
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER9 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER10 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER6
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER11 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER12 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER13 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER13
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=MODIFIER14 -code-completion-keywords=false | %FileCheck %s -check-prefix=MODIFIER9
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOINIT_NORM -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_NORM
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=PROTOINIT_FINAL -code-completion-keywords=false | %FileCheck %s -check-prefix=PROTOINIT_FINAL
@@ -362,6 +375,24 @@ class TestClass_PEI_PE : ProtocolEImpl, ProtocolE {
 }
 // CLASS_PEI_PE: Begin completions, 4 items
 
+protocol TestProtocol_PA : ProtocolA {
+  #^PROTOCOL_PA^#
+}
+// PROTOCOL_PA: found code completion token
+// PROTOCOL_PA-NOT: Begin completions
+
+extension TestProtocol_PA {
+  #^PROTOCOL_PA_EXT^#
+}
+
+// PROTOCOL_PA_EXT: Begin completions
+// PROTOCOL_PA_EXT-DAG: Decl[Constructor]/Super:            init(fromProtocolA: Int) {|}; name=init(fromProtocolA: Int)
+// PROTOCOL_PA_EXT-DAG: Decl[InstanceMethod]/Super:         func protoAFunc() {|}; name=protoAFunc()
+// PROTOCOL_PA_EXT-DAG: Decl[InstanceMethod]/Super:         func protoAFuncOptional() {|}; name=protoAFuncOptional()
+// PROTOCOL_PA_EXT-DAG: Decl[InstanceVar]/Super:            var protoAVarRW: Int; name=protoAVarRW: Int
+// PROTOCOL_PA_EXT-DAG: Decl[InstanceVar]/Super:            var protoAVarRO: Int; name=protoAVarRO: Int
+// PROTOCOL_PA_EXT: End completions
+
 class OuterNominal : ProtocolA {
   class Inner {
     #^NESTED_NOMINAL^#
@@ -424,6 +455,9 @@ class OmitKW3 : ProtocolA {
 class OmitKW4: ProtocolA {
   var #^OMIT_KEYWORD4^#
 }
+class OmitKW4_let: ProtocolA {
+  let #^OMIT_KEYWORD4_LET^#
+}
 
 // OMIT_KEYWORD4-NOT:    Decl[Constructor]
 // OMIT_KEYWORD4-NOT:    Decl[InstanceMethod]
@@ -453,10 +487,20 @@ class OmitKW8: ProtocolA {
   #^OMIT_KEYWORD8^#
 // Same as OMIT_KEYWORD4
 }
+class OmitKW8_let: ProtocolA {
+  let
+  #^OMIT_KEYWORD8_LET^#
+}
 class OmitKW9: ProtocolA {
   override
   var
   #^OMIT_KEYWORD9^#
+// Same as OMIT_KEYWORD4
+}
+class OmitKW9_let: ProtocolA {
+  override
+  let
+  #^OMIT_KEYWORD9_LET^#
 // Same as OMIT_KEYWORD4
 }
 class OmitKW10: ProtocolA {
@@ -566,6 +610,24 @@ class Override10 : OverrideBase, OverrideP {
   final typealias #^MODIFIER10^#
   // Same as MODIFIER6.
 }
+class Override11 : OverrideBase, OverrideP {
+  var #^MODIFIER11^#
+  // Same as MODIFIER9.
+}
+class Override12 : OverrideBase, OverrideP {
+  override var #^MODIFIER12^#
+  // Same as MODIFIER9.
+}
+class Override13 : OverrideBase, OverrideP {
+  // No completions.
+  let #^MODIFIER13^#
+}
+class Override14 : OverrideBase, OverrideP {
+  // Note: This *does* emit variables. It will result invalid decl, but a
+  // diagnostic will tell the user what to do.
+  override let #^MODIFIER14^#
+  // Same as MODIFIER9.
+}
 
 // MODIFIER1: Begin completions, 7 items
 // MODIFIER1-DAG: Decl[Constructor]/Super:            required init(p: Int) {|}; name=required init(p: Int)
@@ -615,6 +677,8 @@ class Override10 : OverrideBase, OverrideP {
 // MODIFIER9: Begin completions, 1 items
 // MODIFIER9-DAG: Decl[InstanceVar]/Super:            varDecl: Int; name=varDecl: Int
 // MODIFIER9: End completions
+
+// MODIFIER13-NOT: Begin completions
 
 protocol RequiredP {
   init(p: Int)

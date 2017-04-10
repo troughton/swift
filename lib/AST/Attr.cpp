@@ -322,6 +322,7 @@ bool DeclAttribute::printImpl(ASTPrinter &Printer, const PrintOptions &Options,
   case DAK_SynthesizedProtocol:
   case DAK_ShowInInterface:
   case DAK_Rethrows:
+  case DAK_Infix:
     return false;
   default:
     break;
@@ -623,6 +624,7 @@ ObjCAttr::ObjCAttr(SourceLoc atLoc, SourceRange baseRange,
   }
 
   ObjCAttrBits.ImplicitName = false;
+  ObjCAttrBits.Swift3Inferred = false;
 }
 
 ObjCAttr *ObjCAttr::create(ASTContext &Ctx, Optional<ObjCSelector> name,
@@ -699,7 +701,9 @@ SourceLoc ObjCAttr::getRParenLoc() const {
 }
 
 ObjCAttr *ObjCAttr::clone(ASTContext &context) const {
-  return new (context) ObjCAttr(getName(), isNameImplicit());
+  auto attr = new (context) ObjCAttr(getName(), isNameImplicit());
+  attr->setSwift3Inferred(isSwift3Inferred());
+  return attr;
 }
 
 AvailableAttr *

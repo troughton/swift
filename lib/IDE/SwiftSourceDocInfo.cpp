@@ -19,6 +19,7 @@
 #include "swift/IDE/CommentConversion.h"
 #include "swift/IDE/Utils.h"
 #include "swift/Markup/XMLUtils.h"
+#include "swift/Subsystems.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclObjC.h"
@@ -71,12 +72,13 @@ SourceManager &SemaLocResolver::getSourceMgr() const
 }
 
 bool SemaLocResolver::tryResolve(ValueDecl *D, TypeDecl *CtorTyRef,
-                                 SourceLoc Loc, bool IsRef, Type Ty) {
+                                 ExtensionDecl *ExtTyRef, SourceLoc Loc,
+                                 bool IsRef, Type Ty) {
   if (!D->hasName())
     return false;
 
   if (Loc == LocToResolve) {
-    SemaTok = { D, CtorTyRef, Loc, IsRef, Ty, ContainerType };
+    SemaTok = { D, CtorTyRef, ExtTyRef, Loc, IsRef, Ty, ContainerType };
     return true;
   }
   return false;
@@ -90,11 +92,27 @@ bool SemaLocResolver::tryResolve(ModuleEntity Mod, SourceLoc Loc) {
   return false;
 }
 
+bool SemaLocResolver::tryResolve(Stmt *St) {
+  if (auto *LST = dyn_cast<LabeledStmt>(St)) {
+    if (LST->getStartLoc() == LocToResolve) {
+      SemaTok = { St };
+      return true;
+    }
+  }
+  if (auto *CS = dyn_cast<CaseStmt>(St)) {
+    if (CS->getStartLoc() == LocToResolve) {
+      SemaTok = { St };
+      return true;
+    }
+  }
+  return false;
+}
+
 bool SemaLocResolver::visitSubscriptReference(ValueDecl *D, CharSourceRange Range,
                                               bool IsOpenBracket) {
   // We should treat both open and close brackets equally
-  return visitDeclReference(D, Range, nullptr, Type(),
-                            SemaReferenceKind::SubscriptRef);
+  return visitDeclReference(D, Range, nullptr, nullptr, Type(),
+                    ReferenceMetaData(SemaReferenceKind::SubscriptRef, None));
 }
 
 SemaToken SemaLocResolver::resolve(SourceLoc Loc) {
@@ -113,8 +131,8 @@ bool SemaLocResolver::walkToDeclPre(Decl *D, CharSourceRange Range) {
     return true;
 
   if (ValueDecl *VD = dyn_cast<ValueDecl>(D))
-    return !tryResolve(VD, /*CtorTyRef=*/nullptr, Range.getStart(),
-                       /*IsRef=*/false);
+    return !tryResolve(VD, /*CtorTyRef=*/nullptr, /*ExtTyRef=*/nullptr,
+                       Range.getStart(), /*IsRef=*/false);
 
   return true;
 }
@@ -132,7 +150,7 @@ bool SemaLocResolver::walkToStmtPre(Stmt *S) {
   // non-implicit Stmts (fix Stmts created for lazy vars).
   if (!S->isImplicit() && !rangeContainsLoc(S->getSourceRange()))
     return false;
-  return true;
+  return !tryResolve(S);
 }
 
 bool SemaLocResolver::walkToStmtPost(Stmt *S) {
@@ -147,11 +165,12 @@ bool SemaLocResolver::walkToStmtPost(Stmt *S) {
 }
 
 bool SemaLocResolver::visitDeclReference(ValueDecl *D, CharSourceRange Range,
-                                         TypeDecl *CtorTyRef, Type T,
-                                         SemaReferenceKind Kind) {
+                                         TypeDecl *CtorTyRef,
+                                         ExtensionDecl *ExtTyRef, Type T,
+                                         ReferenceMetaData Data) {
   if (isDone())
     return false;
-  return !tryResolve(D, CtorTyRef, Range.getStart(), /*IsRef=*/true, T);
+  return !tryResolve(D, CtorTyRef, ExtTyRef, Range.getStart(), /*IsRef=*/true, T);
 }
 
 bool SemaLocResolver::walkToExprPre(Expr *E) {
@@ -174,7 +193,7 @@ bool SemaLocResolver::visitCallArgName(Identifier Name, CharSourceRange Range,
                                        ValueDecl *D) {
   if (isDone())
     return false;
-  bool Found = tryResolve(D, nullptr, Range.getStart(), /*IsRef=*/true);
+  bool Found = tryResolve(D, nullptr, nullptr, Range.getStart(), /*IsRef=*/true);
   if (Found)
     SemaTok.IsKeywordArgument = true;
   return !Found;
@@ -207,9 +226,34 @@ void ResolvedRangeInfo::print(llvm::raw_ostream &OS) {
     OS << "</Type>\n";
   }
 
-  OS << "<Context>";
-  printContext(OS, RangeContext);
-  OS << "</Context>\n";
+  if (RangeContext) {
+    OS << "<Context>";
+    printContext(OS, RangeContext);
+    OS << "</Context>\n";
+  }
+
+  if (!HasSingleEntry) {
+    OS << "<Entry>Multi</Entry>\n";
+  }
+
+  if (ThrowingUnhandledError) {
+    OS << "<Error>Throwing</Error>\n";
+  }
+
+  if (Orphan != OrphanKind::None) {
+    OS << "<Orphan>";
+    switch (Orphan) {
+    case OrphanKind::Continue:
+      OS << "Continue";
+      break;
+    case OrphanKind::Break:
+      OS << "Break";
+      break;
+    case OrphanKind::None:
+      llvm_unreachable("cannot enter here.");
+    }
+    OS << "</Orphan>";
+  }
 
   for (auto &VD : DeclaredDecls) {
     OS << "<Declared>" << VD.VD->getNameStr() << "</Declared>";
@@ -235,8 +279,41 @@ bool DeclaredDecl::operator==(const DeclaredDecl& Other) {
   return VD == Other.VD;
 }
 
-bool ReferencedDecl::operator==(const ReferencedDecl& Other) {
-  return VD == Other.VD && Ty.getPointer() == Other.Ty.getPointer();
+static bool hasUnhandledError(ArrayRef<ASTNode> Nodes) {
+  class ThrowingEntityAnalyzer : public SourceEntityWalker {
+    bool Throwing;
+  public:
+    ThrowingEntityAnalyzer(): Throwing(false) {}
+    bool walkToStmtPre(Stmt *S) override {
+      if (auto DCS = dyn_cast<DoCatchStmt>(S)) {
+        if (DCS->isSyntacticallyExhaustive())
+          return false;
+        Throwing = true;
+      } else if (isa<ThrowStmt>(S)) {
+        Throwing = true;
+      }
+      return !Throwing;
+    }
+    bool walkToExprPre(Expr *E) override {
+      if (isa<TryExpr>(E)) {
+        Throwing = true;
+      }
+      return !Throwing;
+    }
+    bool walkToDeclPre(Decl *D, CharSourceRange Range) override {
+      return false;
+    }
+    bool walkToDeclPost(Decl *D) override { return !Throwing; }
+    bool walkToStmtPost(Stmt *S) override { return !Throwing; }
+    bool walkToExprPost(Expr *E) override { return !Throwing; }
+    bool isThrowing() { return Throwing; }
+  };
+
+  return Nodes.end() != std::find_if(Nodes.begin(), Nodes.end(), [](ASTNode N) {
+    ThrowingEntityAnalyzer Analyzer;
+    N.walk(Analyzer);
+    return Analyzer.isThrowing();
+  });
 }
 
 struct RangeResolver::Implementation {
@@ -261,8 +338,27 @@ private:
     std::vector<ASTNode> EndMatches;
     ContextInfo(ASTNode Parent, bool ContainedInRange) : Parent(Parent),
       ContainedInRange(ContainedInRange) {}
+
+    bool isMultiStatment() {
+      if (StartMatches.empty() || EndMatches.empty())
+        return false;
+
+      // Multi-statement should have a common parent of brace statement, this
+      // can be implicit brace statement, e.g. in case statement.
+      if (Parent.isStmt(StmtKind::Brace))
+        return true;
+
+      // Explicitly allow the selection of multiple case statments.
+      auto IsCase = [](ASTNode N) { return N.isStmt(StmtKind::Case); };
+      if (llvm::any_of(StartMatches, IsCase) && llvm::any_of(EndMatches, IsCase))
+        return true;
+      return false;
+    }
   };
 
+  std::vector<Token> AllTokens;
+  Token &StartTok;
+  Token &EndTok;
   SourceLoc Start;
   SourceLoc End;
   StringRef Content;
@@ -280,39 +376,67 @@ private:
   std::vector<ASTNode> ContainedASTNodes;
 
   /// Collect the type that an ASTNode should be evaluated to.
-  Type resolveNodeType(ASTNode N) {
-    if (N.is<Stmt*>()) {
-      if (auto RS = dyn_cast<ReturnStmt>(N.get<Stmt*>())) {
-        return resolveNodeType(RS->getResult());
+  Type resolveNodeType(ASTNode N, RangeKind Kind) {
+    switch(Kind) {
+    case RangeKind::Invalid:
+    case RangeKind::SingleDecl:
+      llvm_unreachable("cannot get type.");
+
+    // For a single expression, its type is apparent.
+    case RangeKind::SingleExpression:
+      return N.get<Expr*>()->getType();
+
+    // For statements, we either resolve to the returning type or Void.
+    case RangeKind::SingleStatement:
+    case RangeKind::MultiStatement: {
+      if (N.is<Stmt*>()) {
+        if (auto RS = dyn_cast<ReturnStmt>(N.get<Stmt*>())) {
+          return resolveNodeType(RS->getResult(), RangeKind::SingleExpression);
+        }
+
+        // Unbox the brace statement to find its type.
+        if (auto BS = dyn_cast<BraceStmt>(N.get<Stmt*>())) {
+          if (!BS->getElements().empty()) {
+            return resolveNodeType(BS->getElements().back(),
+                                   RangeKind::SingleStatement);
+          }
+        }
       }
       // For other statements, the type should be void.
       return Ctx.getVoidDecl()->getDeclaredInterfaceType();
-    } else if (N.is<Expr*>()) {
-      return N.get<Expr*>()->getType();
     }
-    return Type();
+    }
   }
 
   ResolvedRangeInfo getSingleNodeKind(ASTNode Node) {
     assert(!Node.isNull());
     assert(ContainedASTNodes.size() == 1);
+    // Single node implies single entry point, or is it?
+    bool SingleEntry = true;
+    bool UnhandledError = hasUnhandledError({Node});
+    OrphanKind Kind = getOrphanKind(ContainedASTNodes);
     if (Node.is<Expr*>())
       return ResolvedRangeInfo(RangeKind::SingleExpression,
-                               resolveNodeType(Node), Content,
-                               getImmediateContext(),
+                               resolveNodeType(Node, RangeKind::SingleExpression),
+                               Content,
+                               getImmediateContext(), SingleEntry,
+                               UnhandledError, Kind,
                                llvm::makeArrayRef(ContainedASTNodes),
                                llvm::makeArrayRef(DeclaredDecls),
                                llvm::makeArrayRef(ReferencedDecls));
     else if (Node.is<Stmt*>())
-      return ResolvedRangeInfo(RangeKind::SingleStatement, resolveNodeType(Node),
-                               Content, getImmediateContext(),
+      return ResolvedRangeInfo(RangeKind::SingleStatement,
+                               resolveNodeType(Node, RangeKind::SingleStatement),
+                               Content, getImmediateContext(), SingleEntry,
+                               UnhandledError, Kind,
                                llvm::makeArrayRef(ContainedASTNodes),
                                llvm::makeArrayRef(DeclaredDecls),
                                llvm::makeArrayRef(ReferencedDecls));
     else {
       assert(Node.is<Decl*>());
       return ResolvedRangeInfo(RangeKind::SingleDecl, Type(), Content,
-                               getImmediateContext(),
+                               getImmediateContext(), SingleEntry,
+                               UnhandledError, Kind,
                                llvm::makeArrayRef(ContainedASTNodes),
                                llvm::makeArrayRef(DeclaredDecls),
                                llvm::makeArrayRef(ReferencedDecls));
@@ -327,43 +451,6 @@ private:
     return true;
   }
 
-  static SourceLoc getNonwhitespaceLocBefore(SourceManager &SM,
-                                             unsigned BufferID,
-                                             unsigned Offset) {
-    CharSourceRange entireRange = SM.getRangeForBuffer(BufferID);
-    StringRef Buffer = SM.extractText(entireRange);
-
-    const char *BufStart = Buffer.data();
-    if (Offset >= Buffer.size())
-      return SourceLoc();
-
-    for (unsigned Off = Offset; Off != 0; Off --) {
-      if (!clang::isWhitespace(*(BufStart + Off))) {
-        return SM.getLocForOffset(BufferID, Off);
-      }
-    }
-    return clang::isWhitespace(*BufStart) ? SourceLoc() :
-    SM.getLocForOffset(BufferID, 0);
-  }
-
-  static SourceLoc getNonwhitespaceLocAfter(SourceManager &SM,
-                                            unsigned BufferID,
-                                            unsigned Offset) {
-    CharSourceRange entireRange = SM.getRangeForBuffer(BufferID);
-    StringRef Buffer = SM.extractText(entireRange);
-
-    const char *BufStart = Buffer.data();
-    if (Offset >= Buffer.size())
-      return SourceLoc();
-
-    for (unsigned Off = Offset; Off < Buffer.size(); Off ++) {
-      if (!clang::isWhitespace(*(BufStart + Off))) {
-        return SM.getLocForOffset(BufferID, Off);
-      }
-    }
-    return SourceLoc();
-  }
-
   DeclContext *getImmediateContext() {
     for (auto It = ContextStack.rbegin(); It != ContextStack.rend(); It ++) {
       if (auto *DC = It->Parent.getAsDeclContext())
@@ -372,9 +459,14 @@ private:
     return static_cast<DeclContext*>(&File);
   }
 
-  Implementation(SourceFile &File, SourceLoc Start, SourceLoc End) :
-    File(File), Ctx(File.getASTContext()), SM(Ctx.SourceMgr), Start(Start),
-    End(End), Content(getContent()) {}
+  Implementation(SourceFile &File, std::vector<Token> AllTokens,
+                 unsigned StartIdx, unsigned EndIdx) :
+    File(File), Ctx(File.getASTContext()), SM(Ctx.SourceMgr),
+    AllTokens(AllTokens), StartTok(AllTokens[StartIdx]), EndTok(AllTokens[EndIdx]),
+    Start(StartTok.getLoc()), End(EndTok.getLoc()),
+    Content(getContent()) {
+      assert(Start.isValid() && End.isValid());
+  }
 
 public:
   bool hasResult() { return Result.hasValue(); }
@@ -405,14 +497,33 @@ public:
                                         unsigned Length) {
     SourceManager &SM = File.getASTContext().SourceMgr;
     unsigned BufferId = File.getBufferID().getValue();
-    SourceLoc StartLoc = Implementation::getNonwhitespaceLocAfter(SM, BufferId,
-                                                                  StartOff);
-    SourceLoc EndLoc = Implementation::getNonwhitespaceLocBefore(SM, BufferId,
-                                                         StartOff + Length - 1);
-    StartLoc = Lexer::getLocForStartOfToken(SM, StartLoc);
-    EndLoc = Lexer::getLocForStartOfToken(SM, EndLoc);
-    return StartLoc.isInvalid() || EndLoc.isInvalid() ? nullptr :
-      new Implementation(File, StartLoc, EndLoc);
+
+    LangOptions Opts = File.getASTContext().LangOpts;
+    Opts.AttachCommentsToDecls = true;
+    std::vector<Token> AllTokens = tokenize(Opts, SM, BufferId, 0, 0, false);
+    auto TokenComp = [&](Token &LHS, SourceLoc Loc) {
+      return SM.isBeforeInBuffer(LHS.getLoc(), Loc);
+    };
+
+    SourceLoc StartRaw = SM.getLocForOffset(BufferId, StartOff);
+    SourceLoc EndRaw = SM.getLocForOffset(BufferId, StartOff + Length);
+
+    // This points to the first token after or on the start loc.
+    auto StartIt = std::lower_bound(AllTokens.begin(), AllTokens.end(), StartRaw,
+                                    TokenComp);
+    // This points to the first token after or on the end loc;
+    auto EndIt = std::lower_bound(AllTokens.begin(), AllTokens.end(), EndRaw,
+                                  TokenComp);
+    // Erroneous case.
+    if (StartIt == AllTokens.end() || EndIt == AllTokens.begin())
+      return nullptr;
+
+    // The start token is inclusive.
+    unsigned StartIdx = StartIt - AllTokens.begin();
+
+    // The end token is exclusive.
+    unsigned EndIdx = EndIt - 1 - AllTokens.begin();
+    return new Implementation(File, std::move(AllTokens), StartIdx, EndIdx);
   }
 
   static Implementation *createInstance(SourceFile &File, SourceLoc Start,
@@ -444,9 +555,9 @@ public:
       return true;
     }
     bool visitDeclReference(ValueDecl *D, CharSourceRange Range,
-                            TypeDecl *CtorTyRef, Type T,
-                            SemaReferenceKind Kind) override {
-      Impl->analyzeDeclRef(D, Range, T, Kind);
+                            TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef, Type T,
+                            ReferenceMetaData Data) override {
+      Impl->analyzeDeclRef(D, Range, T, Data);
       return true;
     }
   public:
@@ -458,8 +569,8 @@ public:
   class FurtherReferenceWalker : public SourceEntityWalker {
     Implementation *Impl;
     bool visitDeclReference(ValueDecl *D, CharSourceRange Range,
-                            TypeDecl *CtorTyRef, Type T,
-                            SemaReferenceKind Kind) override {
+                            TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef, Type T,
+                            ReferenceMetaData Data) override {
       // If the reference is after the given range, continue logic.
       if (!Impl->SM.isBeforeInBuffer(Impl->End, Range.getStart()))
         return true;
@@ -486,6 +597,58 @@ public:
     FurtherReferenceWalker(this).walk(getImmediateContext());
   }
 
+  bool hasSingleEntryPoint(ArrayRef<ASTNode> Nodes) {
+    unsigned CaseCount = 0;
+    // Count the number of case/default statements.
+    for (auto N : Nodes) {
+      if (Stmt *S = N.is<Stmt*>() ? N.get<Stmt*>() : nullptr) {
+        if (S->getKind() == StmtKind::Case)
+          CaseCount ++;
+      }
+    }
+    // If there are more than one case/default statements, there are more than
+    // one entry point.
+    if (CaseCount > 1)
+      return false;
+    return true;
+  }
+
+  OrphanKind getOrphanKind(ArrayRef<ASTNode> Nodes) {
+
+    // Prepare the entire range.
+    SourceRange WholeRange(Nodes.front().getStartLoc(),
+                           Nodes.back().getEndLoc());
+    struct ControlFlowStmtSelector : public SourceEntityWalker {
+      std::vector<std::pair<SourceRange, OrphanKind>> Ranges;
+      bool walkToStmtPre(Stmt *S) override {
+        // For each continue/break statement, record its target's range and the
+        // orphan kind.
+        if (auto *CS = dyn_cast<ContinueStmt>(S)) {
+          Ranges.emplace_back(CS->getTarget()->getSourceRange(),
+                              OrphanKind::Continue);
+        } else if (auto *BS = dyn_cast<BreakStmt>(S)) {
+          Ranges.emplace_back(BS->getTarget()->getSourceRange(),
+                              OrphanKind::Break);
+        }
+        return true;
+      }
+    };
+    for (auto N : Nodes) {
+      ControlFlowStmtSelector TheWalker;
+      N.walk(TheWalker);
+      for (auto Pair : TheWalker.Ranges) {
+
+        // If the entire range does not include the target's range, we find
+        // an orphan.
+        if (!SM.rangeContains(WholeRange, Pair.first))
+          return Pair.second;
+      }
+    }
+
+    // We find no orphan.
+    return OrphanKind::None;
+  }
+
   void analyze(ASTNode Node) {
     Decl *D = Node.is<Decl*>() ? Node.get<Decl*>() : nullptr;
     analyzeDecl(D);
@@ -494,7 +657,8 @@ public:
     case RangeMatchKind::NoneMatch:
       // PatternBindingDecl is not visited; we need to explicitly analyze here.
       if (auto *VA = dyn_cast_or_null<VarDecl>(D))
-        analyze(VA->getParentPatternBinding());
+        if (auto PBD = VA->getParentPatternBinding())
+          analyze(PBD);
       break;
     case RangeMatchKind::RangeMatch: {
       postAnalysis(Node);
@@ -524,12 +688,15 @@ public:
       }
     }
 
-    if (!DCInfo.StartMatches.empty() && !DCInfo.EndMatches.empty()) {
+    if (DCInfo.isMultiStatment()) {
       postAnalysis(DCInfo.EndMatches.back());
       Result = {RangeKind::MultiStatement,
                 /* Last node has the type */
-                resolveNodeType(DCInfo.EndMatches.back()), Content,
-                getImmediateContext(),
+                resolveNodeType(DCInfo.EndMatches.back(),
+                                RangeKind::MultiStatement), Content,
+                getImmediateContext(), hasSingleEntryPoint(ContainedASTNodes),
+                hasUnhandledError(ContainedASTNodes),
+                getOrphanKind(ContainedASTNodes),
                 llvm::makeArrayRef(ContainedASTNodes),
                 llvm::makeArrayRef(DeclaredDecls),
                 llvm::makeArrayRef(ReferencedDecls)};
@@ -550,13 +717,13 @@ public:
   ResolvedRangeInfo getResult() {
     if (Result.hasValue())
       return Result.getValue();
-    return ResolvedRangeInfo();
+    return ResolvedRangeInfo(Content);
   }
 
   void analyzeDeclRef(ValueDecl *VD, CharSourceRange Range, Type Ty,
-                      SemaReferenceKind Kind) {
+                      ReferenceMetaData Data) {
     // Only collect decl ref.
-    if (Kind != SemaReferenceKind::DeclRef)
+    if (Data.Kind != SemaReferenceKind::DeclRef)
       return;
 
     if (!isContainedInSelection(Range))
@@ -566,11 +733,28 @@ public:
     if (VD->getDeclContext()->getParentSourceFile() != &File)
       return;
 
-    // Collect referenced decls in the range.
-    ReferencedDecl RD(VD, Ty);
-    if (std::find(ReferencedDecls.begin(), ReferencedDecls.end(), RD) ==
-          ReferencedDecls.end())
-      ReferencedDecls.push_back(RD);
+    // Down-grade LValue type to RValue type if it's read-only.
+    if (auto Access = Data.AccKind) {
+      switch (Access.getValue()) {
+      case AccessKind::Read:
+        Ty = Ty->getRValueType();
+        break;
+      case AccessKind::Write:
+      case AccessKind::ReadWrite:
+        break;
+      }
+    }
+
+    auto It = llvm::find_if(ReferencedDecls,
+                            [&](ReferencedDecl D) { return D.VD == VD; });
+    if (It == ReferencedDecls.end()) {
+      ReferencedDecls.emplace_back(VD, Ty);
+    } else {
+      // LValue type should take precedence.
+      if (!It->Ty->isLValueType() && Ty->isLValueType()) {
+        It->Ty = Ty;
+      }
+    }
   }
 
 private:
@@ -589,7 +773,9 @@ private:
 
   StringRef getContent() {
     SourceManager &SM = File.getASTContext().SourceMgr;
-    return CharSourceRange(SM, Start, Lexer::getLocForEndOfToken(SM, End)).str();
+    return CharSourceRange(SM, StartTok.hasComment() ?
+                            StartTok.getCommentStart() : StartTok.getLoc(),
+                           Lexer::getLocForEndOfToken(SM, End)).str();
   }
 };
 
@@ -643,14 +829,14 @@ bool RangeResolver::walkToDeclPost(Decl *D) {
 
 bool RangeResolver::
 visitDeclReference(ValueDecl *D, CharSourceRange Range, TypeDecl *CtorTyRef,
-                   Type T, SemaReferenceKind Kind) {
-  Impl->analyzeDeclRef(D, Range, T, Kind);
+                   ExtensionDecl *ExtTyRef, Type T, ReferenceMetaData Data) {
+  Impl->analyzeDeclRef(D, Range, T, Data);
   return true;
 }
 
 ResolvedRangeInfo RangeResolver::resolve() {
   if (!Impl)
-    return ResolvedRangeInfo();
+    return ResolvedRangeInfo(StringRef());
   Impl->enter(ASTNode());
   walk(Impl->File);
   return Impl->getResult();

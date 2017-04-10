@@ -23,12 +23,15 @@ public func useClass(d: Double, opts: SomeClass.Options) {
   let o = SomeClass(value: d)
 
   // SIL: [[APPLY_FN:%[0-9]+]] = function_ref @IAMSomeClassApplyOptions : $@convention(c) (SomeClass, SomeClass.Options) -> ()
-  // SIL: apply [[APPLY_FN]]([[OBJ]], [[OPTS]])
+  // SIL: [[BORROWED_OBJ:%.*]] = begin_borrow [[OBJ]]
+  // SIL: apply [[APPLY_FN]]([[BORROWED_OBJ]], [[OPTS]])
+  // SIL: end_borrow [[BORROWED_OBJ]] from [[OBJ]]
+  // SIL: destroy_value [[OBJ]]
   o.applyOptions(opts)
 }
 
 extension SomeClass {
-  // SIL-LABEL: sil hidden @_TFE16import_as_memberCSo9SomeClasscfT6doubleSd_S0_
+  // SIL-LABEL: sil hidden @_T0So9SomeClassC16import_as_memberEABSd6double_tcfc
   // SIL: bb0([[DOUBLE:%[0-9]+]] : $Double
   // SIL-NOT: value_metatype
   // SIL: [[FNREF:%[0-9]+]] = function_ref @MakeIAMSomeClass

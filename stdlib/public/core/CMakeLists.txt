@@ -63,7 +63,7 @@ set(SWIFTLIB_ESSENTIAL
   # if we do so, the compiler crashes.
   AnyHashable.swift
   # END WORKAROUND
-  HashedCollectionsAnyHashableExtensions.swift.gyb
+  HashedCollectionsAnyHashableExtensions.swift
   Hashing.swift
   HeapBuffer.swift
   ImplicitlyUnwrappedOptional.swift
@@ -119,7 +119,7 @@ set(SWIFTLIB_ESSENTIAL
   StringComparable.swift
   StringCore.swift
   StringHashable.swift
-  StringInterpolation.swift.gyb
+  StringInterpolation.swift
   StringLegacy.swift
   StringRangeReplaceableCollection.swift.gyb
   StringIndexConversions.swift

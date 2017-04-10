@@ -47,12 +47,11 @@ case 1 + (_): // expected-error{{'_' can only appear in a pattern or on the left
 }
 
 switch (x,x) {
-case (var a, var a): // expected-error {{definition conflicts with previous value}} expected-note {{previous definition of 'a' is here}}
+case (var a, var a): // expected-error {{definition conflicts with previous value}} expected-note {{previous definition of 'a' is here}} expected-warning {{variable 'a' was never used; consider replacing with '_' or removing it}} expected-warning {{variable 'a' was never used; consider replacing with '_' or removing it}}
   fallthrough
 case _:
   ()
 }
-
 
 var e : Any = 0
 
@@ -101,7 +100,7 @@ enum Voluntary<T> : Equatable {
     }
 
     switch foo {
-    case .Naught: // expected-error{{enum case 'Naught' not found in type 'Foo'}}
+    case .Naught: // expected-error{{pattern cannot match values of type 'Foo'}}
       ()
     case .A, .B, .C:
       ()
@@ -138,7 +137,7 @@ case .Twain,
 var notAnEnum = 0
 
 switch notAnEnum {
-case .Foo: // expected-error{{enum case 'Foo' not found in type 'Int'}}
+case .Foo: // expected-error{{pattern cannot match values of type 'Int'}}
   ()
 }
 
@@ -265,10 +264,8 @@ case +++(_, var d, 3):
 // expected-error@-1{{'+++' is not a prefix unary operator}}
   ()
 case (_, var e, 3) +++ (1, 2, 3):
-// expected-error@-1{{binary operator '+++' cannot be applied to operands of type '(_, <<error type>>, Int)' and '(Int, Int, Int)'}}
-// expected-note@-2{{expected an argument list of type '((Int, Int, Int), (Int, Int, Int))'}}
-// expected-error@-3{{'var' binding pattern cannot appear in an expression}}
-// expected-error@-4{{'var' binding pattern cannot appear in an expression}}
+// expected-error@-1{{'_' can only appear in a pattern}}
+// expected-error@-2{{'var' binding pattern cannot appear in an expression}}
   ()
 }
 

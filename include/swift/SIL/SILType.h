@@ -23,12 +23,15 @@
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "swift/SIL/SILAllocated.h"
+#include "swift/SIL/SILArgumentConvention.h"
 #include "llvm/ADT/Hashing.h"
 #include "swift/SIL/SILDeclRef.h"
 
 namespace swift {
-  class ASTContext;
-  class VarDecl;
+
+class ASTContext;
+class VarDecl;
+class SILFunction;
 
 namespace Lowering {
   class AbstractionPattern;
@@ -126,12 +129,6 @@ public:
     return SILType(T, SILValueCategory::Address);
   }
 
-  ///  Apply a substitution to the function type.
-  static CanSILFunctionType substFuncType(SILModule &silModule,
-                                          const SubstitutionMap &subs,
-                                          CanSILFunctionType SrcTy,
-                                          bool dropGenerics);
-
   bool isNull() const { return value.getPointer() == nullptr; }
   explicit operator bool() const { return bool(value.getPointer()); }
 
@@ -165,22 +162,7 @@ public:
   CanType getSwiftRValueType() const {
     return CanType(value.getPointer());
   }
-
-  /// Returns the Swift type equivalent to this SIL type. If the SIL type is
-  /// an address type, returns an InOutType.
-  CanType getSwiftType() const {
-    CanType rvalueTy = getSwiftRValueType();
-    if (isAddress())
-      return CanInOutType::get(rvalueTy);
-    return rvalueTy;
-  }
   
-  /// Returns the Swift return type of a function type.
-  /// The SILType must refer to a function type.
-  SILType getFunctionInterfaceResultType() const {
-    return castTo<SILFunctionType>()->getSILResult();
-  }
-
   /// Returns the AbstractCC of a function type.
   /// The SILType must refer to a function type.
   SILFunctionTypeRepresentation getFunctionRepresentation() const {
@@ -244,14 +226,13 @@ public:
   static bool isAddressOnly(CanType T, SILModule &M,
                             CanGenericSignature Sig,
                             ResilienceExpansion Expansion);
-
   /// Return true if this type must be returned indirectly.
   ///
   /// This is equivalent to, but possibly faster than, calling
   /// M.Types.getTypeLowering(type).isReturnedIndirectly().
-  static bool isReturnedIndirectly(CanType type, SILModule &M,
-                                   CanGenericSignature Sig,
-                                   ResilienceExpansion Expansion) {
+  static bool isFormallyReturnedIndirectly(CanType type, SILModule &M,
+                                           CanGenericSignature Sig,
+                                           ResilienceExpansion Expansion) {
     return isAddressOnly(type, M, Sig, Expansion);
   }
 
@@ -259,9 +240,9 @@ public:
   ///
   /// This is equivalent to, but possibly faster than, calling
   /// M.Types.getTypeLowering(type).isPassedIndirectly().
-  static bool isPassedIndirectly(CanType type, SILModule &M,
-                                 CanGenericSignature Sig,
-                                 ResilienceExpansion Expansion) {
+  static bool isFormallyPassedIndirectly(CanType type, SILModule &M,
+                                         CanGenericSignature Sig,
+                                         ResilienceExpansion Expansion) {
     return isAddressOnly(type, M, Sig, Expansion);
   }
 
@@ -312,6 +293,18 @@ public:
   /// Returns true if the referenced type is a class existential type.
   bool isClassExistentialType() const {
     return getSwiftRValueType()->isClassExistentialType();
+  }
+
+  /// Returns true if the referenced type is an opened existential type
+  /// (which is actually a kind of archetype).
+  bool isOpenedExistential() const {
+    return getSwiftRValueType()->isOpenedExistential();
+  }
+
+  /// Returns true if the referenced type is expressed in terms of one
+  /// or more opened existential types.
+  bool hasOpenedExistential() const {
+    return getSwiftRValueType()->hasOpenedExistential();
   }
   
   /// Returns the representation used by an existential type. If the concrete
@@ -440,13 +433,25 @@ public:
   ///
   /// Only call this with function types!
   SILType substGenericArgs(SILModule &M,
-                           ArrayRef<Substitution> Subs) const;
+                           SubstitutionList Subs) const;
+
+  /// Transform the function type SILType by replacing all of its interface
+  /// generic args with the appropriate item from the substitution.
+  ///
+  /// Only call this with function types!
+  SILType substGenericArgs(SILModule &M,
+                           const SubstitutionMap &SubMap) const;
+
+  /// If the original type is generic, pass the signature as genericSig.
+  ///
+  /// If the replacement types are generic, you must push a generic context
+  /// first.
+  SILType subst(SILModule &silModule,
+                TypeSubstitutionFn subs,
+                LookupConformanceFn conformances,
+                CanGenericSignature genericSig=CanGenericSignature()) const;
 
   SILType subst(SILModule &silModule, const SubstitutionMap &subs) const;
-
-  /// If this is a specialized generic type, return all substitutions used to
-  /// generate it.
-  ArrayRef<Substitution> gatherAllSubstitutions(SILModule &M);
 
   /// Return true if this type references a "ref" type that has a single pointer
   /// representation. Class existentials do not always qualify.
@@ -474,12 +479,24 @@ public:
   /// Otherwise directly returns the given type.
   SILType unwrapAnyOptionalType() const;
 
+  /// Wraps one level of optional type.
+  ///
+  /// Returns the lowered Optional<T> if the given type is T.
+  ///
+  /// \arg F The SILFunction where the SILType is used.
+  SILType wrapAnyOptionalType(SILFunction &F) const;
+
   /// Returns true if this is the AnyObject SILType;
   bool isAnyObject() const { return getSwiftRValueType()->isAnyObject(); }
 
   /// Returns the underlying referent SILType of an @sil_unowned or @sil_weak
   /// Type.
   SILType getReferentType(SILModule &M) const;
+
+  /// Given two SIL types which are representations of the same type,
+  /// check whether they have an abstraction difference.
+  bool hasAbstractionDifference(SILFunctionTypeRepresentation rep,
+                                SILType type2);
 
   /// Returns the hash code for the SILType.
   llvm::hash_code getHashCode() const {
@@ -553,35 +570,6 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, SILType T) {
   return OS;
 }
 
-inline SILType SILParameterInfo::getSILType() const {
-  if (isIndirect()) {
-    return SILType::getPrimitiveAddressType(getType());
-  } else {
-    return SILType::getPrimitiveObjectType(getType());
-  }
-}
-
-inline SILType
-SILFunctionType::getParameterSILType(const SILParameterInfo &param) {
-  return param.getSILType();
-}
-
-inline SILType SILResultInfo::getSILType() const {
-  if (isIndirect()) {
-    return SILType::getPrimitiveAddressType(getType());
-  } else {
-    return SILType::getPrimitiveObjectType(getType());    
-  }
-}
-
-inline SILType SILFunctionType::getSILArgumentType(unsigned index) const {
-  if (index < getNumIndirectResults()) {
-    return getIndirectResults()[index].getSILType();
-  } else {
-    return getParameters()[index - getNumIndirectResults()].getSILType();
-  }
-}
-
 inline SILType SILBlockStorageType::getCaptureAddressType() const {
   return SILType::getPrimitiveAddressType(getCaptureType());
 }
@@ -644,6 +632,5 @@ public:
 };
 
 } // end llvm namespace
-
 
 #endif

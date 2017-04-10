@@ -370,6 +370,9 @@ static void sanitizeCompilerArgs(ArrayRef<const char *> Args,
       continue;
     if (Arg == "-embed-bitcode")
       continue;
+    if (Arg == "-enable-bridging-pch" ||
+        Arg == "-disable-bridging-pch")
+      continue;
     NewArgs.push_back(CArg);
   }
 }
@@ -404,6 +407,7 @@ bool SwiftASTManager::initCompilerInvocation(CompilerInvocation &Invocation,
   setModuleName(Invocation);
   Invocation.setSerializedDiagnosticsPath(StringRef());
   Invocation.getLangOptions().AttachCommentsToDecls = true;
+  Invocation.getLangOptions().DiagnosticsEditorMode = true;
   auto &FrontendOpts = Invocation.getFrontendOptions();
   if (FrontendOpts.PlaygroundTransform) {
     // The playground instrumenter changes the AST in ways that disrupt the

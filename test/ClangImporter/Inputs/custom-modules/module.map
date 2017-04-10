@@ -69,6 +69,10 @@ module MissingHeader {
   header "this-header-does-not-exist.h"
 }
 
+module MoreSwiftNewtypes {
+  header "MoreSwiftNewtypes.h"
+}
+
 module Newtype {
   header "Newtype.h"
 }
@@ -105,6 +109,11 @@ module ObjCSubscripts {
 
 module PredefinedMacros {
   header "PredefinedMacros.h"
+  export *
+}
+
+module ProtoRenaming {
+  header "ProtoRenaming.h"
   export *
 }
 

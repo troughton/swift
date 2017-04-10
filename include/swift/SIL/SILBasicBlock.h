@@ -28,6 +28,7 @@ class SILFunction;
 class SILArgument;
 class SILPHIArgument;
 class SILFunctionArgument;
+class SILPrintContext;
 
 class SILBasicBlock :
 public llvm::ilist_node<SILBasicBlock>, public SILAllocated<SILBasicBlock> {
@@ -75,9 +76,6 @@ public:
 
   /// This method unlinks 'self' from the containing SILFunction and deletes it.
   void eraseFromParent();
-
-  /// Returns true if this BB is the entry BB of its parent.
-  bool isEntry() const;
 
   //===--------------------------------------------------------------------===//
   // SILInstruction List Inspection and Manipulation
@@ -188,6 +186,12 @@ public:
     std::advance(Pos, Index);
     return insertFunctionArgument(Pos, Ty, OwnershipKind, D);
   }
+
+  /// Replace the \p{i}th Function arg with a new Function arg with SILType \p
+  /// Ty and ValueDecl \p D.
+  SILFunctionArgument *replaceFunctionArgument(unsigned i, SILType Ty,
+                                               ValueOwnershipKind Kind,
+                                               const ValueDecl *D = nullptr);
 
   /// Replace the \p{i}th BB arg with a new BBArg with SILType \p Ty and
   /// ValueDecl
@@ -309,6 +313,20 @@ public:
   }
 
   //===--------------------------------------------------------------------===//
+  // Utility
+  //===--------------------------------------------------------------------===//
+
+  /// Returns true if this BB is the entry BB of its parent.
+  bool isEntry() const;
+
+  /// Returns true if this block ends in an unreachable or an apply of a
+  /// no-return apply or builtin.
+  bool isNoReturn() const;
+
+  /// Returns true if this instruction only contains a branch instruction.
+  bool isTrampoline() const;
+
+  //===--------------------------------------------------------------------===//
   // Debugging
   //===--------------------------------------------------------------------===//
 
@@ -317,6 +335,9 @@ public:
 
   /// Pretty-print the SILBasicBlock with the designated stream.
   void print(llvm::raw_ostream &OS) const;
+
+  /// Pretty-print the SILBasicBlock with the designated stream and context.
+  void print(llvm::raw_ostream &OS, SILPrintContext &Ctx) const;
 
   void printAsOperand(raw_ostream &OS, bool PrintType = true);
 

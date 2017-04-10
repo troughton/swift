@@ -17,7 +17,6 @@
 #include "swift/SIL/SILArgument.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/ParameterList.h"
-#include "swift/Basic/Fallthrough.h"
 
 using namespace swift;
 using namespace Lowering;
@@ -64,6 +63,13 @@ public:
   void emit(SILGenFunction &gen, CleanupLocation l) override {
     gen.B.emitDestroyValueOperation(l, box);
   }
+
+  void dump(SILGenFunction &) const override {
+#ifndef NDEBUG
+    llvm::errs() << "DeallocateValueBuffer\n"
+                 << "State: " << getState() << "box: " << box << "\n";
+#endif
+  }
 };
 } // end anonymous namespace
 
@@ -86,7 +92,7 @@ public:
       parameters(parameters) {}
 
   ManagedValue getManagedValue(SILValue arg, CanType t,
-                                 SILParameterInfo parameterInfo) const {
+                               SILParameterInfo parameterInfo) const {
     switch (parameterInfo.getConvention()) {
     case ParameterConvention::Direct_Guaranteed:
     case ParameterConvention::Indirect_In_Guaranteed:
@@ -120,9 +126,11 @@ public:
     // Pop the next parameter info.
     auto parameterInfo = parameters.front();
     parameters = parameters.slice(1);
-    assert(argType == parent->getParent()
-                            ->mapTypeIntoContext(parameterInfo.getSILType()) &&
-           "argument does not have same type as specified by parameter info");
+    assert(
+        argType
+            == parent->getParent()->mapTypeIntoContext(
+                   gen.getSILType(parameterInfo))
+        && "argument does not have same type as specified by parameter info");
 
     SILValue arg =
         parent->createFunctionArgument(argType, loc.getAsASTNode<ValueDecl>());
@@ -161,7 +169,7 @@ public:
       elements.push_back(elt);
     }
 
-    if (tl.isLoadable()) {
+    if (tl.isLoadable() || !gen.silConv.useLoweredAddresses()) {
       SmallVector<SILValue, 4> elementValues;
       if (canBeGuaranteed) {
         // If all of the elements were guaranteed, we can form a guaranteed tuple.
@@ -228,7 +236,7 @@ struct ArgumentInitHelper {
     assert(ty && "no type?!");
 
     // Create an RValue by emitting destructured arguments into a basic block.
-    CanType canTy = ty->getCanonicalType();
+    CanType canTy = ty->eraseDynamicSelfType()->getCanonicalType();
     return EmitBBArguments(gen, parent, l, /*functionArgs*/ true,
                            parameters).visit(canTy);
   }
@@ -259,6 +267,17 @@ struct ArgumentInitHelper {
         return;
       }
       assert(argrv.getType().isAddress() && "expected inout to be address");
+    } else if (auto *metatypeTy = ty->getAs<MetatypeType>()) {
+      // This is a hack to deal with the fact that Self.Type comes in as a
+      // static metatype, but we have to downcast it to a dynamic Self
+      // metatype to get the right semantics.
+      if (metatypeTy->getInstanceType()->is<DynamicSelfType>()) {
+        auto loweredTy = gen.getLoweredType(ty);
+        if (loweredTy != argrv.getType()) {
+          argrv = ManagedValue::forUnmanaged(
+            gen.B.createUncheckedBitCast(loc, argrv.getValue(), loweredTy));
+        }
+      }
     } else {
       assert(vd->isLet() && "expected parameter to be immutable!");
       // If the variable is immutable, we can bind the value as is.
@@ -273,9 +292,7 @@ struct ArgumentInitHelper {
   }
 
   void emitParam(ParamDecl *PD) {
-    // The contextual type of a ParamDecl has DynamicSelfType. We don't want
-    // that here.
-    auto type = PD->getType()->eraseDynamicSelfType();
+    auto type = PD->getType();
 
     ++ArgNo;
     if (PD->hasName()) {
@@ -338,13 +355,15 @@ void SILGenFunction::bindParametersForForwarding(const ParameterList *params,
                                      SmallVectorImpl<SILValue> &parameters) {
   for (auto param : *params) {
     Type type = (param->hasType()
-                 ? param->getType()->eraseDynamicSelfType()
+                 ? param->getType()
                  : F.mapTypeIntoContext(param->getInterfaceType()));
-    makeArgument(type, param, parameters, *this);
+    makeArgument(type->eraseDynamicSelfType(), param, parameters, *this);
   }
 }
 
-static void emitCaptureArguments(SILGenFunction &gen, CapturedValue capture,
+static void emitCaptureArguments(SILGenFunction &gen,
+                                 AnyFunctionRef closure,
+                                 CapturedValue capture,
                                  unsigned ArgNo) {
 
   auto *VD = capture.getDecl();
@@ -354,12 +373,9 @@ static void emitCaptureArguments(SILGenFunction &gen, CapturedValue capture,
   // Local function to get the captured variable type within the capturing
   // context.
   auto getVarTypeInCaptureContext = [&]() -> Type {
-    auto interfaceType = cast<VarDecl>(VD)->getInterfaceType();
-    if (!interfaceType->hasTypeParameter()) return interfaceType;
-
-    auto genericEnv = gen.F.getGenericEnvironment();
-    return genericEnv->mapTypeIntoContext(gen.F.getModule().getSwiftModule(),
-                                          interfaceType);
+    auto interfaceType = VD->getInterfaceType();
+    return GenericEnvironment::mapTypeIntoContext(
+      closure.getGenericEnvironment(), interfaceType);
   };
 
   switch (gen.SGM.Types.getDeclCaptureKind(capture)) {
@@ -436,17 +452,15 @@ void SILGenFunction::emitProlog(AnyFunctionRef TheClosure,
   for (auto capture : captureInfo.getCaptures()) {
     if (capture.isDynamicSelfMetadata()) {
       auto selfMetatype = MetatypeType::get(
-          captureInfo.getDynamicSelfType()->getSelfType(),
-          MetatypeRepresentation::Thick)
-              ->getCanonicalType();
-      SILType ty = SILType::getPrimitiveObjectType(selfMetatype);
+        captureInfo.getDynamicSelfType());
+      SILType ty = getLoweredType(selfMetatype);
       SILValue val = F.begin()->createFunctionArgument(ty);
       (void) val;
 
       return;
     }
 
-    emitCaptureArguments(*this, capture, ++ArgNo);
+    emitCaptureArguments(*this, TheClosure, capture, ++ArgNo);
   }
 }
 
@@ -461,10 +475,13 @@ static void emitIndirectResultParameters(SILGenFunction &gen, Type resultType,
   }
 
   // If the return type is address-only, emit the indirect return argument.
-  const TypeLowering &resultTI = gen.getTypeLowering(
-      DC->mapTypeIntoContext(resultType));
-  if (!resultTI.isReturnedIndirectly()) return;
 
+  const TypeLowering &resultTI =
+      gen.getTypeLowering(DC->mapTypeIntoContext(resultType));
+  if (!SILModuleConventions::isReturnedIndirectlyInSIL(
+          resultTI.getLoweredType(), gen.SGM.M)) {
+    return;
+  }
   auto &ctx = gen.getASTContext();
   auto var = new (ctx) ParamDecl(/*IsLet*/ false, SourceLoc(), SourceLoc(),
                                  ctx.getIdentifier("$return_value"), SourceLoc(),
@@ -481,6 +498,10 @@ unsigned SILGenFunction::emitProlog(ArrayRef<ParameterList *> paramLists,
                                     Type resultType, DeclContext *DC,
                                     bool throws) {
   // Create the indirect result parameters.
+  auto *genericSig = DC->getGenericSignatureOfContext();
+  resultType = resultType->getCanonicalType(genericSig,
+                                            *SGM.M.getSwiftModule());
+
   emitIndirectResultParameters(*this, resultType, DC);
 
   // Emit the argument variables in calling convention order.

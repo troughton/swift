@@ -52,6 +52,6 @@ class CC<T : PP> {
   }
 }
 
-// CHECK-DAG: sil hidden [fragile] [_specialize exported: false, kind: full, where T == Int, U == Float] @_TF14serialize_attr14specializeThisu0_rFTx1uq__T_ : $@convention(thin) <T, U> (@in T, @in U) -> () {
+// CHECK-DAG: sil hidden [serialized] [_specialize exported: false, kind: full, where T == Int, U == Float] @_T014serialize_attr14specializeThisyx_q_1utr0_lF : $@convention(thin) <T, U> (@in T, @in U) -> () {
 
-// CHECK-DAG: sil hidden [fragile] [noinline] [_specialize exported: false, kind: full, where T == RR, U == SS] @_TFC14serialize_attr2CC3foouRd__S_2QQrfTqd__1gGVS_2GGx__Tqd__GS2_x__ : $@convention(method) <T where T : PP><U where U : QQ> (@in U, GG<T>, @guaranteed CC<T>) -> (@out U, GG<T>) {
+// CHECK-DAG: sil hidden [serialized] [noinline] [_specialize exported: false, kind: full, where T == RR, U == SS] @_T014serialize_attr2CCC3fooqd___AA2GGVyxGtqd___AG1gtAA2QQRd__lF : $@convention(method) <T where T : PP><U where U : QQ> (@in U, GG<T>, @guaranteed CC<T>) -> (@out U, GG<T>) {

@@ -42,6 +42,8 @@ PASS(AADumper, "aa-dump",
      "Dump AA result for all pairs of ValueKinds in all functions")
 PASS(ABCOpt, "abcopts",
      "Optimization of array bounds checks")
+PASS(AddressLowering, "address-lowering",
+     "SIL AddressOnly lowering.")
 PASS(AllocBoxToStack, "allocbox-to-stack",
      "Promote heap allocations to stack allocations")
 IRGEN_PASS(AllocStackHoisting, "alloc-stack-hoisting",
@@ -249,6 +251,8 @@ PASS(UsePrespecialized, "use-prespecialized",
      "Use pre-specialized functions")
 PASS(ValueOwnershipKindDumper, "value-ownership-kind-dumper",
      "Print the value ownership kind of all ValueBase in a SILModule")
+PASS(SemanticARCOpts, "semantic-arc-opts",
+     "Pass for performing semantic ARC optimizations")
 PASS(BugReducerTester, "bug-reducer-tester",
      "Utility pass for testing sil-bug-reducer. Asserts when visits an apply that calls a specific function")
 PASS_RANGE(AllPasses, AADumper, BugReducerTester)

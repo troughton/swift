@@ -16,7 +16,6 @@
 #include "swift/AST/Decl.h"
 #include "swift/AST/DiagnosticEngine.h"
 #include "swift/AST/DiagnosticsFrontend.h"
-#include "swift/AST/Mangle.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/ModuleLoader.h"
 #include "swift/AST/NameLookup.h"
@@ -89,25 +88,31 @@ static bool extendedTypeIsPrivate(TypeLoc inheritedType) {
   if (!inheritedType.getType())
     return true;
 
-  SmallVector<ProtocolDecl *, 2> protocols;
-  if (!inheritedType.getType()->isAnyExistentialType(protocols)) {
+  if (!inheritedType.getType()->isExistentialType()) {
     // Be conservative. We don't know how to deal with other extended types.
     return false;
   }
+
+  SmallVector<ProtocolDecl *, 2> protocols;
+  inheritedType.getType()->getExistentialTypeProtocols(protocols);
 
   return std::all_of(protocols.begin(), protocols.end(), declIsPrivate);
 }
 
 static std::string mangleTypeAsContext(const NominalTypeDecl *type) {
-  Mangle::Mangler mangler(/*debug style=*/false, /*usePunycode=*/true);
-  mangler.mangleContext(type);
-  std::string Old = mangler.finalize();
+  Mangle::ASTMangler Mangler;
+  return Mangler.mangleTypeAsContextUSR(type);
+}
 
-  NewMangling::ASTMangler NewMangler(/*debug style=*/false,
-                                     /*usePunycode=*/true);
-  std::string New = NewMangler.mangleTypeAsContextUSR(type);
-
-  return NewMangling::selectMangling(Old, New);
+std::vector<std::string>
+swift::reversePathSortedFilenames(const ArrayRef<std::string> elts) {
+  std::vector<std::string> tmp(elts.begin(), elts.end());
+  std::sort(tmp.begin(), tmp.end(), [](const std::string &a,
+                                       const std::string &b) -> bool {
+              return std::lexicographical_compare(a.rbegin(), a.rend(),
+                                                  b.rbegin(), b.rend());
+            });
+  return tmp;
 }
 
 bool swift::emitReferenceDependencies(DiagnosticEngine &diags,
@@ -399,7 +404,7 @@ bool swift::emitReferenceDependencies(DiagnosticEngine &diags,
   }
 
   out << "depends-external:\n";
-  for (auto &entry : depTracker.getDependencies()) {
+  for (auto &entry : reversePathSortedFilenames(depTracker.getDependencies())) {
     out << "- \"" << llvm::yaml::escape(entry) << "\"\n";
   }
 

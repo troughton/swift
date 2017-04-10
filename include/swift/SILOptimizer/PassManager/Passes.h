@@ -22,6 +22,7 @@
 namespace swift {
   class SILOptions;
   class SILTransform;
+  class SILModuleTransform;
 
   namespace irgen {
     class IRGenModule;
@@ -46,7 +47,7 @@ namespace swift {
 
   /// \brief Detect and remove unreachable code. Diagnose provably unreachable
   /// user code.
-  void performSILDiagnoseUnreachable(SILModule *M);
+  void performSILDiagnoseUnreachable(SILModule *M, SILModuleTransform *T);
 
   /// \brief Remove dead functions from \p M.
   void performSILDeadFunctionElimination(SILModule *M);
@@ -58,8 +59,8 @@ namespace swift {
   /// \param LinkAll when true, always link. For testing purposes.
   void performSILLinking(SILModule *M, bool LinkAll = false);
 
-  /// \brief Cleanup instructions/builtin calls not suitable for IRGen.
-  void performSILCleanup(SILModule *M);
+  /// \brief Convert SIL to a lowered form suitable for IRGen.
+  void runSILLoweringPasses(SILModule &M);
 
   /// \brief Perform SIL Inst Count on M.
   void performSILInstCount(SILModule *M);

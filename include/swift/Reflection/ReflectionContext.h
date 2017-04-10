@@ -18,13 +18,13 @@
 #ifndef SWIFT_REFLECTION_REFLECTIONCONTEXT_H
 #define SWIFT_REFLECTION_REFLECTIONCONTEXT_H
 
-#include "swift/Basic/Unreachable.h"
 #include "swift/Remote/MemoryReader.h"
 #include "swift/Remote/MetadataReader.h"
 #include "swift/Reflection/Records.h"
 #include "swift/Reflection/TypeLowering.h"
 #include "swift/Reflection/TypeRef.h"
 #include "swift/Reflection/TypeRefBuilder.h"
+#include "swift/Runtime/Unreachable.h"
 
 #include <iostream>
 #include <set>
@@ -63,6 +63,11 @@ public:
 
   MemoryReader &getReader() {
     return *this->Reader;
+  }
+
+  unsigned getSizeOfHeapObject() {
+    // This must match sizeof(HeapObject) for the target.
+    return sizeof(StoredPointer) + 8;
   }
 
   void dumpAllSections(std::ostream &OS) {
@@ -239,7 +244,16 @@ public:
         if (!getReader().readInteger(ExistentialAddress, &BoxAddress))
           return false;
 
+#ifdef SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+        // Address = BoxAddress + (sizeof(HeapObject) + alignMask) & ~alignMask)
+        auto Alignment = InstanceTI->getAlignment();
+        auto StartOfValue = BoxAddress + getSizeOfHeapObject();
+        // Align.
+        StartOfValue += Alignment - StartOfValue % Alignment;
+        *OutInstanceAddress = RemoteAddress(StartOfValue);
+#else
         *OutInstanceAddress = RemoteAddress(BoxAddress);
+#endif
       }
       return true;
     }
@@ -454,7 +468,7 @@ private:
       return true;
     }
 
-    swift_unreachable("Unhandled MetadataSourceKind in switch.");
+    swift_runtime_unreachable("Unhandled MetadataSourceKind in switch.");
   }
 
   /// Read metadata for a captured generic type from a closure context.
@@ -481,7 +495,7 @@ private:
       // the heap object header, in the 'necessary bindings' area.
       //
       // We should only have the index of a type metadata record here.
-      unsigned Offset = sizeof(StoredPointer) + 8 +
+      unsigned Offset = getSizeOfHeapObject() +
                         sizeof(StoredPointer) * Index;
 
       StoredPointer MetadataAddress;

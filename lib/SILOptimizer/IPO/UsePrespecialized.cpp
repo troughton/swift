@@ -11,12 +11,10 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "use-prespecialized"
-#include "swift/Basic/Demangle.h"
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
 #include "swift/SILOptimizer/Utils/Local.h"
 #include "swift/SILOptimizer/Utils/SpecializationMangler.h"
-#include "swift/SIL/Mangle.h"
 #include "swift/SIL/SILBuilder.h"
 #include "swift/SIL/SILInstruction.h"
 #include "swift/SIL/SILFunction.h"
@@ -84,37 +82,33 @@ bool UsePrespecialized::replaceByPrespecialized(SILFunction &F) {
     // available for it already and use this specialization
     // instead of the generic version.
 
-    ArrayRef<Substitution> Subs = AI.getSubstitutions();
+    SubstitutionList Subs = AI.getSubstitutions();
     if (Subs.empty())
       continue;
 
-    ReabstractionInfo ReInfo(ReferencedF, Subs);
-
-    auto SpecType = ReInfo.getSpecializedType();
-    if (!SpecType)
+    // Bail if any generic type parameters are unbound.
+    // TODO: Remove this limitation once public partial specializations
+    // are supported and can be provided by other modules.
+    if (hasArchetypes(Subs))
       continue;
 
-    // Bail any callee generic type parameters are dependent on the generic
-    // parameters of the caller.
-    if (SpecType->hasArchetype() || hasArchetypes(Subs))
+    ReabstractionInfo ReInfo(AI, ReferencedF, Subs);
+
+    if (!ReInfo.canBeSpecialized())
+      continue;
+
+    auto SpecType = ReInfo.getSpecializedType();
+    // Bail if any generic types parameters of the concrete type
+    // are unbound.
+    if (SpecType->hasArchetype())
       continue;
 
     // Create a name of the specialization.
-    std::string ClonedName;
-    {
-      Mangle::Mangler Mangler;
-      GenericSpecializationMangler GenericMangler(Mangler, ReferencedF, Subs,
-                                                  ReferencedF->isFragile());
-      NewMangling::GenericSpecializationMangler NewGenericMangler(ReferencedF,
-                                              Subs, ReferencedF->isFragile(),
+    Mangle::GenericSpecializationMangler NewGenericMangler(ReferencedF,
+                                              Subs, ReferencedF->isSerialized(),
                                               /*isReAbstracted*/ true);
-      GenericMangler.mangle();
-      std::string Old = Mangler.finalize();
-      std::string New = NewGenericMangler.mangle();
-
-      ClonedName = NewMangling::selectMangling(Old, New);
-    }
-
+    std::string ClonedName = NewGenericMangler.mangle();
+      
     SILFunction *NewF = nullptr;
     // If we already have this specialization, reuse it.
     auto PrevF = M.lookUpFunction(ClonedName);

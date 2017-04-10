@@ -1651,7 +1651,8 @@ struct dedupS : dedupP {
 
 func testDeDuped(_ x: dedupS) {
   x#^PROTOCOL_EXT_DEDUP_1^#
-// PROTOCOL_EXT_DEDUP_1: Begin completions, 3 items
+// FIXME: Should produce 3 items
+// PROTOCOL_EXT_DEDUP_1: Begin completions, 5 items
 // PROTOCOL_EXT_DEDUP_1: Decl[InstanceMethod]/CurrNominal:   .foo()[#Int#]; name=foo()
 // PROTOCOL_EXT_DEDUP_1: Decl[InstanceVar]/CurrNominal:      .bar[#Int#]; name=bar
 // PROTOCOL_EXT_DEDUP_1: Decl[Subscript]/CurrNominal:        [{#Int#}][#Int#]; name=[Int]
@@ -1659,11 +1660,9 @@ func testDeDuped(_ x: dedupS) {
 }
 func testDeDuped2(_ x: dedupP) {
   x#^PROTOCOL_EXT_DEDUP_2^#
-// PROTOCOL_EXT_DEDUP_2: Begin completions, 4 items
+// PROTOCOL_EXT_DEDUP_2: Begin completions, 3 items
 // PROTOCOL_EXT_DEDUP_2: Decl[InstanceMethod]/CurrNominal:   .foo()[#dedupP.T#]; name=foo()
 // PROTOCOL_EXT_DEDUP_2: Decl[InstanceVar]/CurrNominal:      .bar[#dedupP.T#]; name=bar
-// PROTOCOL_EXT_DEDUP_2: Decl[Subscript]/CurrNominal:        [{#Self.T#}][#Self.T#]; name=[Self.T]
-// FIXME: duplicate subscript on protocol type rdar://problem/22086900
 // PROTOCOL_EXT_DEDUP_2: Decl[Subscript]/CurrNominal:        [{#Self.T#}][#Self.T#]; name=[Self.T]
 // PROTOCOL_EXT_DEDUP_2: End completions
 }

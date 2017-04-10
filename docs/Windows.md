@@ -41,6 +41,7 @@ Additionally, the ICU headers and libraries need to be provided for the build.
 - Windows doesn't currently have a build script. You'll need to run commands manually to build Swift on Windows.
 - Release/RelWithDebInfo modes have not been tested and may not be supported.
 - Windows support for Swift is very much a WIP, and may not work on your system.
+- Using the latest Visual Studio version is recommended. Swift may fail to build with older C++ compilers.
 
 ### 1. Install dependencies
 - Make sure to add Python, CMake and Ninja to your `Path` environment variable
@@ -69,7 +70,7 @@ Additionally, the ICU headers and libraries need to be provided for the build.
 ### 4. Get ready
 - From within a **developer** command prompt, execute the following command if you have an x64 PC.
 ```
-"C:/Program Files (x86)/Microsoft Visual Studio 14.0/VC/vcvarsall.bat" amd64
+VsDevCmd -arch=amd64
 ```
 - Then adapt the following command, and run it.
 ```
@@ -129,23 +130,28 @@ cmake -G "Ninja" "%swift_source_dir%/swift"^
  -DICU_I18N_LIB_NAME="icuin"^
  -DSWIFT_INCLUDE_DOCS=FALSE^
  -DSWIFT_INCLUDE_TESTS=FALSE^
- -DSWIFT_BUILD_SDK_OVERLAY=FALSE^
- -DSWIFT_BUILD_RUNTIME_WITH_HOST_COMPILER=FALSE^
- -DPYTHON_EXECUTABLE="python"
+ -DSWIFT_BUILD_DYNAMIC_SDK_OVERLAY=FALSE^
+ -DSWIFT_BUILD_RUNTIME_WITH_HOST_COMPILER=FALSE
 popd
 cmake --build "%swift_source_dir%/build/Ninja-DebugAssert/swift-windows-amd64/ninja"
 ```
 
+- To create a VisualStudio project, you'll need to change the generator and, if you have a 64 bit processor, specify the generator platform. Note that you may get multiple build errors compiling the `swift` project due to an MSBuild limitation that file paths cannot exceed 260 characters. These can be ignored, as they occur after the build, writing the last build status to a file.
+```
+cmake -G "Visual Studio 15" "%swift_source_dir%/swift"^
+ -DCMAKE_GENERATOR_PLATFORM="x64"^
+ ...
+```
+
 ## Clang-cl
 
-Follow the instructions for MSVC, but add the following lines to each CMake configuration command. We need to use LLVM's `lld-link.exe` linker, as MSVC's `link.exe` crashes due to corrupt PDB files using `clang-cl`. `Clang-cl` 3.9.0 has been tested.
+Follow the instructions for MSVC, but add the following lines to each CMake configuration command. We need to use LLVM's `lld-link.exe` linker, as MSVC's `link.exe` crashes due to corrupt PDB files using `clang-cl`. `Clang-cl` 3.9.0 has been tested. You can remove the `SWIFT_BUILD_DYNAMIC_SDK_OVERLAY=FALSE` definition, as overlays are supported with `clang-cl`, as it supports modules. 
 
 ```
  -DCMAKE_C_COMPILER="<path-to-llvm-bin>/clang-cl.exe"^
  -DCMAKE_CXX_COMPILER="<path-to-llvm-bin>/bin/clang-cl.exe"^
  -DCMAKE_LINKER="<path-to-llvm-bin>/lld-link.exe"^
 ```
-
 
 ## Windows Subsystem for Linux (WSL)
 - Note that all compiled Swift binaries are only executable within Bash on Windows and are Ubuntu, not Windows, executables.

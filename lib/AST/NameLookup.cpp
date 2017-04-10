@@ -16,14 +16,13 @@
 
 #include "NameLookupImpl.h"
 #include "swift/AST/NameLookup.h"
-#include "swift/AST/AST.h"
+#include "swift/AST/ASTContext.h"
 #include "swift/AST/ASTScope.h"
 #include "swift/AST/ASTVisitor.h"
 #include "swift/AST/DebuggerClient.h"
 #include "swift/AST/LazyResolver.h"
 #include "swift/AST/Initializer.h"
 #include "swift/AST/ReferencedNameTracker.h"
-#include "swift/Basic/Fallthrough.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/Basic/STLExtras.h"
 #include "llvm/ADT/DenseMap.h"
@@ -576,13 +575,7 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
         // FIXME: We shouldn't need to compute a type to perform this lookup.
         Type lookupType = dc->getSelfTypeInContext();
 
-        // FIXME: Hack to deal with missing 'Self' archetypes.
-        if (!lookupType) {
-          if (auto proto = dc->getAsProtocolOrProtocolExtensionContext())
-            lookupType = proto->getDeclaredType();
-        }
-
-        if (!lookupType || lookupType->hasError()) continue;
+        if (lookupType->hasError()) continue;
 
         // Perform lookup into the type.
         NLOptions options = NL_UnqualifiedDefault;
@@ -610,9 +603,10 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
           // Predicate that determines whether a lookup result should
           // be unavailable except as a last-ditch effort.
           auto unavailableLookupResult =
-            [&](const UnqualifiedLookupResult &result) {
+              [&](const UnqualifiedLookupResult &result) {
+            auto &effectiveVersion = Ctx.LangOpts.EffectiveLanguageVersion;
             return result.getValueDecl()->getAttrs()
-                     .isUnavailableInSwiftVersion();
+                .isUnavailableInSwiftVersion(effectiveVersion);
           };
 
           // If all of the results we found are unavailable, keep looking.
@@ -686,12 +680,6 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
 
           if (AFD->getDeclContext()->isTypeContext()) {
             ExtendedType = AFD->getDeclContext()->getSelfTypeInContext();
-            // FIXME: Hack to deal with missing 'Self' archetypes.
-            if (!ExtendedType)
-              if (auto *PD = AFD->getDeclContext()
-                      ->getAsProtocolOrProtocolExtensionContext())
-                ExtendedType = PD->getDeclaredType();
-
             BaseDecl = AFD->getImplicitSelfDecl();
             MetaBaseDecl = AFD->getDeclContext()
                 ->getAsNominalTypeOrNominalTypeExtensionContext();
@@ -712,6 +700,8 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
 
           // Look in the generic parameters after checking our local declaration.
           GenericParams = AFD->getGenericParams();
+        } else if (auto *SD = dyn_cast<SubscriptDecl>(DC)) {
+          GenericParams = SD->getGenericParams();
         } else if (auto *ACE = dyn_cast<AbstractClosureExpr>(DC)) {
           // Look for local variables; normally, the parser resolves these
           // for us, but it can't do the right thing inside local types.
@@ -780,8 +770,8 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
           if (IgnoreAccessControl)
             options |= NL_IgnoreAccessibility;
 
-          if (!ExtendedType)
-            ExtendedType = ErrorType::get(Ctx);
+          if (ExtendedType->hasError())
+            continue;
 
           SmallVector<ValueDecl *, 4> Lookup;
           DC->lookupQualified(ExtendedType, Name, options, TypeResolver, Lookup);
@@ -824,8 +814,9 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             // be unavailable except as a last-ditch effort.
             auto unavailableLookupResult =
               [&](const UnqualifiedLookupResult &result) {
+              auto &effectiveVersion = Ctx.LangOpts.EffectiveLanguageVersion;
               return result.getValueDecl()->getAttrs()
-                       .isUnavailableInSwiftVersion();
+                  .isUnavailableInSwiftVersion(effectiveVersion);
             };
 
             // If all of the results we found are unavailable, keep looking.
@@ -848,6 +839,8 @@ UnqualifiedLookup::UnqualifiedLookup(DeclName Name, DeclContext *DC,
             dcGenericParams = nominal->getGenericParams();
           else if (auto ext = dyn_cast<ExtensionDecl>(DC))
             dcGenericParams = ext->getGenericParams();
+          else if (auto subscript = dyn_cast<SubscriptDecl>(DC))
+            dcGenericParams = subscript->getGenericParams();
 
           while (dcGenericParams) {
             namelookup::FindLocalVal localVal(SM, Loc, Consumer);
@@ -977,9 +970,6 @@ public:
   /// Create a new member lookup table.
   explicit MemberLookupTable(ASTContext &ctx);
 
-  /// Destroy the lookup table.
-  void destroy();
-
   /// Update a lookup table with members from newly-added extensions.
   void updateLookupTable(NominalTypeDecl *nominal);
 
@@ -1036,10 +1026,6 @@ class ClassDecl::ObjCMethodLookupTable
                                 StoredObjCMethods>
 {
 public:
-  void destroy() {
-    this->~ObjCMethodLookupTable();
-  }
-
   // Only allow allocation of member lookup tables using the allocator in
   // ASTContext or by doing a placement new.
   void *operator new(size_t Bytes, ASTContext &C,
@@ -1056,7 +1042,7 @@ MemberLookupTable::MemberLookupTable(ASTContext &ctx) {
   // Register a cleanup with the ASTContext to call the lookup table
   // destructor.
   ctx.addCleanup([this]() {
-    this->destroy();
+    this->~MemberLookupTable();
   });
 }
 
@@ -1124,10 +1110,6 @@ void MemberLookupTable::updateLookupTable(NominalTypeDecl *nominal) {
   }
 }
 
-void MemberLookupTable::destroy() {
-  this->~MemberLookupTable();
-}
-
 void NominalTypeDecl::addedMember(Decl *member) {
   // If we have a lookup table, add the new member to it.
   if (LookupTable.getPointer()) {
@@ -1184,16 +1166,17 @@ void NominalTypeDecl::makeMemberVisible(ValueDecl *member) {
   LookupTable.getPointer()->addMember(member);
 }
 
-ArrayRef<ValueDecl *> NominalTypeDecl::lookupDirect(DeclName name,
-                                                    bool ignoreNewExtensions) {
+TinyPtrVector<ValueDecl *> NominalTypeDecl::lookupDirect(
+                                                  DeclName name,
+                                                  bool ignoreNewExtensions) {
+  (void)getMembers();
+
   // Make sure we have the complete list of members (in this nominal and in all
   // extensions).
   if (!ignoreNewExtensions) {
     for (auto E : getExtensions())
       (void)E->getMembers();
   }
-
-  (void)getMembers();
 
   prepareLookupTable(ignoreNewExtensions);
 
@@ -1203,7 +1186,7 @@ ArrayRef<ValueDecl *> NominalTypeDecl::lookupDirect(DeclName name,
     return { };
 
   // We found something; return it.
-  return { known->second.begin(), known->second.size() };
+  return known->second;
 }
 
 void ClassDecl::createObjCMethodLookup() {
@@ -1214,7 +1197,7 @@ void ClassDecl::createObjCMethodLookup() {
   // Register a cleanup with the ASTContext to call the lookup table
   // destructor.
   ctx.addCleanup([this]() {
-    this->ObjCMethodLookup->destroy();
+    this->ObjCMethodLookup->~ObjCMethodLookupTable();
   });
 }
 
@@ -1322,9 +1305,6 @@ bool DeclContext::lookupQualified(Type type,
   using namespace namelookup;
   assert(decls.empty() && "additive lookup not supported");
 
-  if (type->hasError())
-    return false;
-
   auto checkLookupCascading = [this, options]() -> Optional<bool> {
     switch (static_cast<unsigned>(options & NL_KnownDependencyMask)) {
     case 0:
@@ -1403,15 +1383,12 @@ bool DeclContext::lookupQualified(Type type,
   llvm::SmallPtrSet<NominalTypeDecl *, 4> visited;
 
   // Handle nominal types.
-  bool wantProtocolMembers = false;
+  bool wantProtocolMembers = (options & NL_ProtocolMembers);
   bool wantLookupInAllClasses = false;
   if (auto nominal = type->getAnyNominal()) {
     visited.insert(nominal);
     stack.push_back(nominal);
     
-    wantProtocolMembers = (options & NL_ProtocolMembers) &&
-                          !isa<ProtocolDecl>(nominal);
-
     // If we want dynamic lookup and we're searching in the
     // AnyObject protocol, note this for later.
     if (options & NL_DynamicLookup) {
@@ -1433,9 +1410,6 @@ bool DeclContext::lookupQualified(Type type,
       if (auto superclassDecl = superclassTy->getAnyNominal()) {
         if (visited.insert(superclassDecl).second) {
           stack.push_back(superclassDecl);
-
-          wantProtocolMembers = (options & NL_ProtocolMembers) &&
-                                !isa<ProtocolDecl>(superclassDecl);
         }
       }
     }
@@ -1443,17 +1417,16 @@ bool DeclContext::lookupQualified(Type type,
   // Handle protocol compositions.
   else if (auto compositionTy = type->getAs<ProtocolCompositionType>()) {
     SmallVector<ProtocolDecl *, 4> protocols;
-    if (compositionTy->isExistentialType(protocols)) {
-      for (auto proto : protocols) {
-        if (visited.insert(proto).second) {
-          stack.push_back(proto);
+    compositionTy->getExistentialTypeProtocols(protocols);
+    for (auto proto : protocols) {
+      if (visited.insert(proto).second) {
+        stack.push_back(proto);
 
-          // If we want dynamic lookup and this is the AnyObject
-          // protocol, note this for later.
-          if ((options & NL_DynamicLookup) &&
-              proto->isSpecificProtocol(KnownProtocolKind::AnyObject))
-            wantLookupInAllClasses = true;
-        }
+        // If we want dynamic lookup and this is the AnyObject
+        // protocol, note this for later.
+        if ((options & NL_DynamicLookup) &&
+            proto->isSpecificProtocol(KnownProtocolKind::AnyObject))
+          wantLookupInAllClasses = true;
       }
     }
   } else {

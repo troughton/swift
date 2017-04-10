@@ -55,6 +55,14 @@ FUNCTION_WITH_GLOBAL_SYMBOL_AND_IMPL(AllocBox, swift_allocBox,
          ARGS(TypeMetadataPtrTy),
          ATTRS(NoUnwind))
 
+//  BoxPair swift_makeBoxUnique(OpaqueValue *buffer, Metadata *type, size_t alignMask);
+FUNCTION(MakeBoxUnique,
+         swift_makeBoxUnique,
+         DefaultCC,
+         RETURNS(RefCountedPtrTy, OpaquePtrTy),
+         ARGS(OpaquePtrTy, TypeMetadataPtrTy, SizeTy),
+         ATTRS(NoUnwind, ZExt))
+
 FUNCTION(DeallocBox, swift_deallocBox, DefaultCC,
          RETURNS(VoidTy),
          ARGS(RefCountedPtrTy),
@@ -369,6 +377,20 @@ FUNCTION(NativeUnownedRelease, swift_unownedRelease, RegisterPreservingCC,
          ARGS(RefCountedPtrTy),
          ATTRS(NoUnwind))
 
+// void swift_nonatomic_unownedRetain(void *ptr);
+FUNCTION(NonAtomicNativeUnownedRetain, swift_nonatomic_unownedRetain,
+         RegisterPreservingCC,
+         RETURNS(VoidTy),
+         ARGS(RefCountedPtrTy),
+         ATTRS(NoUnwind))
+
+// void swift_nonatomic_unownedRelease(void *ptr);
+FUNCTION(NonAtomicNativeUnownedRelease, swift_nonatomic_unownedRelease,
+         RegisterPreservingCC,
+         RETURNS(VoidTy),
+         ARGS(RefCountedPtrTy),
+         ATTRS(NoUnwind))
+
 // void swift_unownedRetain_n(void *ptr, int32_t n);
 FUNCTION(UnownedRetainN, swift_unownedRetain_n,
          RegisterPreservingCC,
@@ -383,8 +405,29 @@ FUNCTION(UnownedReleaseN, swift_unownedRelease_n,
          ARGS(RefCountedPtrTy, Int32Ty),
          ATTRS(NoUnwind))
 
+// void swift_nonatomic_unownedRetain_n(void *ptr, int32_t n);
+FUNCTION(NonAtomicUnownedRetainN, swift_nonatomic_unownedRetain_n,
+         RegisterPreservingCC,
+         RETURNS(VoidTy),
+         ARGS(RefCountedPtrTy, Int32Ty),
+         ATTRS(NoUnwind))
+
+// void swift_nonatomic_unownedRelease_n(void *ptr, int32_t n);
+FUNCTION(NonAtomicUnownedReleaseN, swift_nonatomic_unownedRelease_n,
+         RegisterPreservingCC,
+         RETURNS(VoidTy),
+         ARGS(RefCountedPtrTy, Int32Ty),
+         ATTRS(NoUnwind))
+
 // void swift_unownedRetainStrong(void *ptr);
 FUNCTION(NativeStrongRetainUnowned, swift_unownedRetainStrong, RegisterPreservingCC,
+         RETURNS(VoidTy),
+         ARGS(RefCountedPtrTy),
+         ATTRS(NoUnwind))
+
+// void swift_nonatomic_unownedRetainStrong(void *ptr);
+FUNCTION(NonAtomicNativeStrongRetainUnowned, swift_nonatomic_unownedRetainStrong,
+         RegisterPreservingCC,
          RETURNS(VoidTy),
          ARGS(RefCountedPtrTy),
          ATTRS(NoUnwind))
@@ -392,6 +435,13 @@ FUNCTION(NativeStrongRetainUnowned, swift_unownedRetainStrong, RegisterPreservin
 // void swift_unownedRetainStrongAndRelease(void *ptr);
 FUNCTION(NativeStrongRetainAndUnownedRelease,
          swift_unownedRetainStrongAndRelease, RegisterPreservingCC,
+         RETURNS(VoidTy),
+         ARGS(RefCountedPtrTy),
+         ATTRS(NoUnwind))
+
+// void swift_nonatomic_unownedRetainStrongAndRelease(void *ptr);
+FUNCTION(NonAtomicNativeStrongRetainAndUnownedRelease,
+         swift_nonatomic_unownedRetainStrongAndRelease, RegisterPreservingCC,
          RETURNS(VoidTy),
          ARGS(RefCountedPtrTy),
          ATTRS(NoUnwind))
@@ -1137,6 +1187,13 @@ FUNCTION(GetErrorValue, swift_getErrorValue, C_CC,
          ARGS(ErrorPtrTy, Int8PtrPtrTy, OpenedErrorTriplePtrTy),
          ATTRS(NoUnwind))
 
+// void __tsan_write1(void *addr);
+// This is a Thread Sanitizer instrumentation entry point in compiler-rt.
+FUNCTION(TSanInoutAccess, __tsan_write1, C_CC,
+         RETURNS(VoidTy),
+         ARGS(Int8PtrTy),
+         ATTRS(NoUnwind))
+
 #if SWIFT_OBJC_INTEROP || !defined(SWIFT_RUNTIME_GENERATE_GLOBAL_SYMBOLS)
 
 // Put here all definitions of runtime functions which are:
@@ -1148,6 +1205,13 @@ FUNCTION(GetErrorValue, swift_getErrorValue, C_CC,
 FUNCTION(GetInitializedObjCClass, swift_getInitializedObjCClass, RegisterPreservingCC,
          RETURNS(ObjCClassPtrTy),
          ARGS(ObjCClassPtrTy),
+         ATTRS(NoUnwind))
+
+// void swift_objc_swift3ImplicitObjCEntrypoint(id self, SEL selector)
+FUNCTION(Swift3ImplicitObjCEntrypoint, swift_objc_swift3ImplicitObjCEntrypoint,
+         DefaultCC,
+         RETURNS(VoidTy),
+         ARGS(ObjCPtrTy, ObjCSELTy),
          ATTRS(NoUnwind))
 
 #endif

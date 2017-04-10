@@ -17,44 +17,46 @@ import os
 import pipes
 import platform
 import sys
+import time
 
-# FIXME: Instead of modifying the system path in order to enable imports from
-#        other directories, all Python modules related to the build script
-#        should be moved to the `swift_build_support` module. Remove "noqa"
-#        markers when this is fixed.
-#        For additional information, see: https://bugs.swift.org/browse/SR-237.
-sys.path.append(os.path.dirname(__file__))
-from SwiftBuildSupport import (
+import android.adb.commands
+
+from swift_build_support.swift_build_support import (
+    arguments,
+    debug,
+    diagnostics,
+    host,
+    migration,
+    products,
+    shell,
+    tar,
+    targets,
+    workspace
+)
+
+from swift_build_support.swift_build_support.SwiftBuildSupport import (
     HOME,
     SWIFT_BUILD_ROOT,
+    SWIFT_REPO_NAME,
     SWIFT_SOURCE_ROOT,
     get_all_preset_names,
-    get_preset_options,
-)  # noqa (E402 module level import not at top of file)
+    get_preset_options,  
+)
 
-sys.path.append(os.path.join(os.path.dirname(__file__), 'swift_build_support'))
-
-# E402 means module level import not at top of file
-from swift_build_support import arguments  # noqa (E402)
-from swift_build_support import diagnostics  # noqa (E402)
-from swift_build_support import host  # noqa (E402)
-from swift_build_support.toolchain import host_toolchain  # noqa (E402)
-import swift_build_support.debug      # noqa (E402)
-from swift_build_support import migration  # noqa (E402)
-from swift_build_support import products  # noqa (E402)
-from swift_build_support import shell  # noqa (E402)
-import swift_build_support.tar        # noqa (E402)
-import swift_build_support.targets    # noqa (E402)
-from swift_build_support.targets import StdlibDeploymentTarget  # noqa (E402)
-from swift_build_support.cmake import CMake  # noqa (E402)
-import swift_build_support.workspace    # noqa (E402)
-
-sys.path.append(os.path.join(os.path.dirname(__file__), 'android'))
-import adb.commands  # noqa (E402)
-
+from swift_build_support.swift_build_support.cmake import CMake
+from swift_build_support.swift_build_support.targets import \
+    StdlibDeploymentTarget
+from swift_build_support.swift_build_support.toolchain import host_toolchain
 
 build_script_impl = os.path.join(
-    SWIFT_SOURCE_ROOT, "swift", "utils", "build-script-impl")
+    SWIFT_SOURCE_ROOT, SWIFT_REPO_NAME, "utils", "build-script-impl")
+
+
+def exit_rejecting_arguments(message, parser=None):
+    print(message, file=sys.stderr)
+    if parser:
+        parser.print_usage(sys.stderr)
+    sys.exit(2)  # 2 is the same as `argparse` error exit code.
 
 
 def call_without_sleeping(command, env=None, dry_run=False, echo=False):
@@ -258,10 +260,6 @@ class BuildScriptInvocation(object):
             args.stdlib_deployment_targets = [
                 target.name for target in stdlib_targets]
 
-        # Propagate the default build variant.
-        if args.cmark_build_variant is None:
-            args.cmark_build_variant = args.build_variant
-
         if args.llvm_build_variant is None:
             args.llvm_build_variant = args.build_variant
 
@@ -270,6 +268,9 @@ class BuildScriptInvocation(object):
 
         if args.swift_stdlib_build_variant is None:
             args.swift_stdlib_build_variant = args.build_variant
+
+        if args.cmark_build_variant is None:
+            args.cmark_build_variant = args.swift_build_variant
 
         if args.lldb_build_variant is None:
             args.lldb_build_variant = args.build_variant
@@ -303,6 +304,22 @@ class BuildScriptInvocation(object):
         # Set the default CMake generator.
         if args.cmake_generator is None:
             args.cmake_generator = "Ninja"
+
+        # --ios-all etc are not supported by open-source Swift.
+        if args.ios_all:
+            exit_rejecting_arguments("error: --ios-all is unavailable in " +
+                                     "open-source Swift.\nUse --ios to " +
+                                     "skip iOS device tests.")
+
+        if args.tvos_all:
+            exit_rejecting_arguments("error: --tvos-all is unavailable in " +
+                                     "open-source Swift.\nUse --tvos to " +
+                                     "skip tvOS device tests.")
+
+        if args.watchos_all:
+            exit_rejecting_arguments("error: --watchos-all is unavailable " +
+                                     "in open-source Swift.\nUse --watchos " +
+                                     "to skip watchOS device tests.")
 
         ninja_required = (
             args.cmake_generator == 'Ninja' or args.build_foundation)
@@ -421,7 +438,7 @@ class BuildScriptInvocation(object):
 
         if args.build_subdir is None:
             args.build_subdir = \
-                swift_build_support.workspace.compute_build_subdir(args)
+                workspace.compute_build_subdir(args)
 
         # Add optional stdlib-deployment-targets
         if args.android:
@@ -444,7 +461,7 @@ class BuildScriptInvocation(object):
         self.toolchain = toolchain
         self.args = args
 
-        self.workspace = swift_build_support.workspace.Workspace(
+        self.workspace = workspace.Workspace(
             source_root=SWIFT_SOURCE_ROOT,
             build_root=os.path.join(SWIFT_BUILD_ROOT, args.build_subdir))
 
@@ -490,18 +507,27 @@ class BuildScriptInvocation(object):
             self.platforms_to_skip_test.add(StdlibDeploymentTarget.Cygwin)
         if args.skip_test_osx:
             self.platforms_to_skip_test.add(StdlibDeploymentTarget.OSX)
-        # iOS device tests are not supported.
-        self.platforms_to_skip_test.add(StdlibDeploymentTarget.iOS)
+        if args.skip_test_ios_host:
+            self.platforms_to_skip_test.add(StdlibDeploymentTarget.iOS)
+        else:
+            exit_rejecting_arguments("error: iOS device tests are not " +
+                                     "supported in open-source Swift.")
         if args.skip_test_ios_simulator:
             self.platforms_to_skip_test.add(
                 StdlibDeploymentTarget.iOSSimulator)
-        # tvOS device tests are not supported.
-        self.platforms_to_skip_test.add(StdlibDeploymentTarget.AppleTV)
+        if args.skip_test_tvos_host:
+            self.platforms_to_skip_test.add(StdlibDeploymentTarget.AppleTV)
+        else:
+            exit_rejecting_arguments("error: tvOS device tests are not " +
+                                     "supported in open-source Swift.")
         if args.skip_test_tvos_simulator:
             self.platforms_to_skip_test.add(
                 StdlibDeploymentTarget.AppleTVSimulator)
-        # watchOS device tests are not supported.
-        self.platforms_to_skip_test.add(StdlibDeploymentTarget.AppleWatch)
+        if args.skip_test_watchos_host:
+            self.platforms_to_skip_test.add(StdlibDeploymentTarget.AppleWatch)
+        else:
+            exit_rejecting_arguments("error: watchOS device tests are not " +
+                                     "supported in open-source Swift.")
         if args.skip_test_watchos_simulator:
             self.platforms_to_skip_test.add(
                 StdlibDeploymentTarget.AppleWatchSimulator)
@@ -608,10 +634,18 @@ class BuildScriptInvocation(object):
         # Compute any product specific cmake arguments.
         for product_class in self.compute_product_classes():
             product_name = product_class.product_name()
+            product_source_name = product_class.product_source_name()
+            source_dir = self.workspace.source_dir(product_source_name)
+
+            if not os.path.exists(source_dir):
+                diagnostics.fatal(
+                    "can't find source directory for %s "
+                    "(tried %s)" % (product_name, source_dir))
+
             product = product_class(
                 args=args,
                 toolchain=self.toolchain,
-                source_dir=self.workspace.source_dir(product_name),
+                source_dir=source_dir,
                 # FIXME: This is incorrect since it always assumes the host
                 # target I think?
                 build_dir=self.workspace.build_dir(
@@ -643,10 +677,11 @@ class BuildScriptInvocation(object):
                 "--distcc",
                 "--distcc-pump=%s" % toolchain.distcc_pump
             ]
+
+        # *NOTE* We use normal cmake to pass through tsan/ubsan options. We do
+        # NOT pass them to build-script-impl.
         if args.enable_asan:
             impl_args += ["--enable-asan"]
-        if args.enable_ubsan:
-            impl_args += ["--enable-ubsan"]
         if args.verbose_build:
             impl_args += ["--verbose-build"]
         if args.install_symroot:
@@ -778,8 +813,14 @@ class BuildScriptInvocation(object):
         if platform.system() == 'Darwin':
             impl_args += [
                 "--toolchain-prefix",
-                swift_build_support.targets.darwin_toolchain_prefix(
+                targets.darwin_toolchain_prefix(
                     args.install_prefix),
+                "--host-lipo", toolchain.lipo,
+            ]
+
+        if toolchain.libtool is not None:
+            impl_args += [
+                "--host-libtool", toolchain.libtool,
             ]
 
         # If we have extra_swift_args, combine all of them together and then
@@ -989,6 +1030,16 @@ class BuildScriptInvocation(object):
         execute_one_impl_action(name="merged-hosts-lipo")
 
 
+# Provide a short delay so accidentally invoked clean builds can be canceled.
+def clean_delay():
+    sys.stdout.write('Starting clean build in  ')
+    for i in range(3, 0, -1):
+        sys.stdout.write('\b%d' % i)
+        sys.stdout.flush()
+        time.sleep(1)
+    print('\b\b\b\bnow.')
+
+
 # Main entry point for the preset mode.
 def main_preset():
     parser = argparse.ArgumentParser(
@@ -1040,7 +1091,8 @@ def main_preset():
         args.preset_file_names = [
             os.path.join(HOME, ".swift-build-presets"),
             os.path.join(
-                SWIFT_SOURCE_ROOT, "swift", "utils", "build-presets.ini")
+                SWIFT_SOURCE_ROOT, SWIFT_REPO_NAME, "utils",
+                "build-presets.ini")
         ]
 
     if args.show_presets:
@@ -1773,6 +1825,11 @@ iterations with -O",
              "device",
         action="store_true")
     parser.add_argument(
+        "-I", "--ios-all",
+        help="also build for iOS, and allow all iOS tests",
+        action="store_true",
+        dest="ios_all")
+    parser.add_argument(
         "--skip-ios",
         help="set to skip everything iOS-related",
         dest="ios",
@@ -1784,6 +1841,11 @@ iterations with -O",
              "device",
         action=arguments.action.optional_bool)
     parser.add_argument(
+        "--tvos-all",
+        help="also build for tvOS, and allow all tvOS tests",
+        action=arguments.action.optional_bool,
+        dest="tvos_all")
+    parser.add_argument(
         "--skip-tvos",
         help="set to skip everything tvOS-related",
         dest="tvos",
@@ -1794,6 +1856,11 @@ iterations with -O",
         help="also build for watchOS, but disallow tests that require an "
              "watchOS device",
         action=arguments.action.optional_bool)
+    parser.add_argument(
+        "--watchos-all",
+        help="also build for Apple watchOS, and allow all Apple watchOS tests",
+        action=arguments.action.optional_bool,
+        dest="watchos_all")
     parser.add_argument(
         "--skip-watchos",
         help="set to skip everything watchOS-related",
@@ -1823,7 +1890,7 @@ iterations with -O",
         help="The installation prefix. This is where built Swift products "
              "(like bin, lib, and include) will be installed.",
         metavar="PATH",
-        default=swift_build_support.targets.install_prefix())
+        default=targets.install_prefix())
     parser.add_argument(
         "--install-symroot",
         help="the path to install debug symbols into",
@@ -1906,8 +1973,8 @@ iterations with -O",
         "--android-deploy-device-path",
         help="Path on an Android device to which built Swift stdlib products "
              "will be deployed. If running host tests, specify the '{}' "
-             "directory.".format(adb.commands.DEVICE_TEMP_DIR),
-        default=adb.commands.DEVICE_TEMP_DIR,
+             "directory.".format(android.adb.commands.DEVICE_TEMP_DIR),
+        default=android.adb.commands.DEVICE_TEMP_DIR,
         metavar="PATH")
 
     parser.add_argument(
@@ -1920,6 +1987,16 @@ iterations with -O",
         "--host-cxx",
         help="the absolute path to CXX, the 'clang++' compiler for the host "
              "platform. Default is auto detected.",
+        type=arguments.type.executable,
+        metavar="PATH")
+    parser.add_argument(
+        "--host-lipo",
+        help="the absolute path to lipo. Default is auto detected.",
+        type=arguments.type.executable,
+        metavar="PATH")
+    parser.add_argument(
+        "--host-libtool",
+        help="the absolute path to libtool. Default is auto detected.",
         type=arguments.type.executable,
         metavar="PATH")
     parser.add_argument(
@@ -2050,6 +2127,11 @@ iterations with -O",
                         help="Enable the SIL ownership model",
                         action='store_true')
 
+    parser.add_argument("--force-optimized-typechecker",
+                        help="Force the type checker to be built with "
+                        "optimization",
+                        action='store_true')
+
     parser.add_argument(
         # Explicitly unavailable options here.
         "--build-jobs",
@@ -2078,9 +2160,7 @@ iterations with -O",
             migration.check_impl_args(build_script_impl,
                                       args.build_script_impl_args)
         except ValueError as e:
-            parser.print_usage(sys.stderr)
-            print(e, file=sys.stderr)
-            sys.exit(2)  # 2 is the same as `argparse` error exit code.
+            exit_rejecting_arguments(e, parser)
 
         if '--check-args-only' in args.build_script_impl_args:
             return 0
@@ -2089,11 +2169,16 @@ iterations with -O",
 
     # Prepare and validate toolchain
     toolchain = host_toolchain(xcrun_toolchain=args.darwin_xcrun_toolchain)
+    os.environ['TOOLCHAINS'] = args.darwin_xcrun_toolchain
 
     if args.host_cc is not None:
         toolchain.cc = args.host_cc
     if args.host_cxx is not None:
         toolchain.cxx = args.host_cxx
+    if args.host_lipo is not None:
+        toolchain.lipo = args.host_lipo
+    if args.host_libtool is not None:
+        toolchain.libtool = args.host_libtool
     if args.cmake is not None:
         toolchain.cmake = args.cmake
 
@@ -2111,10 +2196,11 @@ iterations with -O",
 
     # Show SDKs, if requested.
     if args.show_sdks:
-        swift_build_support.debug.print_xcodebuild_versions()
+        debug.print_xcodebuild_versions()
 
     # Clean build directory if requested.
     if args.clean:
+        clean_delay()
         shell.rmtree(invocation.workspace.build_root)
 
     # Create build directory.
@@ -2132,8 +2218,7 @@ iterations with -O",
         print('-- Package file: {} --'.format(args.symbols_package))
 
         if platform.system() == 'Darwin':
-            prefix = swift_build_support.targets.darwin_toolchain_prefix(
-                args.install_prefix)
+            prefix = targets.darwin_toolchain_prefix(args.install_prefix)
         else:
             prefix = args.install_prefix
 
@@ -2142,8 +2227,8 @@ iterations with -O",
         # run `tar` without the leading '/' (we remove it ourselves to keep
         # `tar` from emitting a warning).
         with shell.pushd(args.install_symroot):
-            swift_build_support.tar.tar(source=prefix.lstrip('/'),
-                                        destination=args.symbols_package)
+            tar.tar(source=prefix.lstrip('/'),
+                    destination=args.symbols_package)
 
     return 0
 

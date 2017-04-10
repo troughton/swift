@@ -505,6 +505,17 @@ void MemoryToRegisters::removeSingleBlockAllocation(AllocStackInst *ASI) {
         break;
       }
     }
+
+    SILValue InstVal = Inst;
+    
+    // Remove dead address instructions that may be uses of the allocation.
+    while (InstVal->use_empty() && (isa<StructElementAddrInst>(InstVal) ||
+                                    isa<TupleElementAddrInst>(InstVal))) {
+      SILInstruction *I = cast<SILInstruction>(InstVal);
+      InstVal = I->getOperand(0);
+      I->eraseFromParent();
+      NumInstRemoved++;
+    }
   }
 }
 

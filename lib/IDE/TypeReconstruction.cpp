@@ -13,11 +13,9 @@
 #include "swift/IDE/Utils.h"
 #include "swift/AST/Decl.h"
 #include "swift/AST/GenericSignature.h"
-#include "swift/AST/Mangle.h"
-#include "swift/Basic/Mangler.h"
-#include "swift/Basic/ManglingMacros.h"
 #include "swift/AST/NameLookup.h"
-#include "swift/Basic/Demangle.h"
+#include "swift/Demangling/Demangle.h"
+#include "swift/Demangling/ManglingMacros.h"
 #include "swift/ClangImporter/ClangImporter.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/Strings.h"
@@ -31,16 +29,16 @@ using namespace swift;
 // FIXME: replace with std::string and StringRef as appropriate to each case.
 typedef const std::string ConstString;
 
-static std::string stringWithFormat(const std::string fmt_str, ...) {
-  int final_n, n = ((int)fmt_str.size()) * 2;
+static std::string stringWithFormat(const char *fmt_str, ...) {
+  int final_n, n = ((int)strlen(fmt_str)) * 2;
   std::string str;
   std::unique_ptr<char[]> formatted;
   va_list ap;
   while (1) {
     formatted.reset(new char[n]);
-    strcpy(&formatted[0], fmt_str.c_str());
+    strcpy(&formatted[0], fmt_str);
     va_start(ap, fmt_str);
-    final_n = vsnprintf(&formatted[0], n, fmt_str.c_str(), ap);
+    final_n = vsnprintf(&formatted[0], n, fmt_str, ap);
     va_end(ap);
     if (final_n < 0 || final_n >= n)
       n += abs(final_n - n + 1);
@@ -389,11 +387,6 @@ struct VisitNodeResult {
 
   bool HasSingleType() { return _types.size() == 1 && _types.front(); }
 
-  Type GetFirstType() {
-    // Must ensure there is a type prior to calling this
-    return _types.front();
-  }
-
   void Clear() {
     _module.Clear();
     _decls.clear();
@@ -514,7 +507,7 @@ static bool FindFirstNamedDeclWithKind(
       // If we didn't find any exact matches, accept any type aliases
       if (check_type_aliases) {
         for (auto decl : decls) {
-          if (decl->getKind() == DeclKind::TypeAlias) {
+          if (isa<TypeAliasDecl>(decl)) {
             result._decls.assign(1, decl);
             if (decl->hasInterfaceType()) {
               result._types.assign(1, decl->getInterfaceType());
@@ -636,19 +629,6 @@ FindNamedDecls(ASTContext *ast, const StringRef &name, VisitNodeResult &result,
   return false;
 }
 
-static const char *
-SwiftDemangleNodeKindToCString(const Demangle::Node::Kind node_kind) {
-#define NODE(e)                                                                \
-  case Demangle::Node::Kind::e:                                                \
-    return #e;
-
-  switch (node_kind) {
-#include "swift/Basic/DemangleNodes.def"
-  }
-  return "Demangle::Node::Kind::???";
-#undef NODE
-}
-
 static DeclKind GetKindAsDeclKind(Demangle::Node::Kind node_kind) {
   switch (node_kind) {
   case Demangle::Node::Kind::TypeAlias:
@@ -667,7 +647,7 @@ static DeclKind GetKindAsDeclKind(Demangle::Node::Kind node_kind) {
     return DeclKind::Protocol;
   default:
     llvm_unreachable("Missing alias");
-    // FIXME: can we 'log' SwiftDemangleNodeKindToCString(node_kind))
+    // FIXME: can we 'log' getNodeKindString(node_kind))
   }
 }
 
@@ -719,42 +699,6 @@ static void VisitNodeAddressor(
   result._types.push_back(swift_can_func_type.getPointer());
 }
 
-static void VisitNodeArchetype(
-    ASTContext *ast, std::vector<Demangle::NodePointer> &nodes,
-    Demangle::NodePointer &cur_node, VisitNodeResult &result,
-    const VisitNodeResult &generic_context) { // set by GenericType case
-  const StringRef &archetype_name(cur_node->getText());
-  VisitNodeResult protocol_list;
-  for (Demangle::Node::iterator pos = cur_node->begin(), end = cur_node->end();
-       pos != end; ++pos) {
-    const Demangle::Node::Kind child_node_kind = (*pos)->getKind();
-    switch (child_node_kind) {
-    case Demangle::Node::Kind::ProtocolList:
-      nodes.push_back(*pos);
-      VisitNode(ast, nodes, protocol_list, generic_context);
-      break;
-    default:
-      result._error =
-          stringWithFormat("%s encountered in generics children",
-                           SwiftDemangleNodeKindToCString(child_node_kind));
-      break;
-    }
-  }
-
-  SmallVector<ProtocolDecl *, 1> conforms_to;
-  if (protocol_list.HasSingleType()) {
-    (void)protocol_list.GetFirstType()->isExistentialType(conforms_to);
-  }
-
-  if (ast) {
-    result._types.push_back(ArchetypeType::getNew(
-        *ast, nullptr, ast->getIdentifier(archetype_name), conforms_to,
-        Type(), LayoutConstraint()));
-  } else {
-    result._error = "invalid ASTContext";
-  }
-}
-
 static void VisitNodeAssociatedTypeRef(
     ASTContext *ast, std::vector<Demangle::NodePointer> &nodes,
     Demangle::NodePointer &cur_node, VisitNodeResult &result,
@@ -785,7 +729,8 @@ static void VisitNodeAssociatedTypeRef(
   }
   result._types.clear();
   result._error = stringWithFormat(
-      "unable to find associated type %s in context", ident->getText().c_str());
+      "unable to find associated type %s in context",
+      ident->getText().str().c_str());
 }
 
 static void VisitNodeBoundGeneric(
@@ -1066,7 +1011,7 @@ static void VisitNodeExplicitClosure(
     default:
       result._error =
           stringWithFormat("%s encountered in ExplicitClosure children",
-                           SwiftDemangleNodeKindToCString(child_node_kind));
+                      Demangle::getNodeKindString(child_node_kind));
       break;
     case Demangle::Node::Kind::Module:
       nodes.push_back((*pos));
@@ -1110,7 +1055,7 @@ static void VisitNodeExtension(
     default:
       result._error =
           stringWithFormat("%s encountered in extension children",
-                           SwiftDemangleNodeKindToCString(child_node_kind));
+                      Demangle::getNodeKindString(child_node_kind));
       break;
 
     case Demangle::Node::Kind::Module:
@@ -1203,7 +1148,7 @@ static void VisitNodeFunction(
     default:
       result._error =
           stringWithFormat("%s encountered in function children",
-                           SwiftDemangleNodeKindToCString(child_node_kind));
+                    Demangle::getNodeKindString(child_node_kind));
       break;
 
     // TODO: any other possible containers?
@@ -1253,7 +1198,7 @@ static void VisitNodeFunction(
       if (decl_scope_result._decls.size() == 0) {
         result._error = stringWithFormat(
             "demangled identifier %s could not be found by name lookup",
-            (*pos)->getText().c_str());
+            (*pos)->getText().str().c_str());
         break;
       }
       std::copy(decl_scope_result._decls.begin(),
@@ -1478,7 +1423,7 @@ static void VisitNodeSetterGetter(
     default:
       result._error =
           stringWithFormat("%s encountered in generic type children",
-                           SwiftDemangleNodeKindToCString(child_node_kind));
+                      Demangle::getNodeKindString(child_node_kind));
       break;
     }
   }
@@ -1609,7 +1554,8 @@ static void VisitNodeSetterGetter(
       } else {
         result._error = stringWithFormat(
             "could not retrieve %s for variable %s",
-            SwiftDemangleNodeKindToCString(node_kind), identifier.c_str());
+            Demangle::getNodeKindString(node_kind),
+            identifier.c_str());
         return;
       }
     } else {
@@ -1632,7 +1578,7 @@ static void VisitNodeIdentifier(
     if (result._error.empty())
       result._error =
           stringWithFormat("unable to find Node::Kind::Identifier '%s'",
-                           cur_node->getText().c_str());
+                           cur_node->getText().str().c_str());
   }
 }
 
@@ -1641,8 +1587,7 @@ static void VisitNodeLocalDeclName(
     Demangle::NodePointer &cur_node, VisitNodeResult &result,
     const VisitNodeResult &generic_context) { // set by GenericType case
   Demangle::NodePointer parent_node = nodes[nodes.size() - 2];
-  std::string remangledNode = Demangle::mangleNode(parent_node,
-                                                 NewMangling::useNewMangling());
+  std::string remangledNode = Demangle::mangleNode(parent_node);
   TypeDecl *decl = result._module.lookupLocalType(remangledNode);
   if (!decl)
     result._error = stringWithFormat("unable to lookup local type %s",
@@ -1688,11 +1633,12 @@ static void VisitNodePrivateDeclName(
   }
 
   if (!FindFirstNamedDeclWithKind(ast, id_node->getText(), decl_kind, result,
-                                  priv_decl_id_node->getText())) {
+                                  priv_decl_id_node->getText().str())) {
     if (result._error.empty())
       result._error = stringWithFormat(
           "unable to find Node::Kind::PrivateDeclName '%s' in '%s'",
-          id_node->getText().c_str(), priv_decl_id_node->getText().c_str());
+          id_node->getText().str().c_str(),
+          priv_decl_id_node->getText().str().c_str());
   }
 }
 
@@ -1756,21 +1702,21 @@ static void VisitNodeModule(
     Demangle::NodePointer &cur_node, VisitNodeResult &result,
     const VisitNodeResult &generic_context) { // set by GenericType case
   std::string error;
-  const char *module_name = cur_node->getText().c_str();
-  if (!module_name || *module_name == '\0') {
+  StringRef module_name = cur_node->getText();
+  if (module_name.empty()) {
     result._error = stringWithFormat("error: empty module name.");
     return;
   }
 
-  result._module =
-      DeclsLookupSource::GetDeclsLookupSource(*ast, ConstString(module_name));
+  result._module = DeclsLookupSource::GetDeclsLookupSource(*ast,
+                                                ConstString(module_name.str()));
   if (!result._module) {
     result._error = stringWithFormat("unable to load module '%s' (%s)",
-                                     module_name, error.data());
+                                     module_name.str().c_str(), error.data());
   }
 }
 
-static void VisitNodeNonVariadicTuple(
+static void VisitNodeTuple(
     ASTContext *ast, std::vector<Demangle::NodePointer> &nodes,
     Demangle::NodePointer &cur_node, VisitNodeResult &result,
     const VisitNodeResult &generic_context) { // set by GenericType case
@@ -1831,16 +1777,15 @@ static void VisitNodeQualifiedArchetype(
     Demangle::NodePointer &cur_node, VisitNodeResult &result,
     const VisitNodeResult &generic_context) { // set by GenericType case
   if (cur_node->begin() != cur_node->end()) {
-    Demangle::Node::iterator end = cur_node->end();
     VisitNodeResult type_result;
     uint64_t index = 0xFFFFFFFFFFFFFFFF;
-    for (Demangle::Node::iterator pos = cur_node->begin(); pos != end; ++pos) {
-      switch (pos->get()->getKind()) {
+    for (Demangle::NodePointer ChildNd : *cur_node) {
+      switch (ChildNd->getKind()) {
       case Demangle::Node::Kind::Number:
-        index = pos->get()->getIndex();
+        index = ChildNd->getIndex();
         break;
       case Demangle::Node::Kind::DeclContext:
-        nodes.push_back(*pos);
+        nodes.push_back(ChildNd);
         VisitNode(ast, nodes, type_result, generic_context);
         break;
       default:
@@ -1876,14 +1821,14 @@ static void VisitNodeTupleElement(
     ASTContext *ast, std::vector<Demangle::NodePointer> &nodes,
     Demangle::NodePointer &cur_node, VisitNodeResult &result,
     const VisitNodeResult &generic_context) { // set by GenericType case
-  const char *tuple_name = nullptr;
+  StringRef tuple_name;
   VisitNodeResult tuple_type_result;
   Demangle::Node::iterator end = cur_node->end();
   for (Demangle::Node::iterator pos = cur_node->begin(); pos != end; ++pos) {
     const Demangle::Node::Kind child_node_kind = (*pos)->getKind();
     switch (child_node_kind) {
     case Demangle::Node::Kind::TupleElementName:
-      tuple_name = (*pos)->getText().c_str();
+      tuple_name = (*pos)->getText();
       break;
     case Demangle::Node::Kind::Type:
       nodes.push_back((*pos)->getFirstChild());
@@ -1896,7 +1841,7 @@ static void VisitNodeTupleElement(
 
   if (tuple_type_result._error.empty() &&
       tuple_type_result._types.size() == 1) {
-    if (tuple_name)
+    if (!tuple_name.empty())
       result._tuple_type_element =
           TupleTypeElt(tuple_type_result._types.front().getPointer(),
                        ast->getIdentifier(tuple_name));
@@ -2017,10 +1962,6 @@ static void visitNodeImpl(
     VisitNodeAddressor(ast, nodes, node, result, genericContext);
     break;
 
-  case Demangle::Node::Kind::Archetype:
-    VisitNodeArchetype(ast, nodes, node, result, genericContext);
-    break;
-
   case Demangle::Node::Kind::ArgumentTuple:
     VisitFirstChildNode(ast, nodes, node, result, genericContext);
     break;
@@ -2119,8 +2060,8 @@ static void visitNodeImpl(
     VisitNodeModule(ast, nodes, node, result, genericContext);
     break;
 
-  case Demangle::Node::Kind::NonVariadicTuple:
-    VisitNodeNonVariadicTuple(ast, nodes, node, result, genericContext);
+  case Demangle::Node::Kind::Tuple:
+    VisitNodeTuple(ast, nodes, node, result, genericContext);
     break;
 
   case Demangle::Node::Kind::PrivateDeclName:
@@ -2184,8 +2125,7 @@ Decl *ide::getDeclFromUSR(ASTContext &context, StringRef USR,
   // This relies on USR generation being very close to symbol mangling; if we
   // need to support entities with customized USRs (e.g. extensions), we will
   // need to do something smarter here.
-  mangledName.replace(0, 2, NewMangling::useNewMangling() ?
-                             MANGLING_PREFIX_STR : "_T");
+  mangledName.replace(0, 2, MANGLING_PREFIX_STR);
 
   return getDeclFromMangledSymbolName(context, mangledName, error);
 }
@@ -2193,9 +2133,9 @@ Decl *ide::getDeclFromUSR(ASTContext &context, StringRef USR,
 Decl *ide::getDeclFromMangledSymbolName(ASTContext &context,
                                         StringRef mangledName,
                                         std::string &error) {
+  Demangle::Context DemangleCtx;
   std::vector<Demangle::NodePointer> nodes;
-  nodes.push_back(
-      Demangle::demangleSymbolAsNode(mangledName.data(), mangledName.size()));
+  nodes.push_back(DemangleCtx.demangleSymbolAsNode(mangledName));
   VisitNodeResult emptyGenericContext;
   VisitNodeResult result;
   VisitNode(&context, nodes, result, emptyGenericContext);
@@ -2213,9 +2153,9 @@ Decl *ide::getDeclFromMangledSymbolName(ASTContext &context,
 Type ide::getTypeFromMangledTypename(ASTContext &Ctx,
                                      StringRef mangledName,
                                      std::string &error) {
+  Demangle::Context DemangleCtx;
   std::vector<Demangle::NodePointer> nodes;
-  nodes.push_back(
-      Demangle::demangleTypeAsNode(mangledName.data(), mangledName.size()));
+  nodes.push_back(DemangleCtx.demangleTypeAsNode(mangledName));
   VisitNodeResult empty_generic_context;
   VisitNodeResult result;
 
@@ -2234,9 +2174,9 @@ Type ide::getTypeFromMangledTypename(ASTContext &Ctx,
 Type ide::getTypeFromMangledSymbolname(ASTContext &Ctx,
                                        StringRef mangledName,
                                        std::string &error) {
+  Demangle::Context DemangleCtx;
   std::vector<Demangle::NodePointer> nodes;
-  nodes.push_back(
-      Demangle::demangleSymbolAsNode(mangledName.data(), mangledName.size()));
+  nodes.push_back(DemangleCtx.demangleSymbolAsNode(mangledName));
   VisitNodeResult empty_generic_context;
   VisitNodeResult result;
 

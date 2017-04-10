@@ -11,7 +11,7 @@ import def_global
 let InternalConst = 42
 // CHECK-NOT: [global_init]
 // CHECK: // global_init_attribute.InternalConst.unsafeMutableAddressor : Swift.Int
-// CHECK-NEXT: sil hidden [global_init] @_TF21global_init_attributeau13InternalConstSi
+// CHECK-NEXT: sil hidden [global_init] @_T021global_init_attribute13InternalConstSifau
 
 func foo() -> Int {
   return ExportedVar
@@ -23,10 +23,10 @@ func bar(i: Int) {
 
 // CHECK-NOT: [global_init]
 // CHECK: // def_global.ExportedVar.unsafeMutableAddressor : Swift.Int
-// CHECK-NEXT: sil [global_init] @_TF10def_globalau11ExportedVarSi
+// CHECK-NEXT: sil [global_init] @_T010def_global11ExportedVarSifau
 
 var InternalFoo = foo()
 
 // CHECK-NOT: [global_init]
 // CHECK: // global_init_attribute.InternalFoo.unsafeMutableAddressor : Swift.Int
-// CHECK-NEXT: sil hidden [global_init] @_TF21global_init_attributeau11InternalFooSi
+// CHECK-NEXT: sil hidden [global_init] @_T021global_init_attribute11InternalFooSifau

@@ -14,10 +14,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "swift/AST/AST.h"
-#include "swift/AST/ArchetypeBuilder.h"
+#include "swift/AST/GenericSignatureBuilder.h"
 #include "swift/Basic/LLVMContext.h"
+#include "swift/AST/ASTContext.h"
 #include "swift/AST/Builtins.h"
+#include "swift/AST/Module.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -472,14 +474,18 @@ namespace {
       TheGenericParamList = getGenericParams(ctx, numGenericParams,
                                              GenericTypeParams);
 
-      ArchetypeBuilder Builder(ctx,
+      GenericSignatureBuilder Builder(ctx,
                                LookUpConformanceInModule(ctx.TheBuiltinModule));
-      for (auto gp : GenericTypeParams)
+      SmallVector<GenericTypeParamType *, 2> GenericTypeParamTypes;
+      for (auto gp : GenericTypeParams) {
         Builder.addGenericParameter(gp);
+        GenericTypeParamTypes.push_back(
+          gp->getDeclaredInterfaceType()->castTo<GenericTypeParamType>());
+      }
 
-      Builder.finalize(SourceLoc());
-      auto sig = Builder.getGenericSignature();
-      GenericEnv = Builder.getGenericEnvironment(sig);
+      Builder.finalize(SourceLoc(), GenericTypeParamTypes);
+      GenericEnv = Builder.getGenericSignature()->createGenericEnvironment(
+                                                        *ctx.TheBuiltinModule);
     }
 
     template <class G>
@@ -808,6 +814,7 @@ static ValueDecl *getNativeObjectCast(ASTContext &Context, Identifier Id,
 
   BuiltinGenericSignatureBuilder builder(Context);
   if (BV == BuiltinValueKind::CastToNativeObject ||
+      BV == BuiltinValueKind::UnsafeCastToNativeObject ||
       BV == BuiltinValueKind::CastToUnknownObject ||
       BV == BuiltinValueKind::BridgeToRawPointer) {
     builder.addParameter(makeGenericParam());
@@ -907,6 +914,14 @@ static ValueDecl *getGetObjCTypeEncodingOperation(ASTContext &Context,
   BuiltinGenericSignatureBuilder builder(Context);
   builder.addParameter(makeMetatype(makeGenericParam()));
   builder.setResult(makeConcrete(Context.TheRawPointerType));
+  return builder.build(Id);
+}
+
+static ValueDecl *getTSanInoutAccess(ASTContext &Context, Identifier Id) {
+  // <T> T -> ()
+  BuiltinGenericSignatureBuilder builder(Context);
+  builder.addParameter(makeGenericParam());
+  builder.setResult(makeConcrete(Context.TheEmptyTupleType));
   return builder.build(Id);
 }
 
@@ -1084,6 +1099,8 @@ static const OverloadedBuiltinKind OverloadedBuiltinKinds[] = {
    OverloadedBuiltinKind::overload,
 #define BUILTIN_MISC_OPERATION(id, name, attrs, overload) \
    OverloadedBuiltinKind::overload,
+#define BUILTIN_SANITIZER_OPERATION(id, name, attrs) \
+  OverloadedBuiltinKind::None,
 #define BUILTIN_TYPE_TRAIT_OPERATION(id, name) \
    OverloadedBuiltinKind::Special,
 #define BUILTIN_RUNTIME_CALL(id, attrs, name) \
@@ -1588,6 +1605,7 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
       
   case BuiltinValueKind::Load:
   case BuiltinValueKind::LoadRaw:
+  case BuiltinValueKind::LoadInvariant:
   case BuiltinValueKind::Take:
     if (!Types.empty()) return nullptr;
     return getLoadOperation(Context, Id);
@@ -1644,6 +1662,7 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
     return getDeallocOperation(Context, Id);
 
   case BuiltinValueKind::CastToNativeObject:
+  case BuiltinValueKind::UnsafeCastToNativeObject:
   case BuiltinValueKind::CastFromNativeObject:
   case BuiltinValueKind::CastToUnknownObject:
   case BuiltinValueKind::CastFromUnknownObject:
@@ -1740,6 +1759,12 @@ ValueDecl *swift::getBuiltinValueDecl(ASTContext &Context, Identifier Id) {
 
   case BuiltinValueKind::GetObjCTypeEncoding:
     return getGetObjCTypeEncodingOperation(Context, Id);
+
+  case BuiltinValueKind::TSanInoutAccess:
+    return getTSanInoutAccess(Context, Id);
+
+  case BuiltinValueKind::Swift3ImplicitObjCEntrypoint:
+    return getBuiltinFunction(Id, {}, TupleType::getEmpty(Context));
   }
 
   llvm_unreachable("bad builtin value!");

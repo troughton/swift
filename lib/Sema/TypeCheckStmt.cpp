@@ -17,11 +17,14 @@
 #include "TypeChecker.h"
 #include "MiscDiagnostics.h"
 #include "swift/Subsystems.h"
+#include "swift/AST/ASTPrinter.h"
 #include "swift/AST/ASTWalker.h"
 #include "swift/AST/ASTVisitor.h"
+#include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/Identifier.h"
 #include "swift/AST/Initializer.h"
 #include "swift/AST/NameLookup.h"
+#include "swift/AST/ParameterList.h"
 #include "swift/AST/PrettyStackTrace.h"
 #include "swift/Basic/Range.h"
 #include "swift/Basic/STLExtras.h"
@@ -29,11 +32,13 @@
 #include "swift/Basic/Statistic.h"
 #include "swift/Parse/Lexer.h"
 #include "swift/Parse/LocalContext.h"
+#include "swift/Syntax/TokenKinds.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/Timer.h"
@@ -191,6 +196,80 @@ namespace {
     }
   };
 } // end anonymous namespace
+
+/// If the pattern handles an enum element, remove the enum element from the
+/// given set. If seeing uncertain patterns, e.g. any pattern, return true;
+/// otherwise return false.
+static bool
+removedHandledEnumElements(Pattern *P,
+                           llvm::DenseSet<EnumElementDecl*> &UnhandledElements) {
+  if (auto *EEP = dyn_cast<EnumElementPattern>(P)) {
+    UnhandledElements.erase(EEP->getElementDecl());
+  } else if (auto *VP = dyn_cast<VarPattern>(P)) {
+    return removedHandledEnumElements(VP->getSubPattern(), UnhandledElements);
+  } else {
+    return true;
+  }
+  return false;
+};
+
+void swift::
+diagnoseMissingCases(ASTContext &Context, const SwitchStmt *SwitchS) {
+  bool Empty = SwitchS->getCases().empty();
+  SourceLoc StartLoc = SwitchS->getStartLoc();
+  SourceLoc EndLoc = SwitchS->getEndLoc();
+  StringRef Placeholder = getCodePlaceholder();
+  SmallString<32> Buffer;
+  llvm::raw_svector_ostream OS(Buffer);
+
+  bool InEditor = Context.LangOpts.DiagnosticsEditorMode;
+
+  auto DefaultDiag = [&]() {
+    OS << tok::kw_default << ": " << Placeholder << "\n";
+    Context.Diags.diagnose(StartLoc, Empty ? diag::empty_switch_stmt :
+      diag::non_exhaustive_switch, InEditor, true).fixItInsert(EndLoc,
+                                                               Buffer.str());
+  };
+  // To find the subject enum decl for this switch statement.
+  EnumDecl *SubjectED = nullptr;
+  if (auto SubjectTy = SwitchS->getSubjectExpr()->getType()) {
+    if (auto *ND = SubjectTy->getAnyNominal()) {
+      SubjectED = ND->getAsEnumOrEnumExtensionContext();
+    }
+  }
+
+  // The switch is not about an enum decl, add "default:" instead.
+  if (!SubjectED) {
+    DefaultDiag();
+    return;
+  }
+
+  // Assume enum elements are not handled in the switch statement.
+  llvm::DenseSet<EnumElementDecl*> UnhandledElements;
+
+  SubjectED->getAllElements(UnhandledElements);
+  for (auto Current : SwitchS->getCases()) {
+    // For each handled enum element, remove it from the bucket.
+    for (auto Item : Current->getCaseLabelItems()) {
+      if (removedHandledEnumElements(Item.getPattern(), UnhandledElements)) {
+        DefaultDiag();
+        return;
+      }
+    }
+  }
+
+  // No unhandled cases, so we are not sure the exact case to add, fall back to
+  // default instead.
+  if (UnhandledElements.empty()) {
+    DefaultDiag();
+    return;
+  }
+
+  printEnumElmentsAsCases(UnhandledElements, OS);
+  Context.Diags.diagnose(StartLoc, Empty ? diag::empty_switch_stmt :
+    diag::non_exhaustive_switch, InEditor, false).fixItInsert(EndLoc,
+                                                              Buffer.str());
+}
 
 static void setAutoClosureDiscriminators(DeclContext *DC, Stmt *S) {
   S->walk(ContextualizeClosures(DC));
@@ -861,6 +940,9 @@ public:
     AddSwitchNest switchNest(*this);
     AddLabeledStmt labelNest(*this, S);
 
+    // Reject switch statements with empty blocks.
+    if (S->getCases().empty())
+      diagnoseMissingCases(TC.Context, S);
     for (unsigned i = 0, e = S->getCases().size(); i < e; ++i) {
       auto *caseBlock = S->getCases()[i];
       // Fallthrough transfers control to the next case block. In the
@@ -1026,9 +1108,8 @@ static void diagnoseIgnoredLiteral(TypeChecker &TC, LiteralExpr *LE) {
       case MagicIdentifierLiteralExpr::Kind::Function: return "#function";
       case MagicIdentifierLiteralExpr::Kind::DSOHandle: return "#dsohandle";
       }
-    case ExprKind::NilLiteral:
-    case ExprKind::ObjectLiteral:
-      llvm_unreachable("Ignored nil/object literals should not typecheck");
+    case ExprKind::NilLiteral: return "nil";
+    case ExprKind::ObjectLiteral: return "object";
 
     // Define an unreachable case for all non-literal expressions.
     // This way, if a new literal is added in the future, the compiler
@@ -1155,6 +1236,8 @@ void TypeChecker::checkIgnoredExpr(Expr *E) {
         fn = applyFn->getFn();
       } else if (auto FVE = dyn_cast<ForceValueExpr>(fn)) {
         fn = FVE->getSubExpr();
+      } else if (auto dotSyntaxRef = dyn_cast<DotSyntaxBaseIgnoredExpr>(fn)) {
+        fn = dotSyntaxRef->getRHS();
       } else {
         break;
       }
@@ -1247,8 +1330,21 @@ Stmt *StmtChecker::visitBraceStmt(BraceStmt *BS) {
 
       bool hadTypeError = TC.typeCheckExpression(SubExpr, DC, TypeLoc(),
                                                  CTP_Unused, options);
-      if (isDiscarded && !hadTypeError)
+
+      // If a closure expression is unused, the user might have intended
+      // to write "do { ... }".
+      auto *CE = dyn_cast<ClosureExpr>(SubExpr);
+      if (CE || isa<CaptureListExpr>(SubExpr)) {
+        TC.diagnose(SubExpr->getLoc(), diag::expression_unused_closure);
+        
+        if (CE && CE->hasAnonymousClosureVars() &&
+            CE->getParameters()->size() == 0) {
+          TC.diagnose(CE->getStartLoc(), diag::brace_stmt_suggest_do)
+            .fixItInsert(CE->getStartLoc(), "do ");
+        }
+      } else if (isDiscarded && !hadTypeError)
         TC.checkIgnoredExpr(SubExpr);
+
       elem = SubExpr;
       continue;
     }
@@ -1301,10 +1397,14 @@ static void checkDefaultArguments(TypeChecker &tc,
         ->changeResilienceExpansion(expansion);
 
     // Type-check the initializer, then flag that we did so.
-    if (!tc.typeCheckExpression(e, initContext,
-                                TypeLoc::withoutLoc(param->getType()),
-                                CTP_DefaultParameter))
+    bool hadError = tc.typeCheckExpression(e, initContext,
+                                           TypeLoc::withoutLoc(param->getType()),
+                                           CTP_DefaultParameter);
+    if (!hadError) {
       param->setDefaultValue(e);
+    } else {
+      param->setDefaultValue(nullptr);
+    }
 
     tc.checkInitializerErrorHandling(initContext, e);
 
@@ -1316,6 +1416,8 @@ static void checkDefaultArguments(TypeChecker &tc,
 
 bool TypeChecker::typeCheckAbstractFunctionBodyUntil(AbstractFunctionDecl *AFD,
                                                      SourceLoc EndTypeCheckLoc) {
+  validateDecl(AFD);
+
   if (!AFD->getBody())
     return false;
 
@@ -1514,7 +1616,7 @@ bool TypeChecker::typeCheckConstructorBodyUntil(ConstructorDecl *ctor,
                  ctor->getDeclContext()->getDeclaredInterfaceType());
       }
 
-      SWIFT_FALLTHROUGH;
+      LLVM_FALLTHROUGH;
 
     case ConstructorDecl::BodyInitKind::None:
       wantSuperInitCall = false;
@@ -1534,9 +1636,9 @@ bool TypeChecker::typeCheckConstructorBodyUntil(ConstructorDecl *ctor,
       diagnose(initExpr->getLoc(), diag::delegation_here);
       ctor->setInitKind(CtorInitializerKind::Convenience);
     }
-  } else {
-    diagnoseResilientValueConstructor(ctor);
   }
+
+  diagnoseResilientConstructor(ctor);
 
   // If we want a super.init call...
   if (wantSuperInitCall) {
@@ -1609,4 +1711,5 @@ void TypeChecker::typeCheckTopLevelCodeDecl(TopLevelCodeDecl *TLCD) {
   StmtChecker(*this, TLCD).typeCheckStmt(Body);
   TLCD->setBody(Body);
   checkTopLevelErrorHandling(TLCD);
+  performTopLevelDeclDiagnostics(*this, TLCD);
 }

@@ -523,9 +523,9 @@ func testInOut(_ arg: inout Int) {
   takesExplicitInt(&x)
   takesInt(&x) // expected-error{{'&' used with non-inout argument of type 'Int'}}
   var y = &x // expected-error{{'&' can only appear immediately in a call argument list}} \
-             // expected-error {{type 'inout Int' of variable is not materializable}}
+             // expected-error {{variable has type 'inout Int' which includes nested inout parameters}}
   var z = &arg // expected-error{{'&' can only appear immediately in a call argument list}} \
-             // expected-error {{type 'inout Int' of variable is not materializable}}
+             // expected-error {{variable has type 'inout Int' which includes nested inout parameters}}
 
   takesExplicitInt(5) // expected-error {{cannot pass immutable value as inout argument: literals are not mutable}}
 }
@@ -810,7 +810,7 @@ func inoutTests(_ arr: inout Int) {
   (true ? &x : &y)  // expected-error 2 {{'&' can only appear immediately in a call argument list}}
   // expected-warning @-1 {{expression of type 'inout Int' is unused}}
   let a = (true ? &x : &y)  // expected-error 2 {{'&' can only appear immediately in a call argument list}}
-  // expected-error @-1 {{type 'inout Int' of variable is not materializable}}
+  // expected-error @-1 {{variable has type 'inout Int' which includes nested inout parameters}}
 
   inoutTests(true ? &x : &y);  // expected-error 2 {{'&' can only appear immediately in a call argument list}}
 
@@ -921,4 +921,25 @@ func se0101<P: Pse0101>(x: Cse0101<P>) {
   _ = alignof(Cse0101<P>.T.self) // expected-error {{'alignof' is unavailable: use MemoryLayout<T>.alignment instead.}} {{7-15=MemoryLayout<}} {{27-33=>.alignment}} {{none}}
   _ = strideof(P.Type.self) // expected-error {{'strideof' is unavailable: use MemoryLayout<T>.stride instead.}} {{7-16=MemoryLayout<}} {{22-28=>.stride}} {{none}}
   _ = sizeof(type(of: x)) // expected-error {{'sizeof' is unavailable: use MemoryLayout<T>.size instead.}} {{7-26=MemoryLayout<Cse0101<P>>.size}} {{none}}
+}
+
+// SR-3439 subscript with pound exprssions.
+Sr3439: do {
+  class B {
+    init() {}
+    subscript(x: Int) -> Int { return x }
+    subscript(x: String) -> String { return x }
+
+    func foo() {
+      _ = self[#line] // Ok.
+    }
+  }
+  class C : B {
+    func bar() {
+      _ = super[#file] // Ok.
+    }
+  }
+
+  let obj = C();
+  _ = obj[#column] // Ok.
 }

@@ -24,6 +24,12 @@ struct InternalStruct {}
 }
 public struct PublicStruct {
   public init() {}
+
+  @_inlineable public var storedProperty: Int
+  // expected-error@-1 {{'@_inlineable' attribute cannot be applied to stored properties}}
+
+  @_inlineable public lazy var lazyProperty: Int = 0
+  // expected-error@-1 {{'@_inlineable' attribute cannot be applied to stored properties}}
 }
 
 public struct Struct {
@@ -117,6 +123,7 @@ public struct Struct {
 
   @_inlineable
   func internalInlineableMethod() {
+  // expected-error@-2 {{'@_inlineable' attribute can only be applied to public declarations, but 'internalInlineableMethod' is internal}}
     struct Nested {}
     // OK
   }
@@ -217,32 +224,29 @@ extension VersionedProtocol {
   }
 }
 
-protocol InternalProtocol {
-  associatedtype T
-
-  func requirement() -> T
+enum InternalEnum {
+// expected-note@-1 2{{enum 'InternalEnum' is not '@_versioned' or public}}
+  case apple
+  case orange
 }
 
-extension InternalProtocol {
-  func internalMethod() {}
+@_inlineable public func usesInternalEnum() {
+  _ = InternalEnum.apple
+  // expected-error@-1 {{enum 'InternalEnum' is internal and cannot be referenced from an '@_inlineable' function}}
+  let _: InternalEnum = .orange
+  // expected-error@-1 {{enum 'InternalEnum' is internal and cannot be referenced from an '@_inlineable' function}}
+}
 
-  // FIXME: https://bugs.swift.org/browse/SR-3684
-  //
-  // This should either complain that the method cannot be '@_versioned' since
-  // we're inside an extension of an internal protocol, or if such methods are
-  // allowed, we should diagnose the reference to 'internalMethod()' from the
-  // body.
-  @_inlineable
-  @_versioned
-  func versionedMethod() -> T {
-    internalMethod()
-    return requirement()
-  }
+@_versioned enum VersionedEnum {
+  case apple
+  case orange
+  // FIXME: Should this be banned?
+  case pear(InternalEnum)
+  case persimmon(String)
+}
 
-  // Ditto, except s/@_versioned/public/.
-  @_inlineable
-  public func publicMethod() -> T {
-    internalMethod()
-    return requirement()
-  }
+@_inlineable public func usesVersionedEnum() {
+  _ = VersionedEnum.apple
+  let _: VersionedEnum = .orange
+  _ = VersionedEnum.persimmon
 }

@@ -149,6 +149,10 @@ set(SWIFT_TOOLS_ENABLE_LTO OFF CACHE STRING "Build Swift tools with LTO. One
 set(SWIFT_PARALLEL_LINK_JOBS "" CACHE STRING
   "Define the maximum number of linker jobs for swift.")
 
+option(SWIFT_FORCE_OPTIMIZED_TYPECHECKER "Override the optimization setting of
+  the type checker so that it always compiles with optimization. This eases
+  debugging after type checking occurs by speeding up type checking" FALSE)
+
 #
 # User-configurable Android specific options.
 #
@@ -266,6 +270,14 @@ option(SWIFT_STDLIB_ENABLE_RESILIENCE
     "Build the standard libraries and overlays with resilience enabled; see docs/LibraryEvolution.rst"
     FALSE)
 
+option(SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS
+    "Build the runtime with a copy-on-write implementation for opaque existentials"
+    TRUE)
+
+option(SWIFT_STDLIB_USE_NONATOMIC_RC
+    "Build the standard libraries and overlays with nonatomic reference count operations enabled"
+    FALSE)
+
 option(SWIFT_STDLIB_ENABLE_SIL_OWNERSHIP
   "Build the standard libraries and overlays with sil ownership enabled."
   FALSE)
@@ -318,13 +330,15 @@ endfunction()
 # We migth be using the wrong version of a command, so record them all.
 function(print_versions)
   find_version("cmake" "--version" TRUE)
-  find_version(${CMAKE_COMMAND} "--version" FALSE)
 
-  if(CMAKE_MAKE_PROGRAM MATCHES "ninja")
-    find_version("ninja" "--version" TRUE)
-    find_version(${CMAKE_MAKE_PROGRAM} "--version" FALSE)
-  elseif(CMAKE_MAKE_PROGRAM MATCHES "make")
-    find_version("make" "--version" TRUE)
+  message(STATUS "Finding version for: ${CMAKE_COMMAND}")
+  message(STATUS "Found version: ${CMAKE_VERSION}")
+  message(STATUS "")
+
+  get_filename_component(CMAKE_MAKE_PROGRAM_BN "${CMAKE_MAKE_PROGRAM}" NAME_WE)
+  if(${CMAKE_MAKE_PROGRAM_BN} STREQUAL "ninja" OR
+     ${CMAKE_MAKE_PROGRAM_BN} STREQUAL "make")
+    find_version(${CMAKE_MAKE_PROGRAM_BN} "--version" TRUE)
     find_version(${CMAKE_MAKE_PROGRAM} "--version" FALSE)
   endif()
 
@@ -333,11 +347,14 @@ function(print_versions)
     find_version("${SWIFT_PATH_TO_CMARK_BUILD}/src/cmark" "--version" FALSE)
   endif()
 
-  find_version(${CMAKE_C_COMPILER} "--version" FALSE)
-  find_version(${CMAKE_CXX_COMPILER} "--version" FALSE)
-endfunction()
+  message(STATUS "Finding version for: ${CMAKE_C_COMPILER}")
+  message(STATUS "Found version: ${CMAKE_C_COMPILER_VERSION}")
+  message(STATUS "")
 
-print_versions()
+  message(STATUS "Finding version for: ${CMAKE_CXX_COMPILER}")
+  message(STATUS "Found version: ${CMAKE_CXX_COMPILER_VERSION}")
+  message(STATUS "")
+endfunction()
 
 
 set(SWIFT_BUILT_STANDALONE FALSE)
@@ -356,13 +373,17 @@ if(CYGWIN AND POLICY CMP0054)
   cmake_policy(SET CMP0054 NEW)
 endif()
 
-if("${CMAKE_SYSTEM_NAME}" STREQUAL "")
-  message(FATAL_ERROR "CMAKE_SYSTEM_NAME is empty!")
-endif()
+precondition(CMAKE_SYSTEM_NAME)
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
   set(SWIFT_BUILD_SOURCEKIT_default TRUE)
+elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
+  if(EXISTS ${SWIFT_PATH_TO_LIBDISPATCH_SOURCE})
+    set(SWIFT_BUILD_SOURCEKIT_default TRUE)
+  else()
+    set(SWIFT_BUILD_SOURCEKIT_default FALSE)
+  endif()
 else()
-  set(SWIFT_BUILD_SOURCEKIT_default FALSE)
+    set(SWIFT_BUILD_SOURCEKIT_default FALSE)
 endif()
 option(SWIFT_BUILD_SOURCEKIT
     "Build SourceKit"
@@ -388,6 +409,9 @@ set(CMAKE_CXX_ARCHIVE_FINISH "")
 include(CheckCXXSourceRuns)
 include(CMakeParseArguments)
 include(CMakePushCheckState)
+
+print_versions()
+
 include(SwiftComponents)
 include(SwiftHandleGybSources)
 include(SwiftSetIfArchBitness)
@@ -400,16 +424,14 @@ include(SwiftList)
 # Configure swift include, install, build components.
 swift_configure_components()
 
-if("${CMAKE_VERSION}" VERSION_LESS "3.0")
-  set(SWIFT_CMAKE_HAS_GENERATOR_EXPRESSIONS FALSE)
-else()
-  set(SWIFT_CMAKE_HAS_GENERATOR_EXPRESSIONS TRUE)
-endif()
-
 # lipo is used to create universal binaries.
 if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
   include(SwiftDarwin)
-  find_toolchain_tool(LIPO "${SWIFT_DARWIN_XCRUN_TOOLCHAIN}" lipo)
+  if(SWIFT_LIPO)
+    set(LIPO ${SWIFT_LIPO})
+  else()
+    find_toolchain_tool(LIPO "${SWIFT_DARWIN_XCRUN_TOOLCHAIN}" lipo)
+  endif()
 endif()
 
 if("${SWIFT_NATIVE_LLVM_TOOLS_PATH}" STREQUAL "")
@@ -444,6 +466,9 @@ endif()
 
 set(SWIFT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(SWIFT_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+set(SWIFT_CMAKE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
+set(SWIFT_MAIN_INCLUDE_DIR "${SWIFT_SOURCE_DIR}/include")
+set(SWIFT_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/include")
 
 set(SWIFT_RUNTIME_OUTPUT_INTDIR "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/bin")
 set(SWIFT_LIBRARY_OUTPUT_INTDIR "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib")
@@ -464,8 +489,8 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 # We'll need this once we have generated headers
 include_directories(BEFORE
-  ${CMAKE_CURRENT_BINARY_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${SWIFT_MAIN_INCLUDE_DIR}
+  ${SWIFT_INCLUDE_DIR}
   )
 
 # A convenience pattern to match Darwin platforms. Example:
@@ -575,18 +600,6 @@ endif()
 # Configure SDKs.
 #
 
-function(is_sdk_requested name result_var_name)
-  if("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "${name}")
-    set("${result_var_name}" "TRUE" PARENT_SCOPE)
-  else()
-    if("${name}" IN_LIST SWIFT_SDKS)
-      set("${result_var_name}" "TRUE" PARENT_SCOPE)
-    else()
-      set("${result_var_name}" "FALSE" PARENT_SCOPE)
-    endif()
-  endif()
-endfunction()
-
 if(XCODE)
   # FIXME: Cannot cross-compile the standard library using Xcode.  Xcode
   # insists on passing -mmacosx-version-min to the compiler, and we need
@@ -667,7 +680,7 @@ elseif("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "WINDOWS")
 
   set(SWIFT_HOST_VARIANT "windows" CACHE STRING
       "Deployment OS for Swift host tools (the compiler) [windows].")
-  
+
   configure_sdk_windows(WINDOWS "Windows" "msvc" "${SWIFT_HOST_VARIANT_ARCH}")
   set(SWIFT_PRIMARY_VARIANT_SDK_default  "${SWIFT_HOST_VARIANT_SDK}")
   set(SWIFT_PRIMARY_VARIANT_ARCH_default "${SWIFT_HOST_VARIANT_ARCH}")
@@ -698,84 +711,7 @@ elseif("${SWIFT_HOST_VARIANT_SDK}" MATCHES "(OSX|IOS*|TVOS*|WATCHOS*)")
   message(STATUS "${xcode_version}")
   message(STATUS "")
 
-  is_sdk_requested(OSX swift_build_osx)
-  if(swift_build_osx)
-    configure_sdk_darwin(
-        OSX "OS X" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_OSX}"
-        macosx macosx macosx "x86_64")
-    configure_target_variant(OSX-DA "OS X Debug+Asserts"   OSX DA "Debug+Asserts")
-    configure_target_variant(OSX-RA "OS X Release+Asserts" OSX RA "Release+Asserts")
-    configure_target_variant(OSX-R  "OS X Release"         OSX R  "Release")
-  endif()
-
-  # Compatible cross-compile SDKS for Darwin OSes: IOS, IOS_SIMULATOR, TVOS,
-  #   TVOS_SIMULATOR, WATCHOS, WATCHOS_SIMULATOR (archs hardcoded below).
-
-  is_sdk_requested(IOS swift_build_ios)
-  if(swift_build_ios)
-    configure_sdk_darwin(
-        IOS "iOS" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_IOS}"
-        iphoneos ios ios "armv7;armv7s;arm64")
-    configure_target_variant(IOS-DA "iOS Debug+Asserts"   IOS DA "Debug+Asserts")
-    configure_target_variant(IOS-RA "iOS Release+Asserts" IOS RA "Release+Asserts")
-    configure_target_variant(IOS-R  "iOS Release"         IOS R "Release")
-  endif()
-
-  is_sdk_requested(IOS_SIMULATOR swift_build_ios_simulator)
-  if(swift_build_ios_simulator)
-    configure_sdk_darwin(
-        IOS_SIMULATOR "iOS Simulator" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_IOS}"
-        iphonesimulator ios-simulator ios "i386;x86_64")
-    configure_target_variant(
-        IOS_SIMULATOR-DA "iOS Debug+Asserts"   IOS_SIMULATOR DA "Debug+Asserts")
-    configure_target_variant(
-        IOS_SIMULATOR-RA "iOS Release+Asserts" IOS_SIMULATOR RA "Release+Asserts")
-    configure_target_variant(
-        IOS_SIMULATOR-R  "iOS Release"         IOS_SIMULATOR R "Release")
-  endif()
-
-  is_sdk_requested(TVOS swift_build_tvos)
-  if(swift_build_tvos)
-    configure_sdk_darwin(
-        TVOS "tvOS" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_TVOS}"
-        appletvos tvos tvos "arm64")
-    configure_target_variant(TVOS-DA "tvOS Debug+Asserts"   TVOS DA "Debug+Asserts")
-    configure_target_variant(TVOS-RA "tvOS Release+Asserts" TVOS RA "Release+Asserts")
-    configure_target_variant(TVOS-R  "tvOS Release"         TVOS R "Release")
-  endif()
-
-  is_sdk_requested(TVOS_SIMULATOR swift_build_tvos_simulator)
-  if(swift_build_tvos_simulator)
-    configure_sdk_darwin(
-        TVOS_SIMULATOR "tvOS Simulator" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_TVOS}"
-        appletvsimulator tvos-simulator tvos "x86_64")
-    configure_target_variant(
-      TVOS_SIMULATOR-DA "tvOS Debug+Asserts"   TVOS_SIMULATOR DA "Debug+Asserts")
-    configure_target_variant(
-      TVOS_SIMULATOR-RA "tvOS Release+Asserts" TVOS_SIMULATOR RA "Release+Asserts")
-    configure_target_variant(
-      TVOS_SIMULATOR-R  "tvOS Release"         TVOS_SIMULATOR R "Release")
-  endif()
-
-  is_sdk_requested(WATCHOS swift_build_watchos)
-  if(swift_build_watchos)
-    configure_sdk_darwin(
-        WATCHOS "watchOS" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_WATCHOS}"
-        watchos watchos watchos "armv7k")
-    configure_target_variant(WATCHOS-DA "watchOS Debug+Asserts"   WATCHOS DA "Debug+Asserts")
-    configure_target_variant(WATCHOS-RA "watchOS Release+Asserts" WATCHOS RA "Release+Asserts")
-    configure_target_variant(WATCHOS-R  "watchOS Release"         WATCHOS R "Release")
-  endif()
-
-  is_sdk_requested(WATCHOS_SIMULATOR swift_build_watchos_simulator)
-  if(swift_build_watchos_simulator)
-    configure_sdk_darwin(
-        WATCHOS_SIMULATOR "watchOS Simulator" "${SWIFT_DARWIN_DEPLOYMENT_VERSION_WATCHOS}"
-        watchsimulator watchos-simulator watchos "i386")
-    configure_target_variant(WATCHOS_SIMULATOR-DA "watchOS Debug+Asserts"   WATCHOS_SIMULATOR DA "Debug+Asserts")
-    configure_target_variant(WATCHOS_SIMULATOR-RA "watchOS Release+Asserts" WATCHOS_SIMULATOR RA "Release+Asserts")
-    configure_target_variant(WATCHOS_SIMULATOR-R  "watchOS Release"         WATCHOS_SIMULATOR R "Release")
-  endif()
+  include(DarwinSDKs)
 
   # FIXME: guess target variant based on the host.
   # if(SWIFT_HOST_VARIANT MATCHES "^macosx")
@@ -805,6 +741,21 @@ endif()
 # Should we cross-compile the standard library for Android?
 is_sdk_requested(ANDROID swift_build_android)
 if(swift_build_android AND NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
+  # Get the prebuilt suffix to create the correct toolchain path when using the NDK
+  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+    set(_swift_android_prebuilt_suffix "darwin-x86_64")
+  elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
+    set(_swift_android_prebuilt_suffix "linux-x86_64")
+  endif()
+
+  set(SWIFT_ANDROID_PREBUILT_PATH
+      "${SWIFT_ANDROID_NDK_PATH}/toolchains/arm-linux-androideabi-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${_swift_android_prebuilt_suffix}")
+  
+  # Resolve the correct linker based on the file name of CMAKE_LINKER (being 'ld' or 'ld.gold' the options)
+  get_filename_component(SWIFT_ANDROID_LINKER_NAME "${CMAKE_LINKER}" NAME)
+  set(SWIFT_SDK_ANDROID_ARCH_armv7_LINKER 
+      "${SWIFT_ANDROID_NDK_PATH}/toolchains/arm-linux-androideabi-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${_swift_android_prebuilt_suffix}/bin/arm-linux-androideabi-${SWIFT_ANDROID_LINKER_NAME}")
+
   configure_sdk_unix(ANDROID "Android" "android" "android" "armv7" "armv7-none-linux-androideabi" "${SWIFT_ANDROID_SDK_PATH}")
 
   if (NOT ("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin" OR "${CMAKE_SYSTEM_NAME}" STREQUAL "Linux"))
@@ -814,14 +765,6 @@ if(swift_build_android AND NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
     set(SWIFT_PRIMARY_VARIANT_SDK_default "ANDROID")
     set(SWIFT_PRIMARY_VARIANT_ARCH_default "armv7")
   endif()
-
-  if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
-    set(_swift_android_prebuilt_suffix "darwin-x86_64")
-  elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
-    set(_swift_android_prebuilt_suffix "linux-x86_64")
-  endif()
-  set(SWIFT_ANDROID_PREBUILT_PATH
-      "${SWIFT_ANDROID_NDK_PATH}/toolchains/arm-linux-androideabi-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${_swift_android_prebuilt_suffix}")
 endif()
 
 # Should we cross-compile the standard library for Windows?
@@ -836,21 +779,10 @@ endif()
 
 list_subtract("${SWIFT_SDKS}" "${SWIFT_CONFIGURED_SDKS}" unknown_sdks)
 
-if(NOT "${unknown_sdks}" STREQUAL "")
-  message(FATAL_ERROR "Unknown SDKs: ${unknown_sdks}")
-endif()
-
-if("${SWIFT_CONFIGURED_SDKS}" STREQUAL "")
-  message(FATAL_ERROR "No SDKs selected.")
-endif()
-
-if("${SWIFT_HOST_VARIANT_SDK}" STREQUAL "")
-  message(FATAL_ERROR "No SDK for host tools.")
-endif()
-
-if("${SWIFT_HOST_VARIANT_ARCH}" STREQUAL "")
-  message(FATAL_ERROR "No arch for host tools.")
-endif()
+precondition(unknown_sdks NEGATE MESSAGE "Unknown SDKs: ${unknown_sdks}")
+precondition(SWIFT_CONFIGURED_SDKS MESSAGE "No SDKs selected.")
+precondition(SWIFT_HOST_VARIANT_SDK MESSAGE "No SDK for host tools.")
+precondition(SWIFT_HOST_VARIANT_ARCH MESSAGE "No arch for host tools")
 
 set(SWIFT_PRIMARY_VARIANT_SUFFIX
     "-${SWIFT_SDK_${SWIFT_PRIMARY_VARIANT_SDK}_LIB_SUBDIR}-${SWIFT_PRIMARY_VARIANT_ARCH}")
@@ -861,8 +793,8 @@ foreach(sdk ${SWIFT_SDKS})
 endforeach()
 
 if(SWIFT_PARALLEL_LINK_JOBS)
-  if(CMAKE_VERSION VERSION_LESS 3.0 OR NOT CMAKE_MAKE_PROGRAM MATCHES "ninja")
-    message(WARNING "Job pooling is only available with Ninja generators and CMake 3.0 and later.")
+  if(NOT CMAKE_MAKE_PROGRAM MATCHES "ninja")
+    message(WARNING "Job pooling is only available with Ninja generators.")
   else()
     set_property(GLOBAL APPEND PROPERTY JOB_POOLS swift_link_job_pool=${SWIFT_PARALLEL_LINK_JOBS})
     set(CMAKE_JOB_POOL_LINK swift_link_job_pool)
@@ -898,6 +830,8 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND "${SWIFT_PATH_TO_LIBICU_BUILD}" S
   find_package(ICU REQUIRED COMPONENTS uc i18n)
 endif()
 
+find_package(PythonInterp REQUIRED)
+
 #
 # Find optional dependencies.
 #
@@ -905,19 +839,15 @@ endif()
 # Find libxml.
 # FIXME: unify with CLANG_HAVE_LIBXML, which is set in LLVM anyway.
 find_package(LibXml2)
-if(LIBXML2_FOUND)
-  set(SWIFT_HAVE_LIBXML 1)
-endif()
+option(SWIFT_HAVE_LIBXML
+    "Whether to build with libxml"
+    ${LIBXML2_FOUND})
 
 # You need libedit linked in order to check if you have el_wgets.
 cmake_push_check_state()
 list(APPEND CMAKE_REQUIRED_LIBRARIES "edit")
 check_symbol_exists(el_wgets "histedit.h" HAVE_EL_WGETS)
-check_symbol_exists(wcslcat wchar.h HAVE_WCSLCAT)
-# FIXME: UNICODE_LIBEDIT shouldn't need BSD's wcslcat function,
-#        rewrite the usages in terms of wcsncat to get the REPL
-#        building on linux.
-if(HAVE_EL_WGETS AND HAVE_WCSLCAT)
+if(HAVE_EL_WGETS)
   set(HAVE_UNICODE_LIBEDIT 1)
 endif()
 cmake_pop_check_state()
@@ -959,6 +889,8 @@ endif()
 if(SWIFT_INCLUDE_DOCS)
   add_subdirectory(docs)
 endif()
+
+add_subdirectory(cmake/modules)
 
 swift_install_in_component(license
   FILES "LICENSE.txt"

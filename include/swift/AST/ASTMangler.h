@@ -22,14 +22,7 @@ namespace swift {
 
 class AbstractClosureExpr;
 
-namespace NewMangling {
-
-/// Utility function which selects either the old or new mangling for a type.
-std::string mangleTypeForDebugger(Type Ty, const DeclContext *DC);
-
-/// Utility function which selects either the old or new mangling for a type and
-/// mangles the type as USR.
-std::string mangleTypeAsUSR(Type Ty);
+namespace Mangle {
 
 /// The mangler for AST declarations.
 class ASTMangler : public Mangler {
@@ -37,9 +30,10 @@ protected:
   CanGenericSignature CurGenericSignature;
   ModuleDecl *Mod = nullptr;
   const DeclContext *DeclCtx = nullptr;
+  GenericEnvironment *GenericEnv = nullptr;
 
   /// Optimize out protocol names if a type only conforms to one protocol.
-  bool OptimizeProtocolNames;
+  bool OptimizeProtocolNames = true;
 
   /// If enabled, Arche- and Alias types are mangled with context.
   bool DWARFMangling;
@@ -47,19 +41,14 @@ protected:
 public:
   enum class SymbolKind {
     Default,
-    VTableMethod,
     DynamicThunk,
     SwiftAsObjCThunk,
     ObjCAsSwiftThunk,
     DirectMethodReferenceThunk,
   };
 
-  ASTMangler(bool DWARFMangling = false,
-          bool usePunycode = true,
-          bool OptimizeProtocolNames = true)
-    : Mangler(usePunycode),
-      OptimizeProtocolNames(OptimizeProtocolNames),
-      DWARFMangling(DWARFMangling) {}
+  ASTMangler(bool DWARFMangling = false)
+    : DWARFMangling(DWARFMangling) {}
 
   std::string mangleClosureEntity(const AbstractClosureExpr *closure,
                                   SymbolKind SKind);
@@ -83,7 +72,7 @@ public:
                                    bool isStatic,
                                    SymbolKind SKind);
 
-  std::string mangleGlobalGetterEntity(ValueDecl *decl,
+  std::string mangleGlobalGetterEntity(const ValueDecl *decl,
                                        SymbolKind SKind = SymbolKind::Default);
 
   std::string mangleDefaultArgumentEntity(const DeclContext *func,
@@ -94,13 +83,20 @@ public:
 
   std::string mangleNominalType(const NominalTypeDecl *decl);
 
-  std::string mangleWitnessTable(NormalProtocolConformance *C);
+  std::string mangleVTableThunk(const FuncDecl *Base,
+                                const FuncDecl *Derived);
 
-  std::string mangleWitnessThunk(ProtocolConformance *Conformance,
-                                 ValueDecl *Requirement);
+  std::string mangleConstructorVTableThunk(const ConstructorDecl *Base,
+                                           const ConstructorDecl *Derived,
+                                           bool isAllocating);
 
-  std::string mangleClosureWitnessThunk(ProtocolConformance *Conformance,
-                                        AbstractClosureExpr *Closure);
+  std::string mangleWitnessTable(const NormalProtocolConformance *C);
+
+  std::string mangleWitnessThunk(const ProtocolConformance *Conformance,
+                                 const ValueDecl *Requirement);
+
+  std::string mangleClosureWitnessThunk(const ProtocolConformance *Conformance,
+                                        const AbstractClosureExpr *Closure);
 
   std::string mangleBehaviorInitThunk(const VarDecl *decl);
 
@@ -113,13 +109,25 @@ public:
                                              Type FromType, Type ToType,
                                              ModuleDecl *Module);
 
-  std::string mangleTypeForDebugger(Type decl, const DeclContext *DC);
+  std::string mangleTypeForDebugger(Type decl, const DeclContext *DC,
+                                    GenericEnvironment *GE);
 
-  std::string mangleTypeAsUSR(Type type);
+  std::string mangleDeclType(const ValueDecl *decl);
+  
+  std::string mangleObjCRuntimeName(const NominalTypeDecl *Nominal);
+
+  std::string mangleTypeAsUSR(Type type) {
+    return mangleTypeWithoutPrefix(type);
+  }
 
   std::string mangleTypeAsContextUSR(const NominalTypeDecl *type);
 
   std::string mangleDeclAsUSR(ValueDecl *Decl, StringRef USRPrefix);
+
+  std::string mangleAccessorEntityAsUSR(AccessorKind kind,
+                                        AddressorKind addressorKind,
+                                        const ValueDecl *decl,
+                                        StringRef USRPrefix);
 
 protected:
 
@@ -135,7 +143,7 @@ protected:
                                         bool &isAssocTypeAtDepth);
 
   void appendOpWithGenericParamIndex(StringRef,
-                                     GenericTypeParamType *paramTy);
+                                     const GenericTypeParamType *paramTy);
 
   void bindGenericParameters(const DeclContext *DC);
 
@@ -163,11 +171,11 @@ protected:
 
   void appendNominalType(const NominalTypeDecl *decl);
 
-  void appendFunctionType(AnyFunctionType *fn);
+  void appendFunctionType(AnyFunctionType *fn, bool forceSingleParam);
 
-  void appendFunctionSignature(AnyFunctionType *fn);
+  void appendFunctionSignature(AnyFunctionType *fn, bool forceSingleParam);
 
-  void appendParams(Type ParamsTy);
+  void appendParams(Type ParamsTy, bool forceSingleParam);
 
   void appendTypeList(Type listTy);
 
@@ -193,13 +201,13 @@ protected:
 
   void appendInitializerEntity(const VarDecl *var);
 
-  Type getDeclTypeForMangling(const ValueDecl *decl,
-                              ArrayRef<GenericTypeParamType *> &genericParams,
-                              unsigned &initialParamIndex,
-                              ArrayRef<Requirement> &requirements,
-                              SmallVectorImpl<Requirement> &requirementsBuf);
+  CanType getDeclTypeForMangling(const ValueDecl *decl,
+                                 ArrayRef<GenericTypeParamType *> &genericParams,
+                                 unsigned &initialParamIndex,
+                                 ArrayRef<Requirement> &requirements,
+                                 SmallVectorImpl<Requirement> &requirementsBuf);
 
-  void appendDeclType(const ValueDecl *decl);
+  void appendDeclType(const ValueDecl *decl, bool isFunctionMangling = false);
 
   bool tryAppendStandardSubstitution(const NominalTypeDecl *type);
 
@@ -220,10 +228,13 @@ protected:
 
   void appendOpParamForLayoutConstraint(LayoutConstraint Layout);
 
-  static bool checkGenericParamsOrder(ArrayRef<GenericTypeParamType *> params);
+  std::string mangleTypeWithoutPrefix(Type type) {
+    appendType(type);
+    return finalize();
+  }
 };
 
-} // end namespace NewMangling
+} // end namespace Mangle
 } // end namespace swift
 
 #endif // __SWIFT_AST_ASTMANGLER_H__

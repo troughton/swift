@@ -20,16 +20,18 @@
 #include "swift/Basic/SourceLoc.h"
 #include "swift/Basic/type_traits.h"
 #include "swift/AST/Decl.h"
-#include "swift/AST/Expr.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/AST/Type.h"
 #include "swift/AST/Types.h"
 #include "swift/AST/TypeLoc.h"
+#include "swift/AST/TypeAlignments.h"
 #include "swift/Basic/OptionSet.h"
 #include "llvm/Support/TrailingObjects.h"
 
 namespace swift {
   class ASTContext;
+  class Expr;
+  enum class CheckedCastKind : unsigned;
 
 /// PatternKind - The classification of different kinds of
 /// value-matching pattern.
@@ -447,7 +449,7 @@ class IsPattern : public Pattern {
 public:
   IsPattern(SourceLoc IsLoc, TypeLoc CastTy,
              Pattern *SubPattern,
-             CheckedCastKind Kind = CheckedCastKind::Unresolved,
+             CheckedCastKind Kind,
              Optional<bool> implicit = None)
     : Pattern(PatternKind::Is),
       IsLoc(IsLoc),
@@ -492,7 +494,7 @@ class EnumElementPattern : public Pattern {
   SourceLoc DotLoc;
   SourceLoc NameLoc;
   Identifier Name;
-  EnumElementDecl *ElementDecl;
+  PointerUnion<EnumElementDecl *, Expr*> ElementDeclOrUnresolvedOriginalExpr;
   Pattern /*nullable*/ *SubPattern;
   
 public:
@@ -501,9 +503,24 @@ public:
                      Pattern *SubPattern, Optional<bool> Implicit = None)
     : Pattern(PatternKind::EnumElement),
       ParentType(ParentType), DotLoc(DotLoc), NameLoc(NameLoc), Name(Name),
-      ElementDecl(Element), SubPattern(SubPattern) {
+      ElementDeclOrUnresolvedOriginalExpr(Element),
+      SubPattern(SubPattern) {
     if (Implicit.hasValue() && *Implicit)
       setImplicit();
+  }
+  
+  /// Create an unresolved EnumElementPattern for a `.foo` pattern relying on
+  /// contextual type.
+  EnumElementPattern(SourceLoc DotLoc,
+                     SourceLoc NameLoc,
+                     Identifier Name,
+                     Pattern *SubPattern,
+                     Expr *UnresolvedOriginalExpr)
+    : Pattern(PatternKind::EnumElement),
+      ParentType(), DotLoc(DotLoc), NameLoc(NameLoc), Name(Name),
+      ElementDeclOrUnresolvedOriginalExpr(UnresolvedOriginalExpr),
+      SubPattern(SubPattern) {
+    
   }
 
   bool hasSubPattern() const { return SubPattern; }
@@ -524,8 +541,19 @@ public:
   
   Identifier getName() const { return Name; }
   
-  EnumElementDecl *getElementDecl() const { return ElementDecl; }
-  void setElementDecl(EnumElementDecl *d) { ElementDecl = d; }
+  EnumElementDecl *getElementDecl() const {
+    return ElementDeclOrUnresolvedOriginalExpr.dyn_cast<EnumElementDecl*>();
+  }
+  void setElementDecl(EnumElementDecl *d) {
+    ElementDeclOrUnresolvedOriginalExpr = d;
+  }
+  
+  Expr *getUnresolvedOriginalExpr() const {
+    return ElementDeclOrUnresolvedOriginalExpr.get<Expr*>();
+  }
+  bool hasUnresolvedOriginalExpr() const {
+    return ElementDeclOrUnresolvedOriginalExpr.is<Expr*>();
+  }
   
   SourceLoc getNameLoc() const { return NameLoc; }
   SourceLoc getLoc() const { return NameLoc; }
@@ -632,13 +660,7 @@ class ExprPattern : public Pattern {
 public:
   /// Construct an ExprPattern.
   ExprPattern(Expr *e, bool isResolved, Expr *matchExpr, VarDecl *matchVar,
-              Optional<bool> implicit = None)
-    : Pattern(PatternKind::Expr), SubExprAndIsResolved(e, isResolved),
-      MatchExpr(matchExpr), MatchVar(matchVar) {
-    assert(!matchExpr || e->isImplicit() == matchExpr->isImplicit());
-    if (implicit.hasValue() ? *implicit : e->isImplicit())
-      setImplicit();
-  }
+              Optional<bool> implicit = None);
   
   /// Construct an unresolved ExprPattern.
   ExprPattern(Expr *e)
@@ -665,8 +687,8 @@ public:
     MatchVar = v;
   }
   
-  SourceLoc getLoc() const { return getSubExpr()->getLoc(); }
-  SourceRange getSourceRange() const { return getSubExpr()->getSourceRange(); }
+  SourceLoc getLoc() const;
+  SourceRange getSourceRange() const;
   
   /// True if pattern resolution has been applied to the subexpression.
   bool isResolved() const { return SubExprAndIsResolved.getInt(); }

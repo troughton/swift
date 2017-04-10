@@ -6,12 +6,12 @@ indirect enum TreeA<T> {
   case Branch(left: TreeA<T>, right: TreeA<T>)
 }
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum11TreeA_casesurFTx1lGOS_5TreeAx_1rGS0_x__T_ : $@convention(thin) <T> (@in T, @owned TreeA<T>, @owned TreeA<T>) -> () {
+// CHECK-LABEL: sil hidden @_T013indirect_enum11TreeA_casesyx_AA0C1AOyxG1lAE1rtlF : $@convention(thin) <T> (@in T, @owned TreeA<T>, @owned TreeA<T>) -> () {
 func TreeA_cases<T>(_ t: T, l: TreeA<T>, r: TreeA<T>) {
 // CHECK: bb0([[ARG1:%.*]] : $*T, [[ARG2:%.*]] : $TreeA<T>, [[ARG3:%.*]] : $TreeA<T>):
 // CHECK:         [[METATYPE:%.*]] = metatype $@thin TreeA<T>.Type
 // CHECK-NEXT:    [[NIL:%.*]] = enum $TreeA<T>, #TreeA.Nil!enumelt
-// CHECK-NEXT:    destroy_value [[NIL]]
+// CHECK-NOT:     destroy_value [[NIL]]
   let _ = TreeA<T>.Nil
 
 // CHECK-NEXT:    [[METATYPE:%.*]] = metatype $@thin TreeA<T>.Type
@@ -27,38 +27,44 @@ func TreeA_cases<T>(_ t: T, l: TreeA<T>, r: TreeA<T>) {
 // CHECK-NEXT:    [[PB:%.*]] = project_box [[BOX]]
 // CHECK-NEXT:    [[LEFT:%.*]] = tuple_element_addr [[PB]] : $*(left: TreeA<T>, right: TreeA<T>), 0
 // CHECK-NEXT:    [[RIGHT:%.*]] = tuple_element_addr [[PB]] : $*(left: TreeA<T>, right: TreeA<T>), 1
-// CHECK-NEXT:    [[ARG2_COPY:%.*]] = copy_value [[ARG2]]
+// CHECK-NEXT:    [[BORROWED_ARG2:%.*]] = begin_borrow [[ARG2]]
+// CHECK-NEXT:    [[ARG2_COPY:%.*]] = copy_value [[BORROWED_ARG2]]
 // CHECK-NEXT:    store [[ARG2_COPY]] to [init] [[LEFT]]
-// CHECK-NEXT:    [[ARG3_COPY:%.*]] = copy_value [[ARG3]]
+// CHECK-NEXT:    [[BORROWED_ARG3:%.*]] = begin_borrow [[ARG3]]
+// CHECK-NEXT:    [[ARG3_COPY:%.*]] = copy_value [[BORROWED_ARG3]]
 // CHECK-NEXT:    store [[ARG3_COPY]] to [init] [[RIGHT]]
 // CHECK-NEXT:    [[BRANCH:%.*]] = enum $TreeA<T>, #TreeA.Branch!enumelt.1, [[BOX]]
 // CHECK-NEXT:    destroy_value [[BRANCH]]
+// CHECK-NEXT:    end_borrow [[BORROWED_ARG3]] from [[ARG3]]
+// CHECK-NEXT:    end_borrow [[BORROWED_ARG2]] from [[ARG2]]
 // CHECK-NEXT:    destroy_value [[ARG3]]
 // CHECK-NEXT:    destroy_value [[ARG2]]
 // CHECK-NEXT:    destroy_addr [[ARG1]]
   let _ = TreeA<T>.Branch(left: l, right: r)
 
 }
-// CHECK: // end sil function '_TF13indirect_enum11TreeA_casesurFTx1lGOS_5TreeAx_1rGS0_x__T_'
+// CHECK: // end sil function '_T013indirect_enum11TreeA_casesyx_AA0C1AOyxG1lAE1rtlF'
 
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum16TreeA_reabstractFFSiSiT_ : $@convention(thin) (@owned @callee_owned (Int) -> Int) -> () {
+// CHECK-LABEL: sil hidden @_T013indirect_enum16TreeA_reabstractyS2icF : $@convention(thin) (@owned @callee_owned (Int) -> Int) -> () {
 func TreeA_reabstract(_ f: @escaping (Int) -> Int) {
 // CHECK: bb0([[ARG:%.*]] : $@callee_owned (Int) -> Int):
 // CHECK:         [[METATYPE:%.*]] = metatype $@thin TreeA<(Int) -> Int>.Type
 // CHECK-NEXT:    [[BOX:%.*]] = alloc_box $<τ_0_0> { var τ_0_0 } <@callee_owned (@in Int) -> @out Int>
 // CHECK-NEXT:    [[PB:%.*]] = project_box [[BOX]]
-// CHECK-NEXT:    [[ARG_COPY:%.*]] = copy_value [[ARG]]
-// CHECK:         [[THUNK:%.*]] = function_ref @_TTRXFo_dSi_dSi_XFo_iSi_iSi_
+// CHECK-NEXT:    [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+// CHECK-NEXT:    [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
+// CHECK:         [[THUNK:%.*]] = function_ref @_T0S2iIxyd_S2iIxir_TR
 // CHECK-NEXT:    [[FN:%.*]] = partial_apply [[THUNK]]([[ARG_COPY]])
 // CHECK-NEXT:    store [[FN]] to [init] [[PB]]
 // CHECK-NEXT:    [[LEAF:%.*]] = enum $TreeA<(Int) -> Int>, #TreeA.Leaf!enumelt.1, [[BOX]]
 // CHECK-NEXT:    destroy_value [[LEAF]]
+// CHECK-NEXT:    end_borrow [[BORROWED_ARG]] from [[ARG]]
 // CHECK-NEXT:    destroy_value [[ARG]]
 // CHECK: return
   let _ = TreeA<(Int) -> Int>.Leaf(f)
 }
-// CHECK: } // end sil function '_TF13indirect_enum16TreeA_reabstractFFSiSiT_'
+// CHECK: } // end sil function '_T013indirect_enum16TreeA_reabstractyS2icF'
 
 enum TreeB<T> {
   case Nil
@@ -66,7 +72,7 @@ enum TreeB<T> {
   indirect case Branch(left: TreeB<T>, right: TreeB<T>)
 }
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum11TreeB_casesurFTx1lGOS_5TreeBx_1rGS0_x__T_
+// CHECK-LABEL: sil hidden @_T013indirect_enum11TreeB_casesyx_AA0C1BOyxG1lAE1rtlF
 func TreeB_cases<T>(_ t: T, l: TreeB<T>, r: TreeB<T>) {
 
 // CHECK:         [[METATYPE:%.*]] = metatype $@thin TreeB<T>.Type
@@ -107,17 +113,17 @@ func TreeB_cases<T>(_ t: T, l: TreeB<T>, r: TreeB<T>) {
 
 }
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum13TreeInt_casesFTSi1lOS_7TreeInt1rS0__T_ : $@convention(thin) (Int, @owned TreeInt, @owned TreeInt) -> ()
+// CHECK-LABEL: sil hidden @_T013indirect_enum13TreeInt_casesySi_AA0cD0O1lAD1rtF : $@convention(thin) (Int, @owned TreeInt, @owned TreeInt) -> ()
 func TreeInt_cases(_ t: Int, l: TreeInt, r: TreeInt) {
 // CHECK: bb0([[ARG1:%.*]] : $Int, [[ARG2:%.*]] : $TreeInt, [[ARG3:%.*]] : $TreeInt):
 // CHECK:         [[METATYPE:%.*]] = metatype $@thin TreeInt.Type
 // CHECK-NEXT:    [[NIL:%.*]] = enum $TreeInt, #TreeInt.Nil!enumelt
-// CHECK-NEXT:    destroy_value [[NIL]]
+// CHECK-NOT:     destroy_value [[NIL]]
   let _ = TreeInt.Nil
 
 // CHECK-NEXT:    [[METATYPE:%.*]] = metatype $@thin TreeInt.Type
 // CHECK-NEXT:    [[LEAF:%.*]] = enum $TreeInt, #TreeInt.Leaf!enumelt.1, [[ARG1]]
-// CHECK-NEXT:    destroy_value [[LEAF]]
+// CHECK-NOT:     destroy_value [[LEAF]]
   let _ = TreeInt.Leaf(t)
 
 // CHECK-NEXT:    [[METATYPE:%.*]] = metatype $@thin TreeInt.Type
@@ -125,17 +131,21 @@ func TreeInt_cases(_ t: Int, l: TreeInt, r: TreeInt) {
 // CHECK-NEXT:    [[PB:%.*]] = project_box [[BOX]]
 // CHECK-NEXT:    [[LEFT:%.*]] = tuple_element_addr [[PB]]
 // CHECK-NEXT:    [[RIGHT:%.*]] = tuple_element_addr [[PB]]
-// CHECK-NEXT:    [[ARG2_COPY:%.*]] = copy_value [[ARG2]]
+// CHECK-NEXT:    [[BORROWED_ARG2:%.*]] = begin_borrow [[ARG2]]
+// CHECK-NEXT:    [[ARG2_COPY:%.*]] = copy_value [[BORROWED_ARG2]]
 // CHECK-NEXT:    store [[ARG2_COPY]] to [init] [[LEFT]]
-// CHECK-NEXT:    [[ARG3_COPY:%.*]] = copy_value [[ARG3]]
+// CHECK-NEXT:    [[BORROWED_ARG3:%.*]] = begin_borrow [[ARG3]]
+// CHECK-NEXT:    [[ARG3_COPY:%.*]] = copy_value [[BORROWED_ARG3]]
 // CHECK-NEXT:    store [[ARG3_COPY]] to [init] [[RIGHT]]
 // CHECK-NEXT:    [[BRANCH:%.*]] = enum $TreeInt, #TreeInt.Branch!enumelt.1, [[BOX]]
 // CHECK-NEXT:    destroy_value [[BRANCH]]
+// CHECK-NEXT:    end_borrow [[BORROWED_ARG3]] from [[ARG3]]
+// CHECK-NEXT:    end_borrow [[BORROWED_ARG2]] from [[ARG2]]
 // CHECK-NEXT:    destroy_value [[ARG3]]
 // CHECK-NEXT:    destroy_value [[ARG2]]
   let _ = TreeInt.Branch(left: l, right: r)
 }
-// CHECK: } // end sil function '_TF13indirect_enum13TreeInt_casesFTSi1lOS_7TreeInt1rS0__T_'
+// CHECK: } // end sil function '_T013indirect_enum13TreeInt_casesySi_AA0cD0O1lAD1rtF'
 
 enum TreeInt {
   case Nil
@@ -154,29 +164,32 @@ func b<T>(_ x: T) {}
 func c<T>(_ x: T, _ y: T) {}
 func d() {}
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum11switchTreeAurFGOS_5TreeAx_T_ : $@convention(thin) <T> (@owned TreeA<T>) -> () {
+// CHECK-LABEL: sil hidden @_T013indirect_enum11switchTreeAyAA0D1AOyxGlF : $@convention(thin) <T> (@owned TreeA<T>) -> () {
 func switchTreeA<T>(_ x: TreeA<T>) {
   // CHECK: bb0([[ARG:%.*]] : $TreeA<T>):
   // --           x +2
-  // CHECK:       [[ARG_COPY:%.*]] = copy_value [[ARG]]
+  // CHECK:       [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+  // CHECK:       [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
   // CHECK:       switch_enum [[ARG_COPY]] : $TreeA<T>,
   // CHECK:          case #TreeA.Nil!enumelt: [[NIL_CASE:bb1]],
   // CHECK:          case #TreeA.Leaf!enumelt.1: [[LEAF_CASE:bb2]],
   // CHECK:          case #TreeA.Branch!enumelt.1: [[BRANCH_CASE:bb3]],
   switch x {
   // CHECK:     [[NIL_CASE]]:
-  // CHECK:       function_ref @_TF13indirect_enum1aFT_T_
+  // CHECK:       end_borrow [[BORROWED_ARG]] from [[ARG]]
+  // CHECK:       function_ref @_T013indirect_enum1ayyF
   // CHECK:       br [[OUTER_CONT:bb[0-9]+]]
   case .Nil:
     a()
   // CHECK:     [[LEAF_CASE]]([[LEAF_BOX:%.*]] : $<τ_0_0> { var τ_0_0 } <T>):
   // CHECK:       [[VALUE:%.*]] = project_box [[LEAF_BOX]]
   // CHECK:       copy_addr [[VALUE]] to [initialization] [[X:%.*]] : $*T
-  // CHECK:       function_ref @_TF13indirect_enum1b
+  // CHECK:       function_ref @_T013indirect_enum1b{{[_0-9a-zA-Z]*}}F
   // CHECK:       destroy_addr [[X]]
   // CHECK:       dealloc_stack [[X]]
   // --           x +1
   // CHECK:       destroy_value [[LEAF_BOX]]
+  // CHECK:       end_borrow [[BORROWED_ARG]] from [[ARG]]
   // CHECK:       br [[OUTER_CONT]]
   case .Leaf(let x):
     b(x)
@@ -202,6 +215,7 @@ func switchTreeA<T>(_ x: TreeA<T>) {
   // CHECK:       copy_addr [[RIGHT_LEAF_VALUE]]
   // --           x +1
   // CHECK:       destroy_value [[NODE_BOX]]
+  // CHECK:       end_borrow [[BORROWED_ARG]] from [[ARG]]
   // CHECK:       br [[OUTER_CONT]]
 
   // CHECK:     [[FAIL_LEFT]]:
@@ -216,6 +230,7 @@ func switchTreeA<T>(_ x: TreeA<T>) {
   // CHECK:     [[DEFAULT]]:
   // --           x +1
   // CHECK:       destroy_value [[ARG_COPY]]
+  // CHECK:       end_borrow [[BORROWED_ARG]] from [[ARG]]
   default:
     d()
   }
@@ -224,9 +239,9 @@ func switchTreeA<T>(_ x: TreeA<T>) {
   // --           x +0
   // CHECK:       destroy_value [[ARG]] : $TreeA<T>
 }
-// CHECK: } // end sil function '_TF13indirect_enum11switchTreeAurFGOS_5TreeAx_T_'
+// CHECK: } // end sil function '_T013indirect_enum11switchTreeAyAA0D1AOyxGlF'
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum11switchTreeB
+// CHECK-LABEL: sil hidden @_T013indirect_enum11switchTreeB{{[_0-9a-zA-Z]*}}F
 func switchTreeB<T>(_ x: TreeB<T>) {
   // CHECK:       copy_addr %0 to [initialization] [[SCRATCH:%.*]] :
   // CHECK:       switch_enum_addr [[SCRATCH]]
@@ -235,7 +250,7 @@ func switchTreeB<T>(_ x: TreeB<T>) {
   // CHECK:     bb{{.*}}:
   // CHECK:       destroy_addr [[SCRATCH]]
   // CHECK:       dealloc_stack [[SCRATCH]]
-  // CHECK:       function_ref @_TF13indirect_enum1aFT_T_
+  // CHECK:       function_ref @_T013indirect_enum1ayyF
   // CHECK:       br [[OUTER_CONT:bb[0-9]+]]
   case .Nil:
     a()
@@ -244,7 +259,7 @@ func switchTreeB<T>(_ x: TreeB<T>) {
   // CHECK:       copy_addr [[SCRATCH]] to [initialization] [[LEAF_COPY:%.*]] :
   // CHECK:       [[LEAF_ADDR:%.*]] = unchecked_take_enum_data_addr [[LEAF_COPY]]
   // CHECK:       copy_addr [take] [[LEAF_ADDR]] to [initialization] [[LEAF:%.*]] :
-  // CHECK:       function_ref @_TF13indirect_enum1b
+  // CHECK:       function_ref @_T013indirect_enum1b{{[_0-9a-zA-Z]*}}F
   // CHECK:       destroy_addr [[LEAF]]
   // CHECK:       dealloc_stack [[LEAF]]
   // CHECK-NOT:   destroy_addr [[LEAF_COPY]]
@@ -275,7 +290,7 @@ func switchTreeB<T>(_ x: TreeB<T>) {
   // CHECK:       [[LEFT_LEAF:%.*]] = unchecked_take_enum_data_addr [[LEFT_COPY]] : $*TreeB<T>, #TreeB.Leaf
   // CHECK:       copy_addr [take] [[LEFT_LEAF]] to [initialization] [[X:%.*]] :
   // CHECK:       copy_addr [take] [[RIGHT_LEAF]] to [initialization] [[Y:%.*]] :
-  // CHECK:       function_ref @_TF13indirect_enum1c
+  // CHECK:       function_ref @_T013indirect_enum1c{{[_0-9a-zA-Z]*}}F
   // CHECK:       destroy_addr [[Y]]
   // CHECK:       dealloc_stack [[Y]]
   // CHECK:       destroy_addr [[X]]
@@ -311,7 +326,7 @@ func switchTreeB<T>(_ x: TreeB<T>) {
   // CHECK:     [[INNER_CONT]]:
   // CHECK:       destroy_addr [[SCRATCH]]
   // CHECK:       dealloc_stack [[SCRATCH]]
-  // CHECK:       function_ref @_TF13indirect_enum1dFT_T_
+  // CHECK:       function_ref @_T013indirect_enum1dyyF
   // CHECK:       br [[OUTER_CONT]]
   default:
     d()
@@ -320,23 +335,27 @@ func switchTreeB<T>(_ x: TreeB<T>) {
   // CHECK:       destroy_addr %0
 }
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum10guardTreeA
+// CHECK-LABEL: sil hidden @_T013indirect_enum10guardTreeA{{[_0-9a-zA-Z]*}}F
 func guardTreeA<T>(_ tree: TreeA<T>) {
   // CHECK: bb0([[ARG:%.*]] : $TreeA<T>):
   do {
-    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+    // CHECK:   [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
     // CHECK:   switch_enum [[ARG_COPY]] : $TreeA<T>, case #TreeA.Nil!enumelt: [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-    // CHECK: [[NO]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK: [[NO]]([[ORIGINAL_VALUE:%.*]] : $TreeA<T>):
+    // CHECK:   destroy_value [[ORIGINAL_VALUE]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     // CHECK: [[YES]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     guard case .Nil = tree else { return }
 
     // CHECK:   [[X:%.*]] = alloc_stack $T
-    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+    // CHECK:   [[BORROWED_ARG_2:%.*]] = begin_borrow [[ARG]]
+    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG_2]]
     // CHECK:   switch_enum [[ARG_COPY]] : $TreeA<T>, case #TreeA.Leaf!enumelt.1: [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-    // CHECK: [[NO]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK: [[NO]]([[ORIGINAL_VALUE:%.*]] : $TreeA<T>):
+    // CHECK:   destroy_value [[ORIGINAL_VALUE]]
+    // CHECK:   end_borrow [[BORROWED_ARG_2]] from [[ARG]]
     // CHECK: [[YES]]([[BOX:%.*]] : $<τ_0_0> { var τ_0_0 } <T>):
     // CHECK:   [[VALUE_ADDR:%.*]] = project_box [[BOX]]
     // CHECK:   [[TMP:%.*]] = alloc_stack
@@ -345,66 +364,87 @@ func guardTreeA<T>(_ tree: TreeA<T>) {
     // CHECK:   destroy_value [[BOX]]
     guard case .Leaf(let x) = tree else { return }
 
-    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+    // CHECK:   [[BORROWED_ARG_3:%.*]] = begin_borrow [[ARG]]
+    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG_3]]
     // CHECK:   switch_enum [[ARG_COPY]] : $TreeA<T>, case #TreeA.Branch!enumelt.1: [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-    // CHECK: [[NO]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK: [[NO]]([[ORIGINAL_VALUE:%.*]] : $TreeA<T>):
+    // CHECK:   destroy_value [[ORIGINAL_VALUE]]
+    // CHECK:   end_borrow [[BORROWED_ARG_3]] from [[ARG]]
     // CHECK: [[YES]]([[BOX:%.*]] : $<τ_0_0> { var τ_0_0 } <(left: TreeA<T>, right: TreeA<T>)>):
     // CHECK:   [[VALUE_ADDR:%.*]] = project_box [[BOX]]
     // CHECK:   [[TUPLE:%.*]] = load [take] [[VALUE_ADDR]]
     // CHECK:   [[TUPLE_COPY:%.*]] = copy_value [[TUPLE]]
-    // CHECK:   [[L:%.*]] = tuple_extract [[TUPLE_COPY]]
-    // CHECK:   [[R:%.*]] = tuple_extract [[TUPLE_COPY]]
+    // CHECK:   [[BORROWED_TUPLE_COPY:%.*]] = begin_borrow [[TUPLE_COPY]]
+    // CHECK:   [[L:%.*]] = tuple_extract [[BORROWED_TUPLE_COPY]]
+    // CHECK:   [[COPY_L:%.*]] = copy_value [[L]]
+    // CHECK:   [[R:%.*]] = tuple_extract [[BORROWED_TUPLE_COPY]]
+    // CHECK:   [[COPY_R:%.*]] = copy_value [[R]]
+    // CHECK:   end_borrow [[BORROWED_TUPLE_COPY]] from [[TUPLE_COPY]]
+    // CHECK:   destroy_value [[TUPLE_COPY]]
     // CHECK:   destroy_value [[BOX]]
+    // CHECK:   end_borrow [[BORROWED_ARG_3]] from [[ARG]]
     guard case .Branch(left: let l, right: let r) = tree else { return }
 
-    // CHECK:   destroy_value [[R]]
-    // CHECK:   destroy_value [[L]]
+    // CHECK:   destroy_value [[COPY_R]]
+    // CHECK:   destroy_value [[COPY_L]]
     // CHECK:   destroy_addr [[X]]
   }
 
   do {
-    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+    // CHECK:   [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
     // CHECK:   switch_enum [[ARG_COPY]] : $TreeA<T>, case #TreeA.Nil!enumelt: [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-    // CHECK: [[NO]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK: [[NO]]([[ORIGINAL_VALUE:%.*]] : $TreeA<T>):
+    // CHECK:   destroy_value [[ORIGINAL_VALUE]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     // CHECK: [[YES]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     if case .Nil = tree { }
 
     // CHECK:   [[X:%.*]] = alloc_stack $T
-    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+    // CHECK:   [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
     // CHECK:   switch_enum [[ARG_COPY]] : $TreeA<T>, case #TreeA.Leaf!enumelt.1: [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-    // CHECK: [[NO]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK: [[NO]]([[ORIGINAL_VALUE:%.*]] : $TreeA<T>):
+    // CHECK:   destroy_value [[ORIGINAL_VALUE]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     // CHECK: [[YES]]([[BOX:%.*]] : $<τ_0_0> { var τ_0_0 } <T>):
     // CHECK:   [[VALUE_ADDR:%.*]] = project_box [[BOX]]
     // CHECK:   [[TMP:%.*]] = alloc_stack
     // CHECK:   copy_addr [[VALUE_ADDR]] to [initialization] [[TMP]]
     // CHECK:   copy_addr [take] [[TMP]] to [initialization] [[X]]
     // CHECK:   destroy_value [[BOX]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     // CHECK:   destroy_addr [[X]]
     if case .Leaf(let x) = tree { }
 
 
-    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
+    // CHECK:   [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+    // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
     // CHECK:   switch_enum [[ARG_COPY]] : $TreeA<T>, case #TreeA.Branch!enumelt.1: [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-    // CHECK: [[NO]]:
-    // CHECK:   destroy_value [[ARG_COPY]]
+    // CHECK: [[NO]]([[ORIGINAL_VALUE:%.*]] : $TreeA<T>):
+    // CHECK:   destroy_value [[ORIGINAL_VALUE]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
     // CHECK: [[YES]]([[BOX:%.*]] : $<τ_0_0> { var τ_0_0 } <(left: TreeA<T>, right: TreeA<T>)>):
     // CHECK:   [[VALUE_ADDR:%.*]] = project_box [[BOX]]
     // CHECK:   [[TUPLE:%.*]] = load [take] [[VALUE_ADDR]]
     // CHECK:   [[TUPLE_COPY:%.*]] = copy_value [[TUPLE]]
-    // CHECK:   [[L:%.*]] = tuple_extract [[TUPLE_COPY]]
-    // CHECK:   [[R:%.*]] = tuple_extract [[TUPLE_COPY]]
+    // CHECK:   [[BORROWED_TUPLE_COPY:%.*]] = begin_borrow [[TUPLE_COPY]]
+    // CHECK:   [[L:%.*]] = tuple_extract [[BORROWED_TUPLE_COPY]]
+    // CHECK:   [[COPY_L:%.*]] = copy_value [[L]]
+    // CHECK:   [[R:%.*]] = tuple_extract [[BORROWED_TUPLE_COPY]]
+    // CHECK:   [[COPY_R:%.*]] = copy_value [[R]]
+    // CHECK:   end_borrow [[BORROWED_TUPLE_COPY]] from [[TUPLE_COPY]]
+    // CHECK:   destroy_value [[TUPLE_COPY]]
     // CHECK:   destroy_value [[BOX]]
-    // CHECK:   destroy_value [[R]]
-    // CHECK:   destroy_value [[L]]
+    // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
+    // CHECK:   destroy_value [[COPY_R]]
+    // CHECK:   destroy_value [[COPY_L]]
     if case .Branch(left: let l, right: let r) = tree { }
   }
 }
 
-// CHECK-LABEL: sil hidden @_TF13indirect_enum10guardTreeB
+// CHECK-LABEL: sil hidden @_T013indirect_enum10guardTreeB{{[_0-9a-zA-Z]*}}F
 func guardTreeB<T>(_ tree: TreeB<T>) {
   do {
     // CHECK:   copy_addr %0 to [initialization] [[TMP:%.*]] :
@@ -493,20 +533,31 @@ func guardTreeB<T>(_ tree: TreeB<T>) {
 }
 
 // SEMANTIC ARC TODO: This test needs to be made far more comprehensive.
-// CHECK-LABEL: sil hidden @_TF13indirect_enum35dontDisableCleanupOfIndirectPayloadFOS_18TrivialButIndirectT_ : $@convention(thin) (@owned TrivialButIndirect) -> () {
+// CHECK-LABEL: sil hidden @_T013indirect_enum35dontDisableCleanupOfIndirectPayloadyAA010TrivialButG0OF : $@convention(thin) (@owned TrivialButIndirect) -> () {
 func dontDisableCleanupOfIndirectPayload(_ x: TrivialButIndirect) {
   // CHECK: bb0([[ARG:%.*]] : $TrivialButIndirect):
-  // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
-  // CHECK:   switch_enum [[ARG_COPY]] : $TrivialButIndirect, case #TrivialButIndirect.Direct!enumelt.1:  [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-  // CHECK: [[NO]]:
-  // CHECK:   destroy_value [[ARG_COPY]]
+  // CHECK:   [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+  // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
+  // CHECK:   switch_enum [[ARG_COPY]] : $TrivialButIndirect, case #TrivialButIndirect.Direct!enumelt.1:  [[YES:bb[0-9]+]], case #TrivialButIndirect.Indirect!enumelt.1: [[NO:bb[0-9]+]]
+  //
+  // CHECK: [[NO]]([[PAYLOAD:%.*]] : $<τ_0_0> { var τ_0_0 } <Int>):
+  // CHECK:   destroy_value [[PAYLOAD]]
+  // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
   guard case .Direct(let foo) = x else { return }
 
-  // -- Cleanup isn't necessary on "no" path because .Direct is trivial
-  // CHECK:   [[ARG_COPY:%.*]] = copy_value [[ARG]]
-  // CHECK:   switch_enum [[ARG_COPY]] : $TrivialButIndirect, case #TrivialButIndirect.Indirect!enumelt.1:  [[YES:bb[0-9]+]], default [[NO:bb[0-9]+]]
-  // CHECK-NOT: [[NO]]:
-  // CHECK: [[YES]]({{.*}}):
+  // CHECK: [[YES]]({{%.*}} : $Int):
+  // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
+  // CHECK:   [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
+  // CHECK:   [[ARG_COPY:%.*]] = copy_value [[BORROWED_ARG]]
+  // CHECK:   switch_enum [[ARG_COPY]] : $TrivialButIndirect, case #TrivialButIndirect.Indirect!enumelt.1:  [[YES:bb[0-9]+]], case #TrivialButIndirect.Direct!enumelt.1: [[NO:bb[0-9]+]]
+
+  // CHECK: [[NO]]({{%.*}} : $Int):
+  // CHECK-NOT: destroy_value
+  // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
+
+  // CHECK: [[YES]]([[BOX:%.*]] : $<τ_0_0> { var τ_0_0 } <Int>):
+  // CHECK:   destroy_value [[BOX]]
+
   guard case .Indirect(let bar) = x else { return }
 }
-// CHECK: } // end sil function '_TF13indirect_enum35dontDisableCleanupOfIndirectPayloadFOS_18TrivialButIndirectT_'
+// CHECK: } // end sil function '_T013indirect_enum35dontDisableCleanupOfIndirectPayloadyAA010TrivialButG0OF'

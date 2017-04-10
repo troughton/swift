@@ -30,7 +30,7 @@ namespace swift { extern "C" {
 #endif
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern const __swift_uint8_t *_swift_stdlib_GraphemeClusterBreakPropertyTrie;
+const __swift_uint8_t *_swift_stdlib_GraphemeClusterBreakPropertyTrie;
 
 struct _swift_stdlib_GraphemeClusterBreakPropertyTrieMetadataTy {
   unsigned BMPFirstLevelIndexBits;
@@ -55,29 +55,29 @@ struct _swift_stdlib_GraphemeClusterBreakPropertyTrieMetadataTy {
 };
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern const struct _swift_stdlib_GraphemeClusterBreakPropertyTrieMetadataTy
+const struct _swift_stdlib_GraphemeClusterBreakPropertyTrieMetadataTy
 _swift_stdlib_GraphemeClusterBreakPropertyTrieMetadata;
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
-extern const __swift_uint16_t *
+const __swift_uint16_t *
 _swift_stdlib_ExtendedGraphemeClusterNoBoundaryRulesMatrix;
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
-__attribute__((__pure__)) __swift_int32_t
+SWIFT_READONLY __swift_int32_t
 _swift_stdlib_unicode_compare_utf16_utf16(const __swift_uint16_t *Left,
                                           __swift_int32_t LeftLength,
                                           const __swift_uint16_t *Right,
                                           __swift_int32_t RightLength);
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
-__attribute__((__pure__)) __swift_int32_t
+SWIFT_READONLY __swift_int32_t
 _swift_stdlib_unicode_compare_utf8_utf16(const unsigned char *Left,
                                          __swift_int32_t LeftLength,
                                          const __swift_uint16_t *Right,
                                          __swift_int32_t RightLength);
 
 SWIFT_RUNTIME_STDLIB_INTERFACE
-__attribute__((__pure__)) __swift_int32_t
+SWIFT_READONLY __swift_int32_t
 _swift_stdlib_unicode_compare_utf8_utf8(const unsigned char *Left,
                                         __swift_int32_t LeftLength,
                                         const unsigned char *Right,

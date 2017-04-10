@@ -540,7 +540,7 @@ TEST(MetadataTest, getExistentialMetadata) {
     });
 }
 
-static void destroySuperclass(HeapObject *toDestroy) {}
+static SWIFT_CC(swift) void destroySuperclass(SWIFT_CONTEXT HeapObject *toDestroy) {}
 
 struct {
   void *Prefix[4];
@@ -555,7 +555,7 @@ struct {
 ClassMetadata * const SuperclassWithPrefix_AddressPoint =
   &SuperclassWithPrefix.Metadata;
 
-static void destroySubclass(HeapObject *toDestroy) {}
+static SWIFT_CC(swift) void destroySubclass(SWIFT_CONTEXT HeapObject *toDestroy) {}
 
 struct {
   GenericMetadata Header;

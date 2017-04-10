@@ -32,9 +32,11 @@ namespace swift {
   class Decl;
   class ValueDecl;
   class TypeDecl;
+  class ExtensionDecl;
   class Stmt;
   class Expr;
   class Type;
+
 
 /// An abstract class used to traverse the AST and provide source information.
 /// Visitation happens in source-order and compiler-generated semantic info,
@@ -92,9 +94,11 @@ public:
   /// \param CtorTyRef this is set when the entity is a reference to a
   /// \c ConstructorDecl, to point to the type declaration that the source
   /// refers to.
+  /// \param ExtTyRef this is set when the entity is a reference to a type loc
+  /// in \c ExtensionDecl.
   virtual bool visitDeclReference(ValueDecl *D, CharSourceRange Range,
-                                  TypeDecl *CtorTyRef, Type T,
-                                  SemaReferenceKind Kind);
+                                  TypeDecl *CtorTyRef, ExtensionDecl *ExtTyRef,
+                                  Type T, ReferenceMetaData Data);
 
   /// This method is called when a ValueDecl for a subscript is referenced in
   /// source. If it returns false, the remaining traversal is terminated

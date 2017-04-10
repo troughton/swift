@@ -10,8 +10,12 @@ func test(_ b : BaseInHead) {
 
 // RUN: %sourcekitd-test -req=cursor -pos=3:7 %s -- %s %mcp_opt -module-name Mixed -import-objc-header %S/Inputs/header.h | %FileCheck %s
 
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: %sourcekitd-test -req=cursor -pos=3:7 %s -- %s %mcp_opt -module-name Mixed -pch-output-dir %t -import-objc-header %S/Inputs/header.h | %FileCheck %s
+// RUN: stat %t/*.pch
+
 // CHECK: source.lang.swift.ref.function.method.instance ({{.*}}Inputs/header.h:4:9-4:23)
 // CHECK: doIt(_:)
 // CHECK: c:objc(cs)BaseInHead(im)doIt:
 // CHECK: (BaseInHead) -> (Int32) -> ()
-// CHECK: <Declaration>func doIt(_ arg: <Type usr="s:Vs5Int32">Int32</Type>)</Declaration>
+// CHECK: <Declaration>func doIt(_ arg: <Type usr="s:s5Int32V">Int32</Type>)</Declaration>

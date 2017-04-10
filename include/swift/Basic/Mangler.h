@@ -13,7 +13,7 @@
 #ifndef SWIFT_BASIC_MANGLER_H
 #define SWIFT_BASIC_MANGLER_H
 
-#include "swift/Basic/ManglingUtils.h"
+#include "swift/Demangling/ManglingUtils.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringMap.h"
@@ -23,19 +23,7 @@ using llvm::StringRef;
 using llvm::ArrayRef;
 
 namespace swift {
-namespace NewMangling {
-
-/// Returns true if the new mangling scheme should be used.
-///
-/// TODO: remove this function when the old mangling is removed.
-bool useNewMangling();
-  
-/// Select an old or new mangled string, based on useNewMangling().
-///
-/// Also performs test to check if the demangling of both string yield the same
-/// demangling tree.
-/// TODO: remove this function when the old mangling is removed.
-std::string selectMangling(const std::string &Old, const std::string &New);
+namespace Mangle {
 
 void printManglingStats();
 
@@ -48,6 +36,7 @@ class Mangler {
 protected:
   template <typename Mangler>
   friend void mangleIdentifier(Mangler &M, StringRef ident);
+  friend class SubstitutionMerging;
 
   /// The storage for the mangled symbol.
   llvm::SmallVector<char, 128> Storage;
@@ -64,14 +53,19 @@ protected:
   /// Identifier substitutions.
   llvm::StringMap<unsigned> StringSubstitutions;
 
-  /// The position in the Buffer where the last substitution was written.
-  int lastSubstIdx = -2;
-
   /// Word substitutions in mangled identifiers.
   llvm::SmallVector<SubstitutionWord, 26> Words;
 
+  /// Used for repeated substitutions and known substitutions, e.g. A3B, S2i.
+  SubstitutionMerging SubstMerging;
+
+  size_t MaxNumWords = 26;
+
   /// If enabled, non-ASCII names are encoded in modified Punycode.
-  bool UsePunycode;
+  bool UsePunycode = true;
+
+  /// If enabled, repeated entities are mangled using substitutions ('A...').
+  bool UseSubstitutions = true;
 
   /// A helpful little wrapper for an integer value that should be mangled
   /// in a particular, compressed value.
@@ -90,9 +84,16 @@ protected:
     return StringRef(Storage.data(), Storage.size());
   }
 
+  /// Removes the last characters of the buffer by setting it's size to a
+  /// smaller value.
+  void resetBuffer(size_t toPos) {
+    assert(toPos <= Storage.size());
+    Storage.resize(toPos);
+  }
+
 protected:
 
-  Mangler(bool usePunycode) : Buffer(Storage), UsePunycode(usePunycode) { }
+  Mangler() : Buffer(Storage) { }
 
   /// Adds the mangling prefix.
   void beginMangling();
@@ -104,14 +105,19 @@ protected:
   /// \p stream.
   void finalize(llvm::raw_ostream &stream);
 
+  /// Verify that demangling and remangling works.
+  void verify(const std::string &mangledName);
+
   /// Appends a mangled identifier string.
   void appendIdentifier(StringRef ident);
 
   void addSubstitution(const void *ptr) {
-    Substitutions[ptr] = Substitutions.size() + StringSubstitutions.size();
+    if (UseSubstitutions)
+      Substitutions[ptr] = Substitutions.size() + StringSubstitutions.size();
   }
   void addSubstitution(StringRef Str) {
-    StringSubstitutions[Str] = Substitutions.size() + StringSubstitutions.size();
+    if (UseSubstitutions)
+      StringSubstitutions[Str] = Substitutions.size() + StringSubstitutions.size();
   }
 
   bool tryMangleSubstitution(const void *ptr);

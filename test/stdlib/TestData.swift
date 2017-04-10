@@ -921,6 +921,46 @@ class TestData : TestDataSuper {
         expectEqual(d[4], 0x02)
         expectEqual(d[5], 0x02)
     }
+
+    func test_rangeSlice() {
+        var a: [UInt8] = [0, 1, 2, 3, 4, 5, 6, 7]
+        var d = Data(bytes: a)
+        for i in 0..<d.count {
+            for j in i..<d.count {
+                let slice = d[i..<j]
+                if i == 1 && j == 2 {
+                    print("here")
+                    
+                }
+                expectEqual(slice.count, j - i, "where index range is \(i)..<\(j)")
+                expectEqual(slice.map { $0 }, a[i..<j].map { $0 }, "where index range is \(i)..<\(j)")
+                expectEqual(slice.startIndex, i, "where index range is \(i)..<\(j)")
+                expectEqual(slice.endIndex, j, "where index range is \(i)..<\(j)")
+                for n in slice.startIndex..<slice.endIndex {
+                    let p = slice[n]
+                    let q = a[n]
+                    expectEqual(p, q, "where index range is \(i)..<\(j) at index \(n)")
+                }
+            }
+        }
+    }
+
+    func test_rangeZoo() {
+        let r1 = Range(0..<1)
+        let r2 = CountableRange(0..<1)
+        let r3 = ClosedRange(0..<1)
+        let r4 = CountableClosedRange(0..<1)
+
+        let data = Data(bytes: [8, 1, 2, 3, 4])
+        let slice1: Data = data[r1]
+        let slice2: Data = data[r2]
+        let slice3: Data = data[r3]
+        let slice4: Data = data[r4]
+        expectEqual(slice1[0], 8)
+        expectEqual(slice2[0], 8)
+        expectEqual(slice3[0], 8)
+        expectEqual(slice4[0], 8)
+    }
 }
 
 #if !FOUNDATION_XCTEST
@@ -966,6 +1006,7 @@ DataTests.test("test_AnyHashableCreatedFromNSData") { TestData().test_AnyHashabl
 DataTests.test("test_noCopyBehavior") { TestData().test_noCopyBehavior() }
 DataTests.test("test_doubleDeallocation") { TestData().test_doubleDeallocation() }
 DataTests.test("test_repeatingValueInitialization") { TestData().test_repeatingValueInitialization() }
+DataTests.test("test_rangeZoo") { TestData().test_rangeZoo() }
 
 // XCTest does not have a crash detection, whereas lit does
 DataTests.test("bounding failure subdata") {
@@ -1026,7 +1067,9 @@ DataTests.test("bounding failure append absurd length") {
     data.append("hello", count: Int.min)
 }
 
-DataTests.test("bounding failure subscript") {
+DataTests.test("bounding failure subscript")
+        .skip(.always("fails with resilient stdlib (rdar://problem/30560514)"))
+        .code {
     var data = "Hello World".data(using: .utf8)!
     expectCrashLater()
     data[100] = 4

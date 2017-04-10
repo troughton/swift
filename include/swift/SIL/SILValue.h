@@ -28,12 +28,15 @@
 namespace swift {
 
 class DominanceInfo;
+class PostOrderFunctionInfo;
+class ReversePostOrderInfo;
 class Operand;
 class SILBasicBlock;
 class SILFunction;
 class SILInstruction;
 class SILLocation;
 class SILModule;
+class TransitivelyUnreachableBlocksInfo;
 class ValueBaseUseIterator;
 class ValueUseIterator;
 
@@ -111,9 +114,18 @@ struct ValueOwnershipKind {
   ValueOwnershipKind(SILModule &M, SILType Type,
                      SILArgumentConvention Convention);
 
+  /// Parse Value into a ValueOwnershipKind.
+  ///
+  /// *NOTE* Emits an unreachable if an invalid value is passed in.
+  explicit ValueOwnershipKind(StringRef Value);
+
   operator innerty() const { return Value; }
 
   Optional<ValueOwnershipKind> merge(ValueOwnershipKind RHS) const;
+
+  bool isTrivialOr(ValueOwnershipKind Kind) const {
+    return Value == Trivial || Value == Kind;
+  }
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &os, ValueOwnershipKind Kind);
@@ -162,6 +174,7 @@ public:
   bool use_empty() const { return FirstUse == nullptr; }
 
   using use_iterator = ValueBaseUseIterator;
+  using use_range = iterator_range<use_iterator>;
 
   inline use_iterator use_begin() const;
   inline use_iterator use_end() const;
@@ -169,12 +182,16 @@ public:
   /// Returns a range of all uses, which is useful for iterating over all uses.
   /// To ignore debug-info instructions use swift::getNonDebugUses instead
   /// (see comment in DebugUtils.h).
-  inline iterator_range<use_iterator> getUses() const;
+  inline use_range getUses() const;
 
   /// Returns true if this value has exactly one use.
   /// To ignore debug-info instructions use swift::hasOneNonDebugUse instead
   /// (see comment in DebugUtils.h).
   inline bool hasOneUse() const;
+
+  /// Returns .some(single user) if this value has a single user. Returns .none
+  /// otherwise.
+  inline Operand *getSingleUse() const;
 
   /// Pretty-print the value.
   void dump() const;
@@ -278,7 +295,8 @@ public:
   ValueOwnershipKind getOwnershipKind() const;
 
   /// Verify that this SILValue and its uses respects ownership invariants.
-  void verifyOwnership(SILModule &Mod) const;
+  void verifyOwnership(SILModule &Mod,
+                       TransitivelyUnreachableBlocksInfo *TUB = nullptr) const;
 };
 
 /// A formal SIL reference to a value, suitable for use as a stored
@@ -485,6 +503,23 @@ inline bool ValueBase::hasOneUse() const {
   auto I = use_begin(), E = use_end();
   if (I == E) return false;
   return ++I == E;
+}
+inline Operand *ValueBase::getSingleUse() const {
+  auto I = use_begin(), E = use_end();
+
+  // If we have no elements, return nullptr.
+  if (I == E) return nullptr;
+
+  // Otherwise, grab the first element and then increment.
+  Operand *Op = *I;
+  ++I;
+
+  // If the next element is not the end list, then return nullptr. We do not
+  // have one user.
+  if (I != E) return nullptr;
+
+  // Otherwise, the element that we accessed.
+  return Op;
 }
 
 /// A constant-size list of the operands of an instruction.

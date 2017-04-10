@@ -213,9 +213,7 @@ func r19763676Caller(_ g: @noescape (Int) -> Int) { // expected-warning{{@noesca
 
 
 // <rdar://problem/19763732> False positive in @noescape analysis triggered by default arguments
-func calleeWithDefaultParameters(_ f: @noescape () -> (), x : Int = 1) {}  // expected-warning {{closure parameter prior to parameters with default arguments will not be treated as a trailing closure}}
-  // expected-warning@-1{{@noescape is the default and is deprecated}} {{39-49=}}
-
+func calleeWithDefaultParameters(_ f: @noescape () -> (), x : Int = 1) {} // expected-warning{{@noescape is the default and is deprecated}} {{39-49=}}
 func callerOfDefaultParams(_ g: @noescape () -> ()) { // expected-warning{{@noescape is the default and is deprecated}} {{33-43=}}
   calleeWithDefaultParameters(g)
 }
@@ -330,8 +328,11 @@ enum r19997577Type {
 // type attribute and decl attribute
 func noescapeD(@noescape f: @escaping () -> Bool) {} // expected-error {{@noescape is now an attribute on a parameter type, instead of on the parameter itself}} {{16-25=}} {{29-29=@noescape }}
 func noescapeT(f: @noescape () -> Bool) {} // expected-warning{{@noescape is the default and is deprecated}} {{19-29=}}
+func noescapeG<T>(@noescape f: () -> T) {} // expected-error{{@noescape is now an attribute on a parameter type, instead of on the parameter itself}}
+
 func autoclosureD(@autoclosure f: () -> Bool) {} // expected-error {{@autoclosure is now an attribute on a parameter type, instead of on the parameter itself}} {{19-31=}} {{35-35=@autoclosure }}
 func autoclosureT(f: @autoclosure () -> Bool) {}  // ok
+func autoclosureG<T>(@autoclosure f: () -> T) {} // expected-error{{@autoclosure is now an attribute on a parameter type, instead of on the parameter itself}}
 
 func noescapeD_noescapeT(@noescape f: @noescape () -> Bool) {} // expected-error {{@noescape is now an attribute on a parameter type, instead of on the parameter itself}}
  // expected-warning@-1{{@noescape is the default and is deprecated}} {{39-49=}}

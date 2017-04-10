@@ -30,6 +30,10 @@ public:
     VerifyAndApplyFixes
   } VerifyMode = NoVerify;
 
+  /// Indicates whether to allow diagnostics for \c <unknown> locations if
+  /// \c VerifyMode is not \c NoVerify.
+  bool VerifyIgnoreUnknown = false;
+
   /// Indicates whether diagnostic passes should be skipped.
   bool SkipDiagnosticPasses = false;
 
@@ -45,6 +49,13 @@ public:
 
   /// Treat all warnings as errors
   bool WarningsAsErrors = false;
+
+  /// Return a hash code of any components from these options that should
+  /// contribute to a Swift Bridging PCH hash.
+  llvm::hash_code getPCHHashComponents() const {
+    // Nothing here that contributes anything significant when emitting the PCH.
+    return llvm::hash_value(0);
+  }
 };
 
 } // end namespace swift

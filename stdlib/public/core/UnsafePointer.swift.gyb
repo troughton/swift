@@ -202,9 +202,9 @@
 ///     printInt(atAddress: &numbers)
 ///     // Prints "5"
 ///
-/// However you call `printInt(atAddress:)`, Swift's type safety guarantees
-/// that you can only pass a pointer to the type required by the function---in
-/// this case, a pointer to an `Int`.
+/// No matter which way you call `printInt(atAddress:)`, Swift's type safety
+/// guarantees that you can only pass a pointer to the type required by the
+/// function---in this case, a pointer to an `Int`.
 %else:
 /// When calling a function or method with an `${Self}` parameter, you can pass
 /// an instance of that specific pointer type, pass an instance of a
@@ -257,9 +257,9 @@
 ///     var mutableNumbers = numbers
 ///     printInt(atAddress: &mutableNumbers)
 ///
-/// However you call `printInt(atAddress:)`, Swift's type safety guarantees
-/// that you can only pass a pointer to the type required by the function---in
-/// this case, a pointer to an `Int`.
+/// No matter which way you call `printInt(atAddress:)`, Swift's type safety
+/// guarantees that you can only pass a pointer to the type required by the
+/// function---in this case, a pointer to an `Int`.
 %end
 ///
 /// - Important: The pointer created through implicit bridging of an instance
@@ -419,6 +419,7 @@ public struct ${Self}<Pointee>
   ///
   /// - Parameter count: The amount of memory to allocate, counted in instances
   ///   of `Pointee`.
+  @_inlineable
   static public func allocate(capacity count: Int)
     -> UnsafeMutablePointer<Pointee> {
     let size = MemoryLayout<Pointee>.stride * count
@@ -436,6 +437,7 @@ public struct ${Self}<Pointee>
   ///
   /// - Parameter capacity: The amount of memory to deallocate, counted in
   ///   instances of `Pointee`.
+  @_inlineable
   public func deallocate(capacity: Int) {
     let size = MemoryLayout<Pointee>.stride * capacity
     Builtin.deallocRaw(
@@ -485,6 +487,7 @@ public struct ${Self}<Pointee>
   ///   - newValue: The instance to initialize this pointer's memory with.
   ///   - count: The number of consecutive copies of `newValue` to initialize.
   ///     `count` must not be negative. The default is `1`.
+  @_inlineable
   public func initialize(to newValue: Pointee, count: Int = 1) {
     // FIXME: add tests (since the `count` has been added)
     _debugPrecondition(count >= 0,
@@ -512,6 +515,7 @@ public struct ${Self}<Pointee>
   /// `move()`, the memory is uninitialized.
   ///
   /// - Returns: The instance referenced by this pointer.
+  @_inlineable
   public func move() -> Pointee {
     return Builtin.take(_rawValue)
   }
@@ -530,6 +534,7 @@ public struct ${Self}<Pointee>
   ///     pointer may overlap.
   ///   - count: The number of instances to copy from the memory referenced by
   ///     `source` to this pointer's memory. `count` must not be negative.
+  @_inlineable
   public func assign(from source: UnsafePointer<Pointee>, count: Int) {
     _debugPrecondition(
       count >= 0, "${Self}.assign with negative count")
@@ -549,8 +554,9 @@ public struct ${Self}<Pointee>
     }
   }
 
-  /// Initializes the memory referenced by this pointer with the values
-  /// starting at the given pointer, and then deinitializes the source memory.
+  /// Moves instances from initialized source memory into the uninitialized
+  /// memory referenced by this pointer, leaving the source memory
+  /// uninitialized and the memory referenced by this pointer initialized.
   ///
   /// The region of memory starting at this pointer and covering `count`
   /// instances of the pointer's `Pointee` type must be uninitialized or
@@ -564,6 +570,7 @@ public struct ${Self}<Pointee>
   ///     referenced by `source` and this pointer may overlap.
   ///   - count: The number of instances to move from `source` to this
   ///     pointer's memory. `count` must not be negative.
+  @_inlineable
   public func moveInitialize(from source: ${Self}, count: Int) {
     _debugPrecondition(
       count >= 0, "${Self}.moveInitialize with negative count")
@@ -603,6 +610,7 @@ public struct ${Self}<Pointee>
   ///     referenced by `source` and this pointer must not overlap.
   ///   - count: The number of instances to move from `source` to this
   ///     pointer's memory. `count` must not be negative.
+  @_inlineable
   public func initialize(from source: UnsafePointer<Pointee>, count: Int) {
     _debugPrecondition(
       count >= 0, "${Self}.initialize with negative count")
@@ -629,6 +637,7 @@ public struct ${Self}<Pointee>
   /// - Parameter source: A collection of elements of the pointer's `Pointee`
   ///   type.
   // This is fundamentally unsafe since collections can underreport their count.
+  @_inlineable
   @available(*, deprecated, message: "it will be removed in Swift 4.0.  Please use 'UnsafeMutableBufferPointer.initialize(from:)' instead")
   public func initialize<C : Collection>(from source: C)
     where C.Iterator.Element == Pointee {
@@ -640,7 +649,7 @@ public struct ${Self}<Pointee>
   }
 
   /// Replaces the memory referenced by this pointer with the values
-  /// starting at the given pointer, and then deinitializes the source memory.
+  /// starting at the given pointer, leaving the source memory uninitialized.
   ///
   /// The region of memory starting at this pointer and covering `count`
   /// instances of the pointer's `Pointee` type must be initialized or
@@ -654,6 +663,7 @@ public struct ${Self}<Pointee>
   ///     referenced by `source` and this pointer must not overlap.
   ///   - count: The number of instances to move from `source` to this
   ///     pointer's memory. `count` must not be negative.
+  @_inlineable
   public func moveAssign(from source: ${Self}, count: Int) {
     _debugPrecondition(
       count >= 0, "${Self}.moveAssign(from:) with negative count")
@@ -680,6 +690,7 @@ public struct ${Self}<Pointee>
   ///   not be negative. The default value is `1`.
   /// - Returns: A raw pointer to the same address as this pointer. The memory
   ///   referenced by the returned raw pointer is still bound to `Pointee`.
+  @_inlineable
   @discardableResult
   public func deinitialize(count: Int = 1) -> UnsafeMutableRawPointer {
     _debugPrecondition(count >= 0, "${Self}.deinitialize with negative count")
@@ -731,6 +742,7 @@ public struct ${Self}<Pointee>
   ///     execution. If `body` has a return value, it is used as the return
   ///     value for the `withMemoryRebound(to:capacity:_:)` method.
   /// - Returns: The return value of the `body` closure parameter, if any.
+  @_inlineable
   public func withMemoryRebound<T, Result>(to type: T.Type, capacity count: Int,
     _ body: (${Self}<T>) throws -> Result
   ) rethrows -> Result {
@@ -759,6 +771,7 @@ public struct ${Self}<Pointee>
   ///
   /// - Parameter i: The offset from this pointer at which to access an
   ///   instance, measured in strides of the pointer's `Pointee` type.
+  @_inlineable
   public subscript(i: Int) -> Pointee {
 %  if mutable:
     @_transparent
@@ -786,6 +799,7 @@ public struct ${Self}<Pointee>
   /// The hash value is not guaranteed to be stable across different
   /// invocations of the same program.  Do not persist the hash value across
   /// program runs.
+  @_inlineable
   public var hashValue: Int {
     return Int(bitPattern: self)
   }
@@ -797,6 +811,7 @@ public struct ${Self}<Pointee>
   ///
   /// - Returns: A pointer advanced from this pointer by
   ///   `MemoryLayout<Pointee>.stride` bytes.
+  @_inlineable
   public func successor() -> ${Self} {
     return self + 1
   }
@@ -808,6 +823,7 @@ public struct ${Self}<Pointee>
   ///
   /// - Returns: A pointer shifted backward from this pointer by
   ///   `MemoryLayout<Pointee>.stride` bytes.
+  @_inlineable
   public func predecessor() -> ${Self} {
     return self - 1
   }
@@ -831,6 +847,7 @@ public struct ${Self}<Pointee>
   ///   `MemoryLayout<Pointee>.stride`.
   ///
   /// - SeeAlso: `MemoryLayout`
+  @_inlineable
   public func distance(to end: ${Self}) -> Int {
     return end - self
   }
@@ -852,6 +869,7 @@ public struct ${Self}<Pointee>
   ///   `Pointee` type.
   ///
   /// - SeeAlso: `MemoryLayout`
+  @_inlineable
   public func advanced(by n: Int) -> ${Self} {
     return self + n
   }
@@ -1170,6 +1188,7 @@ extension ${Self} {
 }
 
 extension Int {
+  @_inlineable
   public init<U>(bitPattern: ${Self}<U>?) {
     if let bitPattern = bitPattern {
       self = Int(Builtin.ptrtoint_Word(bitPattern._rawValue))
@@ -1180,6 +1199,7 @@ extension Int {
 }
 
 extension UInt {
+  @_inlineable
   public init<U>(bitPattern: ${Self}<U>?) {
     if let bitPattern = bitPattern {
       self = UInt(Builtin.ptrtoint_Word(bitPattern._rawValue))

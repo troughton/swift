@@ -13,7 +13,7 @@
 #define DEBUG_TYPE "sil-passmanager"
 
 #include "swift/SILOptimizer/PassManager/PassManager.h"
-#include "swift/Basic/DemangleWrappers.h"
+#include "swift/Demangling/Demangle.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/SILOptimizer/Analysis/BasicCalleeAnalysis.h"
@@ -801,7 +801,7 @@ namespace llvm {
 
     std::string getNodeDescription(const CallGraph::Node *Node,
                                    const CallGraph *Graph) {
-      std::string Label = demangle_wrappers::
+      std::string Label = Demangle::
       demangleSymbolAsString(Node->F->getName());
       wrap(Label, Node->NumCallSites);
       return Label;

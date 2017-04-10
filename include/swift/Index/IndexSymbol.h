@@ -45,7 +45,7 @@ inline SymbolPropertySet &operator|=(SymbolPropertySet &SKSet, SymbolProperty SK
 }
 
 struct IndexRelation {
-  const ValueDecl *decl;
+  const Decl *decl;
   SymbolInfo symInfo;
   SymbolRoleSet roles = SymbolRoleSet(0);
 
@@ -55,7 +55,7 @@ struct IndexRelation {
   StringRef USR; // USR may be safely compared by pointer.
   StringRef group;
 
-  IndexRelation(SymbolRoleSet Roles, const ValueDecl *Sym, SymbolInfo SymInfo, StringRef Name, StringRef USR)
+  IndexRelation(SymbolRoleSet Roles, const Decl *Sym, SymbolInfo SymInfo, StringRef Name, StringRef USR)
   : decl(Sym), symInfo(SymInfo), roles(Roles), name(Name), USR(USR) {}
 
   IndexRelation() = default;
@@ -79,6 +79,7 @@ struct IndexSymbol : IndexRelation {
 
 SymbolInfo getSymbolInfoForDecl(const Decl *D);
 SymbolSubKind getSubKindForAccessor(AccessorKind AK);
+bool isLocalSymbol(const Decl *D);
 
 using clang::index::printSymbolProperties;
 

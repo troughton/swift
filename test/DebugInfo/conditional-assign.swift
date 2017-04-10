@@ -16,7 +16,7 @@ public class M {
   // Verify that definite initialization doesn't create a bogus description of
   // self pointing to the liveness bitvector.
   
-  // CHECK: sil @_TFC4main1McfzT4fromPS_12WithDelegate__S0_
+  // CHECK: sil @_T04main1MCAcA12WithDelegate_p4from_tKcfc
   // CHECK: bb0
   // CHECK-NEXT: %2 = alloc_stack $Builtin.Int2
   // CHECK-NOT: let

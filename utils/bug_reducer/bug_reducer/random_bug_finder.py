@@ -1,12 +1,13 @@
+from __future__ import print_function
 
 import json
 import random
 import subprocess
 import sys
 
-import swift_tools
-
 import opt_bug_reducer
+
+import swift_tools
 
 
 def random_bug_finder(args):

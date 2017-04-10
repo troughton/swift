@@ -21,7 +21,6 @@
 #include "swift/SIL/SILCloner.h"
 #include "swift/SIL/SILDebugScope.h"
 #include "swift/SIL/SILVisitor.h"
-#include "swift/AST/AST.h"
 #include "swift/Basic/AssertImplements.h"
 #include "swift/ClangImporter/ClangModule.h"
 #include "swift/SIL/SILModule.h"
@@ -864,6 +863,10 @@ bool SILInstruction::mayRelease() const {
   case ValueKind::ReleaseValueInst:
     return true;
 
+  case ValueKind::DestroyValueInst:
+    assert(!SILModuleConventions(getModule()).useLoweredAddresses());
+    return true;
+
   case ValueKind::UnconditionalCheckedCastAddrInst: {
     // Failing casts with take_always can release.
     auto *Cast = cast<UnconditionalCheckedCastAddrInst>(this);
@@ -989,6 +992,9 @@ SILInstruction *SILInstruction::clone(SILInstruction *InsertPt) {
 /// additional handling. It is important to know this information when
 /// you perform such optimizations like e.g. jump-threading.
 bool SILInstruction::isTriviallyDuplicatable() const {
+  if (isa<ThrowInst>(this))
+    return false;
+
   if (isa<AllocStackInst>(this) || isa<DeallocStackInst>(this)) {
     return false;
   }
@@ -997,9 +1003,9 @@ bool SILInstruction::isTriviallyDuplicatable() const {
       return false;
   }
 
-  if (isa<OpenExistentialAddrInst>(this) ||
-      isa<OpenExistentialRefInst>(this) ||
-      isa<OpenExistentialMetatypeInst>(this)) {
+  if (isa<OpenExistentialAddrInst>(this) || isa<OpenExistentialRefInst>(this) ||
+      isa<OpenExistentialMetatypeInst>(this) ||
+      isa<OpenExistentialOpaqueInst>(this)) {
     // Don't know how to duplicate these properly yet. Inst.clone() per
     // instruction does not work. Because the follow-up instructions need to
     // reuse the same archetype uuid which would only work if we used a
