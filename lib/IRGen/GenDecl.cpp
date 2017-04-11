@@ -1344,11 +1344,6 @@ static IRLinkageTuple getIRLinkage(const UniversalLinkageInfo &info, SILLinkage 
     llvm::GlobalValue::VISIBILITY##Visibility,                                 \
     llvm::GlobalValue::DLL_STORAGE##StorageClass                               \
   }
-  // Public visibility depends on the target object format.
-  
-  const auto ObjFormat = IGM.TargetInfo.OutputObjectFormat;
-  bool IsELFObject = ObjFormat == llvm::Triple::ELF;
-  bool UseDLLStorage = IGM.useDllStorage();
 
   // Use protected visibility for public symbols we define on ELF.  ld.so
   // doesn't support relative relocations at load time, which interferes with
@@ -1444,7 +1439,7 @@ static IRLinkageTuple getIRLinkage(const UniversalLinkageInfo &info, SILLinkage 
     return std::make_tuple(isDefinition
                                ? llvm::GlobalValue::AvailableExternallyLinkage
                                : llvm::GlobalValue::ExternalLinkage,
-                           isFragile || ObjFormat == llvm::Triple::COFF ? llvm::GlobalValue::DefaultVisibility
+                           isFragile || info.IsCOFFObject ? llvm::GlobalValue::DefaultVisibility
                                      : llvm::GlobalValue::HiddenVisibility,
                            ImportedStorage);
 

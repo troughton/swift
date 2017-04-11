@@ -444,7 +444,7 @@ __mulodi4(di_int a, di_int b, int* overflow)
 }
 #endif
 
-#if defined(__CYGWIN__) || defined(_WIN32)
+#if defined(_WIN32)
   #define strcasecmp _stricmp
 #endif
 

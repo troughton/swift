@@ -36,7 +36,8 @@ bool useDllStorage(const llvm::Triple &triple);
 
 class UniversalLinkageInfo {
 public:
-  bool IsELFObject, UseDLLStorage, HasMultipleIGMs, IsWholeModule;
+  bool IsELFObject, IsCOFFObject, UseDLLStorage, HasMultipleIGMs,
+       IsWholeModule;
 
   UniversalLinkageInfo(IRGenModule &IGM);
 
