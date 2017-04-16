@@ -505,10 +505,6 @@ swift::createTargetMachine(IRGenOptions &Opts, ASTContext &Ctx) {
   // when run.
   if (Triple.isArch64Bit() && Triple.isOSWindows())
     cmodel = CodeModel::Large;
-  if (Triple.isKnownWindowsMSVCEnvironment())
-    cmodel = CodeModel::Large;
-  if (Triple.isWindowsGNUEnvironment())
-    cmodel = CodeModel::Large;
 
   llvm::TargetMachine *TargetMachine =
       Target->createTargetMachine(Triple.str(), CPU, targetFeatures, TargetOpts,

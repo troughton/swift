@@ -190,6 +190,7 @@ if("${CMAKE_SYSTEM_NAME}" STREQUAL "CYGWIN")
       OUTPUT_VARIABLE ENV_SYSTEMROOT)
 
   list(APPEND swift_core_link_flags "${ENV_SYSTEMROOT}/system32/psapi.dll")
+  list(APPEND swift_core_private_link_libraries "-latomic")
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")

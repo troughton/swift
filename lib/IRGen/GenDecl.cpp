@@ -580,12 +580,12 @@ void IRGenModule::emitRuntimeRegistration() {
   
   // Create a new function to contain our logic.
   auto fnTy = llvm::FunctionType::get(VoidTy, /*varArg*/ false);
-  auto RegistrationFunction =
-      llvm::Function::Create(fnTy, llvm::GlobalValue::PrivateLinkage,
-                             "runtime_registration", getModule());
+  auto RegistrationFunction = llvm::Function::Create(fnTy,
+                                           llvm::GlobalValue::PrivateLinkage,
+                                           "runtime_registration",
+                                           getModule());
   RegistrationFunction->setAttributes(constructInitialAttributes());
-  // FIXME: should we be setting the visibility and DLL storage as well?
-
+  
   // Insert a call into the entry function.
   {
     llvm::BasicBlock *EntryBB = &EntryFunction->getEntryBlock();
@@ -971,13 +971,12 @@ void IRGenModule::emitVTableStubs() {
     const SILFunction &F = *I;
     if (! F.isExternallyUsedSymbol())
       continue;
-
+    
     if (!stub) {
       // Create a single stub function which calls swift_deletedMethodError().
       stub = llvm::Function::Create(llvm::FunctionType::get(VoidTy, false),
                                     llvm::GlobalValue::InternalLinkage,
                                     "_swift_dead_method_stub");
-      // FIXME: should we be setting the visibility and DLL storage as well?
       stub->setAttributes(constructInitialAttributes());
       Module.getFunctionList().push_back(stub);
       stub->setCallingConv(DefaultCC);
@@ -1056,12 +1055,12 @@ void IRGenModule::emitTypeVerifier() {
   
   // Create a new function to contain our logic.
   auto fnTy = llvm::FunctionType::get(VoidTy, /*varArg*/ false);
-  auto VerifierFunction =
-      llvm::Function::Create(fnTy, llvm::GlobalValue::PrivateLinkage,
-                             "type_verifier", getModule());
+  auto VerifierFunction = llvm::Function::Create(fnTy,
+                                             llvm::GlobalValue::PrivateLinkage,
+                                             "type_verifier",
+                                             getModule());
   VerifierFunction->setAttributes(constructInitialAttributes());
-  // FIXME: should we be setting the visibility and DLL storage as well?
-
+  
   // Insert a call into the entry function.
   {
     llvm::BasicBlock *EntryBB = &EntryFunction->getEntryBlock();
@@ -1330,20 +1329,17 @@ bool LinkEntity::isFragile(ForDefinition_t isDefinition) const {
   return false;
 }
 
-
-using IRLinkageTuple = std::tuple<llvm::GlobalValue::LinkageTypes,
-                                  llvm::GlobalValue::VisibilityTypes,
-                                  llvm::GlobalValue::DLLStorageClassTypes>;
-static IRLinkageTuple getIRLinkage(const UniversalLinkageInfo &info, SILLinkage linkage,
+static std::tuple<llvm::GlobalValue::LinkageTypes,
+                  llvm::GlobalValue::VisibilityTypes,
+                  llvm::GlobalValue::DLLStorageClassTypes>
+getIRLinkage(const UniversalLinkageInfo &info, SILLinkage linkage,
              bool isFragile, bool isSILOnly, ForDefinition_t isDefinition,
              bool isWeakImported) {
 
 #define RESULT(LINKAGE, VISIBILITY, DLL_STORAGE)                               \
-  IRLinkageTuple {                                                             \
-    llvm::GlobalValue::LINKAGE##Linkage,                                       \
-    llvm::GlobalValue::VISIBILITY##Visibility,                                 \
-    llvm::GlobalValue::DLL_STORAGE##StorageClass                               \
-  }
+  std::make_tuple(llvm::GlobalValue::LINKAGE##Linkage,                         \
+                  llvm::GlobalValue::VISIBILITY##Visibility,                   \
+                  llvm::GlobalValue::DLL_STORAGE##StorageClass)
 
   // Use protected visibility for public symbols we define on ELF.  ld.so
   // doesn't support relative relocations at load time, which interferes with
@@ -1354,10 +1350,10 @@ static IRLinkageTuple getIRLinkage(const UniversalLinkageInfo &info, SILLinkage 
                        : llvm::GlobalValue::DefaultVisibility;
   llvm::GlobalValue::DLLStorageClassTypes ExportedStorage =
       info.UseDLLStorage && EnabledDllExport() ? llvm::GlobalValue::DLLExportStorageClass
-                    : llvm::GlobalValue::DefaultStorageClass;
+                         : llvm::GlobalValue::DefaultStorageClass;
   llvm::GlobalValue::DLLStorageClassTypes ImportedStorage =
       info.UseDLLStorage && EnabledDllImport() ? llvm::GlobalValue::DLLImportStorageClass
-                    : llvm::GlobalValue::DefaultStorageClass;
+                         : llvm::GlobalValue::DefaultStorageClass;
 
   if (isFragile) {
     // Fragile functions/globals must be visible from outside, regardless of
@@ -1396,9 +1392,9 @@ static IRLinkageTuple getIRLinkage(const UniversalLinkageInfo &info, SILLinkage 
     // this strips all serialized transparent functions. So we have to code-gen
     // transparent functions in non-whole-module-opt.
     if (isSILOnly && !info.HasMultipleIGMs && info.IsWholeModule)
-      return IRLinkageTuple{llvm::GlobalValue::InternalLinkage,
-                            llvm::GlobalValue::DefaultVisibility,
-                            ExportedStorage};
+      return std::make_tuple(llvm::GlobalValue::InternalLinkage,
+                             llvm::GlobalValue::DefaultVisibility,
+                             ExportedStorage);
     return std::make_tuple(llvm::GlobalValue::ExternalLinkage,
                            PublicDefinitionVisibility, ExportedStorage);
 
@@ -1421,8 +1417,8 @@ static IRLinkageTuple getIRLinkage(const UniversalLinkageInfo &info, SILLinkage 
       // Transparent function are not available externally.
       if (isSILOnly)
         return std::make_tuple(llvm::GlobalValue::LinkOnceODRLinkage,
-                              llvm::GlobalValue::HiddenVisibility,
-                              ImportedStorage);
+                               llvm::GlobalValue::HiddenVisibility,
+                               ImportedStorage);
       return std::make_tuple(llvm::GlobalValue::AvailableExternallyLinkage,
                              llvm::GlobalValue::DefaultVisibility,
                              ImportedStorage);
@@ -2626,10 +2622,9 @@ llvm::GlobalValue *IRGenModule::defineTypeMetadata(CanType concreteType,
 
   LinkInfo link = LinkInfo::get(*this, directEntity, ForDefinition);
   auto *ptrTy = cast<llvm::PointerType>(addr->getType());
-  auto *alias =
-      llvm::GlobalAlias::create(ptrTy->getElementType(),
-                                ptrTy->getAddressSpace(), link.getLinkage(),
-                                link.getName(), addr, &Module);
+  auto *alias = llvm::GlobalAlias::create(
+      ptrTy->getElementType(), ptrTy->getAddressSpace(), link.getLinkage(),
+      link.getName(), addr, &Module);
   alias->setVisibility(link.getVisibility());
   alias->setDLLStorageClass(link.getDLLStorage());
 

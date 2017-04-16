@@ -195,7 +195,7 @@ static llvm::Function *createDtorFn(IRGenModule &IGM,
                                     const HeapLayout &layout) {
   llvm::Function *fn =
     llvm::Function::Create(IGM.DeallocatingDtorTy,
-                           llvm::Function::InternalLinkage,
+                           llvm::Function::PrivateLinkage,
                            "objectdestroy", &IGM.Module);
   auto attrs = IGM.constructInitialAttributes();
   IGM.addSwiftSelfAttributes(attrs, 0);
@@ -240,11 +240,11 @@ static llvm::Function *createDtorFn(IRGenModule &IGM,
 /// Create the size function for a layout.
 /// TODO: give this some reasonable name and possibly linkage.
 llvm::Constant *HeapLayout::createSizeFn(IRGenModule &IGM) const {
-  llvm::Function *fn = llvm::Function::Create(IGM.DeallocatingDtorTy,
-                                              llvm::Function::InternalLinkage,
-                                              "objectsize", &IGM.Module);
+  llvm::Function *fn =
+    llvm::Function::Create(IGM.DeallocatingDtorTy,
+                           llvm::Function::PrivateLinkage,
+                           "objectsize", &IGM.Module);
   fn->setAttributes(IGM.constructInitialAttributes());
-  // FIXME: should we be setting visibility and DLL storage as well?
 
   IRGenFunction IGF(IGM, fn);
   if (IGM.DebugInfo)
@@ -1240,10 +1240,10 @@ llvm::Constant *IRGenModule::getFixLifetimeFn() {
   // Generate a private stub function for the LLVM ARC optimizer to recognize.
   auto fixLifetimeTy = llvm::FunctionType::get(VoidTy, RefCountedPtrTy,
                                                /*isVarArg*/ false);
-  auto fixLifetime =
-      llvm::Function::Create(fixLifetimeTy, llvm::GlobalValue::PrivateLinkage,
-                             "__swift_fixLifetime", &Module);
-  // FIXME: should we be setting visibility and DLL storage as well?
+  auto fixLifetime = llvm::Function::Create(fixLifetimeTy,
+                                         llvm::GlobalValue::PrivateLinkage,
+                                         "__swift_fixLifetime",
+                                         &Module);
   assert(fixLifetime->getName().equals("__swift_fixLifetime")
          && "fixLifetime symbol name got mangled?!");
   // Don't inline the function, so it stays as a signal to the ARC passes.

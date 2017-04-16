@@ -1513,10 +1513,9 @@ static llvm::Function *emitBlockCopyHelper(IRGenModule &IGM,
   auto copyTy = llvm::FunctionType::get(IGM.VoidTy, args, /*vararg*/ false);
   // TODO: Give these predictable mangled names and shared linkage.
   auto func = llvm::Function::Create(copyTy, llvm::GlobalValue::InternalLinkage,
-                                     "block_copy_helper", IGM.getModule());
+                                     "block_copy_helper",
+                                     IGM.getModule());
   func->setAttributes(IGM.constructInitialAttributes());
-  // FIXME: should we be setting visibility and DLL storage as well?
-
   IRGenFunction IGF(IGM, func);
   if (IGM.DebugInfo)
     IGM.DebugInfo->emitArtificialFunction(IGF, func);
@@ -1554,8 +1553,6 @@ static llvm::Function *emitBlockDisposeHelper(IRGenModule &IGM,
                                      "block_destroy_helper",
                                      IGM.getModule());
   func->setAttributes(IGM.constructInitialAttributes());
-  // FIXME: should we be setting visibility and DLL storage as well?
-
   IRGenFunction IGF(IGM, func);
   assert(!func->hasFnAttribute(llvm::Attribute::SanitizeThread));
   if (IGM.DebugInfo)
