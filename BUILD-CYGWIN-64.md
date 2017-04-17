@@ -1,9 +1,9 @@
 
-Install cygwin64 2.6.0
+Install cygwin64 2.8.0
 ----------------------
 ```
  Devel/automake           9-1
-      /clang              3.8.1-1 
+      /clang              3.9.1-1 
       /cmake              3.6.2-1
       /gcc-core           5.4.0-1
       /gcc-g++            5.4.0-1
@@ -35,14 +35,20 @@ Patch gcc header
   $ cd /usr/lib/gcc/i686-pc-cygwin
   $ ln -s 5.4.0 4.7.3
   $ cd /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++
-  $ ln -s x86_64-pc-cygwin i686-pc-cygwin
+  $ ln -s x86_64-pc-cygwin i686-pc-cygwin  
+```
 
+ - The header file **`bits/c++config.h`** should be modified. (__float128 error)
+   http://stackoverflow.com/questions/43316533/float128-is-not-supported-on-this-target
+```
+  Edit /usr/lib/gcc/x86_64-pc-cygwin/5.4.0/include/c++/x86_64-pc-cygwin/bits/c++config.h
+  Add `#undef _GLIBCXX_USE_FLOAT128` under the line `#define _GLIBCXX_USE_FLOAT128 1`
 ```
 
 Download sources
 ----------------
 ```
-  export WORK_DIR=/cgydrive/<working directory>
+  export WORK_DIR=/cygdrive/<working directory>
   cd $WORK_DIR
   
   git clone https://github.com/tinysun212/swift-windows.git swift
@@ -62,7 +68,7 @@ Download sources
   cd swift-corelibs-foundation; git checkout swift-cygwin-YYYYMMDD ; cd ..
   cd swift-corelibs-xctest; git checkout swift-cygwin-YYYYMMDD ; cd ..
   
-  cd cmark; git checkout 6873b; cd ..
+  cd cmark; git checkout master; cd ..
   cd ninja; git checkout 2eb1cc9; cd ..
 ```
 
