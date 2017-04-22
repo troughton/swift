@@ -2977,11 +2977,11 @@ PoolRange AllocationPoolLoad() {
   return pool;
 }
 
-bool CompExchangeAllocationPool(PoolRange *a, PoolRange b) {
+bool CompExchangeAllocationPool(const PoolRange *current, const PoolRange &next) {
   pool_mtx.lock();
-  bool was_same = (memcmp(a, &AllocationPool, sizeof(PoolRange)) == 0);
+  bool was_same = (memcmp(current, &AllocationPool, sizeof(PoolRange)) == 0);
   if (was_same)
-    *a = b;
+    AllocationPool = next;
   pool_mtx.unlock();
   return was_same;
 }           
