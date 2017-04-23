@@ -15,31 +15,36 @@ export WORKDIR=<Your working directory>
 Install Packages
 ----------------------
 ```
-pacman -S mingw-w64-x86_64-cmake       # 3.4.1-1
-pacman -S mingw-w64-x86_64-ninja       # 1.6.0-1
-pacman -S mingw-w64-x86_64-clang       # 3.8.0-3
-pacman -S mingw-w64-x86_64-icu         # 57.1-1
-pacman -S mingw-w64-x86_64-libxml2     # 2.9.4-1
-pacman -S mingw-w64-x86_64-wineditline # 2.101-4
-pacman -S mingw-w64-x86_64-winpthreads # git-5.0.0.4670
-pacman -S mingw-w64-x86_64-pkg-config  # 0.29.1-1
+pacman -S mingw-w64-x86_64-cmake       # 3.7.2-2
+pacman -S mingw-w64-x86_64-ninja       # 1.7.2-1
+pacman -S mingw-w64-x86_64-clang       # 3.9.1-3
+pacman -S mingw-w64-x86_64-icu         # 57.1-2
+pacman -S mingw-w64-x86_64-libxml2     # 2.9.4-4
+pacman -S mingw-w64-x86_64-wineditline # 2.201-1
+pacman -S mingw-w64-x86_64-winpthreads # git-5.0.0.4816.8692be6a-1
+pacman -S mingw-w64-x86_64-pkg-config  # 0.29.2-1
 pacman -S mingw-w64-x86_64-dlfcn       # 1.0.0-2
-pacman -S make                         # 4.1-4
-pacman -S python                       # 3.4.3-3
-pacman -S python2                      # 2.7.11-1
+pacman -S make                         # 4.2.1
+pacman -S python                       # 3.4.5-1
+pacman -S python2                      # 2.7.13-1
 ```
 
 Patch gcc header
 ----------------
   
- - Undefine _GLIBCXX_HAVE_TLS in the header file **`c++config.h`**.
+ - The header file **`sys/unistd.h`** should be modified. (avoid use of keyword '__block')
 ```
-  Insert three lines below the line 980 of /usr/lib/gcc/x86_64-pc-msys/5.3.0/include/c++/x86_64-pc-msys/bits/c++config.h
-     #define _GLIBCXX_HAVE_TLS 1
-+    #if defined (__clang__)
-+    #undef _GLIBCXX_HAVE_TLS
-+    #endif
-``` 
+  Edit /usr/include/sys/unistd.h Line 53
+    Change the string '__block' to ''
+-void    _EXFUN(encrypt, (char *__block, int __edflag)); 
++void    _EXFUN(encrypt, (char *, int __edflag));
+```
+c:/msys64/mingw64/include/c++/6.3.0/type_traits
+#if !defined(__STRICT_ANSI__) && defined(_GLIBCXX_USE_FLOAT128)
+//  template<>
+//    struct __is_floating_point_helper<__float128>
+//    : public true_type { };
+#endif
 
 Download sources
 ----------------
@@ -53,7 +58,7 @@ Download sources
   cd swift; git checkout swift-mingw-YYYYMMDD ; cd ..
   cd llvm; git checkout swift-mingw-YYYYMMDD ; cd ..
   cd clang; git checkout swift-mingw-YYYYMMDD ; cd ..
-  cd cmark; git checkout 6873b; cd ..
+  cd cmark; git checkout master; cd ..
 ```
 
 Build cmark
@@ -82,8 +87,7 @@ mkdir $WORKDIR/build/NinjaMinGW/llvm
 cd $WORKDIR/build/NinjaMinGW/llvm
 cmake -G Ninja -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ ../../../llvm
 
-ninja -k 5
-// Ignore the build error for lib\libLTO.dll.a
+ninja
 ```
 
 Build Swift
@@ -102,8 +106,8 @@ cp $WORKDIR/build/NinjaMinGW/cmark/src/libcmark.dll $WORKDIR/build/NinjaMinGW/sw
 
 cd $WORKDIR/build/NinjaMinGW/swift
 
-cmake -G "MSYS Makefiles" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config -DICU_UC_INCLUDE_DIR=/mingw64/include -DICU_UC_LIBRARY=/mingw64/lib/libicuuc.dll.a -DICU_I18N_INCLUDE_DIR=/mingw64/include -DICU_I18N_LIBRARY=/mingw64/lib/libicuin.dll.a -DSWIFT_INCLUDE_DOCS=FALSE -DSWIFT_PATH_TO_CMARK_BUILD=$WORKDIR/build/NinjaMinGW/cmark -DSWIFT_PATH_TO_CMARK_SOURCE=$WORKDIR/cmark -DSWIFT_PATH_TO_LLVM_SOURCE=$WORKDIR/llvm -DSWIFT_PATH_TO_LLVM_BUILD=$WORKDIR/build/NinjaMinGW/llvm ../../../swift
+cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config -DICU_UC_INCLUDE_DIR=/mingw64/include -DICU_UC_LIBRARY=/mingw64/lib/libicuuc.dll.a -DICU_I18N_INCLUDE_DIR=/mingw64/include -DICU_I18N_LIBRARY=/mingw64/lib/libicuin.dll.a -DSWIFT_INCLUDE_DOCS=FALSE -DSWIFT_PATH_TO_CMARK_BUILD=$WORKDIR/build/NinjaMinGW/cmark -DSWIFT_PATH_TO_CMARK_SOURCE=$WORKDIR/cmark -DSWIFT_PATH_TO_LLVM_SOURCE=$WORKDIR/llvm -DSWIFT_PATH_TO_LLVM_BUILD=$WORKDIR/build/NinjaMinGW/llvm ../../../swift
 
-make -k
+ninja
 ```
   

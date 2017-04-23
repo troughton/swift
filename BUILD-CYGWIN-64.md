@@ -27,7 +27,7 @@ Patch gcc header
  - The header file **`sys/unistd.h`** should be modified. (avoid use of keyword '__block')
 ```
   Edit /usr/include/sys/unistd.h Line 53
-    Change the string '__block' to 'block'
+    Change the string '__block' to ''
 -void    _EXFUN(encrypt, (char *__block, int __edflag)); 
 +void    _EXFUN(encrypt, (char *, int __edflag));
 ```

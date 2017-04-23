@@ -727,8 +727,8 @@ function(_add_swift_library_single target name)
     if("${libkind}" STREQUAL "SHARED")
       set(arch_subdir "${SWIFTLIB_DIR}/${SWIFTLIB_SINGLE_SUBDIR}")
 
-      set(SWIFT_SECTIONS_OBJECT_BEGIN "${arch_subdir}/swift_begin.o")
-      set(SWIFT_SECTIONS_OBJECT_END   "${arch_subdir}/swift_end.o")
+#      set(SWIFT_SECTIONS_OBJECT_BEGIN "${arch_subdir}/swift_begin.o")
+#      set(SWIFT_SECTIONS_OBJECT_END   "${arch_subdir}/swift_end.o")
     endif()
   endif()
 

@@ -185,7 +185,7 @@ namespace swift {
       dest = newValue;
   }
 
-#if defined(__CYGWIN__)
+#if defined(__CYGWIN__) || defined(__MINGW32__)
   void _swift_once_f(uintptr_t *predicate, void *context,
                      void (*function)(void *));
 #endif

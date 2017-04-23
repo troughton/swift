@@ -186,7 +186,7 @@ static int _addImageCallback(struct _swift_dl_phdr_info *info,
     inspectArgs->fnAddImageBlock(conformances, conformancesSize);
 
 #if defined(_WIN32)
-  FreeLibrary(handle);
+  //FreeLibrary(handle);
 #else
   dlclose(handle);
 #endif

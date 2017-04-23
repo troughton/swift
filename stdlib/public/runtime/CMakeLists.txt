@@ -69,7 +69,7 @@ set(swift_runtime_sources
 
 # Acknowledge that the following sources are known.
 set(LLVM_OPTIONAL_SOURCES
-    swift_sections.S
+#    swift_sections.S
     MutexPThread.cpp
     MutexWin32.cpp
     CygwinPort.cpp
@@ -171,87 +171,5 @@ endif()
 
 
 set(object_target_list)
-foreach(sdk ${ELFISH_SDKS})
-  foreach(arch ${SWIFT_SDK_${sdk}_ARCHITECTURES})
-    set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
-    set(arch_suffix "${SWIFT_SDK_${sdk}_LIB_SUBDIR}-${arch}")
-
-    set(section_magic_loader_obj "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/section_magic_loader-${arch_suffix}.dir/ImageInspectionInit.cpp${CMAKE_C_OUTPUT_EXTENSION}")
-    set(section_magic_begin_obj "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/section_magic_begin-${arch_suffix}.dir/swift_sections.S${CMAKE_C_OUTPUT_EXTENSION}")
-    set(section_magic_end_obj "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/section_magic_end-${arch_suffix}.dir/swift_sections.S${CMAKE_C_OUTPUT_EXTENSION}")
-
-    set(ld_EXECUTABLE ${CMAKE_LINKER})
-    if(SWIFT_SDK_${sdk}_ARCH_${arch}_LINKER)
-      set(ld_EXECUTABLE ${SWIFT_SDK_${sdk}_ARCH_${arch}_LINKER})
-    endif()
-
-    add_custom_command_target(section_magic_${arch_suffix}_begin_object
-      COMMAND
-          # Merge ImageInspectionInit.o + swift_sections.S(BEGIN) => swift_begin.o
-          ${ld_EXECUTABLE} -r -o "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
-          "${section_magic_begin_obj}" "${section_magic_loader_obj}"
-      OUTPUT
-          "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
-      DEPENDS
-          "${section_magic_begin_obj}"
-          "${section_magic_loader_obj}")
-
-    add_custom_command_target(section_magic_${arch_suffix}_end_object
-      COMMAND
-          "${CMAKE_COMMAND}" -E copy
-          "${section_magic_end_obj}"
-          "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
-      OUTPUT
-          "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
-      DEPENDS
-          "${section_magic_end_obj}")
-
-    list(APPEND object_target_list
-        "${section_magic_${arch_suffix}_begin_object}"
-        "${section_magic_${arch_suffix}_end_object}")
-
-    swift_install_in_component(stdlib
-        FILES
-            "${SWIFTLIB_DIR}/${arch_subdir}/swift_begin.o"
-            "${SWIFTLIB_DIR}/${arch_subdir}/swift_end.o"
-        DESTINATION
-            "lib/swift/${arch_subdir}")
-
-    if(SWIFT_BUILD_STATIC_STDLIB)
-      # Static lib versions of swift_begin.o and swift_end.o
-      add_custom_command_target(static_section_magic_${arch_suffix}_begin_object
-        COMMAND
-            "${CMAKE_COMMAND}" -E copy
-            "${section_magic_begin_obj}"
-            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_begin.o"
-        OUTPUT
-            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_begin.o"
-        DEPENDS
-            "${section_magic_begin_obj}")
-
-      add_custom_command_target(static_section_magic_${arch_suffix}_end_object
-        COMMAND
-            "${CMAKE_COMMAND}" -E copy
-            "${section_magic_end_obj}"
-            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_end.o"
-        OUTPUT
-            "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_end.o"
-        DEPENDS
-            "${section_magic_end_obj}")
-
-      list(APPEND object_target_list
-            "${static_section_magic_${arch_suffix}_begin_object}"
-            "${static_section_magic_${arch_suffix}_end_object}")
-
-      swift_install_in_component(stdlib
-          FILES
-              "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_begin.o"
-              "${SWIFTSTATICLIB_DIR}/${arch_subdir}/swift_end.o"
-          DESTINATION
-              "lib/swift_static/${arch_subdir}")
-    endif()
-
-  endforeach()
-endforeach()
 
 add_custom_target(section_magic ALL DEPENDS ${object_target_list})

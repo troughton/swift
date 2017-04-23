@@ -28,11 +28,10 @@
 #include <windows.h>
 #include <psapi.h>
 
-using namespace swift;
-
 static std::mutex swiftOnceMutex;
 
-void swift::_swift_once_f(uintptr_t *predicate, void *context,
+namespace swift {
+void _swift_once_f(uintptr_t *predicate, void *context,
                           void (*function)(void *)) {
   // FIXME: This implementation does a global lock, which is much worse than
   // what we have on other platforms. Each swift_once should synchronize on the
@@ -45,5 +44,6 @@ void swift::_swift_once_f(uintptr_t *predicate, void *context,
     function(context);
   } else
     swiftOnceMutex.unlock();
+}
 }
 #endif // (defined(_WIN32) || defined(__CYGWIN__)) && !defined(_MSC_VER)
