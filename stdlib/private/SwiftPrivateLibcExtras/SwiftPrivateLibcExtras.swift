@@ -16,7 +16,11 @@ import Darwin
 #elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || CYGWIN
 import Glibc
 #elseif os(Windows)
+#if MINGW
+import LegacyMsvcrt
+#else
 import ucrt
+#endif
 #endif
 
 #if !os(Windows) || CYGWIN

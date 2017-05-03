@@ -122,6 +122,33 @@ public var stderr : UnsafeMutablePointer<FILE> {
     __stderrp = newValue
   }
 }
+#elseif MINGW
+public var stdin : UnsafeMutablePointer<FILE>! {
+  get {
+    if let iob_fn = __iob_func() {
+      return iob_fn
+    }
+    return nil
+  }
+}
+
+public var stdout : UnsafeMutablePointer<FILE>! {
+  get {
+    if let iob_fn = __iob_func() {
+      return iob_fn + 1
+    }
+    return nil
+  }
+}
+
+public var stderr : UnsafeMutablePointer<FILE>! {
+  get {
+    if let iob_fn = __iob_func() {
+      return iob_fn + 2
+    }
+    return nil
+  }
+}
 #elseif CYGWIN
 public var stdin : UnsafeMutablePointer<__FILE>! {
     get {
@@ -423,7 +450,17 @@ public var SIG_HOLD: sighandler_t {
   return unsafeBitCast(2, to: sighandler_t.self)
 }
 #elseif os(Windows)
-#if CYGWIN
+#if MINGW
+public typealias sighandler_t = __p_sig_fn_t
+
+public var SIG_DFL: sighandler_t? { return nil }
+public var SIG_IGN: sighandler_t {
+  return unsafeBitCast(1, to: sighandler_t.self)
+}
+public var SIG_ERR: sighandler_t {
+  return unsafeBitCast(-1, to: sighandler_t.self)
+}
+#elseif CYGWIN
 public typealias sighandler_t = _sig_func_ptr
 
 public var SIG_DFL: sighandler_t? { return nil }

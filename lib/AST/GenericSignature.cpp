@@ -748,8 +748,13 @@ getBestRequirementSource(ArrayRef<GSBConstraint<ProtocolDecl *>> constraints) {
   const RequirementSource *bestSource = nullptr;
   for (const auto &constraint : constraints) {
     auto source = constraint.source;
+#if defined(__MINGW32__)
+    if (!bestSource || bestSource->compare(source) > 0)
+      bestSource = source;
+#else
     if (!bestSource || source->compare(bestSource) < 0)
       bestSource = source;
+#endif
   }
 
   return bestSource;

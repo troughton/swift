@@ -85,10 +85,20 @@ Build clang
 
 mkdir $WORKDIR/build/NinjaMinGW/llvm
 cd $WORKDIR/build/NinjaMinGW/llvm
-cmake -G Ninja -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ ../../../llvm
+cmake -G Ninja -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ -DLLVM_ENABLE_ASSERTIONS:BOOL=TRUE ../../../llvm
 
 ninja
 ```
+```
+$WORKDIR\build\NinjaMinGW\swift\lib\swift\clang\include\stddef.h
+Line 25:  insert  #undef __need_wint_t
+```
+
+// Change Clang compiler
+cp -p clang clang++ /mingw64/bin
+cp -rp ../../llvm/lib/clang/4.0.0 /mingw64/lib/clang
+
+
 
 Build Swift
 -----------
@@ -106,8 +116,33 @@ cp $WORKDIR/build/NinjaMinGW/cmark/src/libcmark.dll $WORKDIR/build/NinjaMinGW/sw
 
 cd $WORKDIR/build/NinjaMinGW/swift
 
-cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config -DICU_UC_INCLUDE_DIR=/mingw64/include -DICU_UC_LIBRARY=/mingw64/lib/libicuuc.dll.a -DICU_I18N_INCLUDE_DIR=/mingw64/include -DICU_I18N_LIBRARY=/mingw64/lib/libicuin.dll.a -DSWIFT_INCLUDE_DOCS=FALSE -DSWIFT_PATH_TO_CMARK_BUILD=$WORKDIR/build/NinjaMinGW/cmark -DSWIFT_PATH_TO_CMARK_SOURCE=$WORKDIR/cmark -DSWIFT_PATH_TO_LLVM_SOURCE=$WORKDIR/llvm -DSWIFT_PATH_TO_LLVM_BUILD=$WORKDIR/build/NinjaMinGW/llvm ../../../swift
+cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config -DICU_UC_INCLUDE_DIR=/mingw64/include -DICU_UC_LIBRARY=/mingw64/lib/libicuuc.dll.a -DICU_I18N_INCLUDE_DIR=/mingw64/include -DICU_I18N_LIBRARY=/mingw64/lib/libicuin.dll.a -DSWIFT_INCLUDE_DOCS=FALSE -DSWIFT_PATH_TO_CMARK_BUILD=$WORKDIR/build/NinjaMinGW/cmark -DSWIFT_PATH_TO_CMARK_SOURCE=$WORKDIR/cmark -DSWIFT_PATH_TO_LLVM_SOURCE=$WORKDIR/llvm -DSWIFT_PATH_TO_LLVM_BUILD=$WORKDIR/build/NinjaMinGW/llvm -DSWIFT_STDLIB_ASSERTIONS:BOOL=TRUE ../../../swift
 
 ninja
 ```
+
+ninja bin\\swift.exe  
+ninja stdlib/public/SwiftShims/CMakeFiles/copy_shim_headers
+
   
+build Swift.obj by swift_obj.sh + swiftc Cygwin
+    - edit build.ninja COMMAND
+        next line to: build stdlib/public/core/mingw/x86_64/Swift.obj
+vi build.ninja                      
+/build stdlib.public.core.mingw.x86_64.Swift.obj
+j/&&
+llliecho [ESC]
+ninja lib/swift/mingw/x86_64/LegacyMsvcrt.swiftmodule
+
+/build stdlib.private.SwiftPrivate.mingw.x86_64.SwiftPrivate.obj
+j/&&
+llliecho [ESC]
+ninja stdlib/private/SwiftPrivate/mingw/x86_64/SwiftPrivate.obj
+
+    - sh ../swift_obj.sh , then retry
+    
+    - sh ../swift_priv_obj.sh, then retry
+
+
+ 
+

@@ -213,7 +213,7 @@ public func ${bfunc}(_ lhs: ${T}, _ rhs: ${T}) -> ${T} {
 @available(*, deprecated, message: "use the floatingPointClass property.")
 public func fpclassify(_ value: ${T}) -> Int {
 %if T == 'Double':
-#if os(Linux)
+#if os(Linux) || MINGW
   return Int(__fpclassify(CDouble(value)))
 #elseif os(Windows) && !CYGWIN
   return Int(_dclass(CDouble(value)))
@@ -221,7 +221,7 @@ public func fpclassify(_ value: ${T}) -> Int {
   return Int(__fpclassifyd(CDouble(value)))
 #endif
 %else:
-#if os(Windows) && !CYGWIN
+#if os(Windows) && !CYGWIN && !MINGW
   return Int(_${f}dclass(${CT}(value)))
 #else
   return Int(__fpclassify${f}(${CT}(value)))

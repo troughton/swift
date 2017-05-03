@@ -1492,7 +1492,7 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
 
   //FIXME: Patch for Cygwin, '-lswiftSwiftOnoneSupport' will be removed if 
   //SR-1128 autolink-extraction is fixed.
-  Arguments.push_back("-lswiftSwiftOnoneSupport");
+ // Arguments.push_back("-lswiftSwiftOnoneSupport");
 
   // Link the standard library.
   Arguments.push_back("-L");
@@ -1689,7 +1689,7 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
 
   //FIXME: Patch for Cygwin, '-lswiftSwiftOnoneSupport' will be removed if 
   //SR-1128 autolink-extraction is fixed.
-  Arguments.push_back("-llibswiftSwiftOnoneSupport");
+//  Arguments.push_back("-llibswiftSwiftOnoneSupport");
 
   // Link the standard library.
   llvm::SmallString<128> LibPathFlag("-Wl,/LIBPATH:");

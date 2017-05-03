@@ -34,6 +34,15 @@ add_swift_library(swiftMSVCRT ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
     LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
     TARGET_SDKS WINDOWS)
 
+add_swift_library(swiftLegacyMsvcrt ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
+    LegacyMsvcrt.swift
+    ${swift_platform_sources}
+
+    SWIFT_COMPILE_FLAGS -Xcc -fmodule-map-file=C:/Work/swift_msvc/build/NinjaMinGW/swift/lib/swift/mingw/x86_64/legacy_msvcrt.modulemap -I C:/msys64/mingw64/include/c++/6.3.0 -I C:/msys64/mingw64/include/c++/6.3.0/x86_64-w64-mingw32 -I C:/msys64/mingw64/include/c++/6.3.0/backward -I C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/6.3.0/include -I C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/6.3.0/include-fixed -I C:/msys64/mingw64/x86_64-w64-mingw32/include -I C:/msys64/mingw64/include "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
+    LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
+    TARGET_SDKS MINGW
+    DEPENDS legacy_msvc_modulemap)
+
 set(glibc_modulemap_target_list)
 foreach(sdk ${SWIFT_SDKS})
   if(NOT "${sdk}" STREQUAL "LINUX" AND
@@ -105,3 +114,41 @@ foreach(sdk ${SWIFT_SDKS})
   endforeach()
 endforeach()
 add_custom_target(glibc_modulemap DEPENDS ${glibc_modulemap_target_list})
+
+set(SWIFT_SDK_MINGW_PATH "C:/msys64/mingw64/x86_64-w64-mingw32/include")
+foreach(sdk ${SWIFT_SDKS})
+  if(NOT "${sdk}" STREQUAL "MINGW")
+    continue()
+  endif()
+  foreach(arch ${SWIFT_SDK_${sdk}_ARCHITECTURES})
+    set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
+    set(module_dir "${SWIFTLIB_DIR}/${arch_subdir}")
+    
+    set(GLIBC_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH}")
+    set(GLIBC_ARCH_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH}")
+    set(MINGW_INCLUDE_PATH "C:/msys64/mingw64/include")
+    
+    set(glibc_modulemap_source "legacy_msvcrt.modulemap.gyb")
+    set(glibc_modulemap_out "${module_dir}/legacy_msvcrt.modulemap")
+
+    # Configure the module map based on the target. Each platform needs to
+    # reference different headers, based on what's available in their glibc.
+    # This is the 'glibc.modulemap' in the 'resource-dir', so
+    # it's the one we'll look at during the build process.
+    handle_gyb_source_single(glibc_modulemap_target
+        SOURCE "${glibc_modulemap_source}"
+        OUTPUT "${glibc_modulemap_out}"
+        FLAGS
+            "-DCMAKE_SDK=${sdk}"
+            "-DGLIBC_INCLUDE_PATH=${GLIBC_INCLUDE_PATH}"
+            "-DMINGW_INCLUDE_PATH=${MINGW_INCLUDE_PATH}"
+            "-DGLIBC_ARCH_INCLUDE_PATH=${GLIBC_ARCH_INCLUDE_PATH}")
+
+    list(APPEND glibc_modulemap_target_list ${glibc_modulemap_target})
+            
+    swift_install_in_component(sdk-overlay
+        FILES "${glibc_modulemap_out}"
+        DESTINATION "lib/swift/${arch_subdir}")
+  endforeach()
+endforeach()
+add_custom_target(legacy_msvc_modulemap DEPENDS ${glibc_modulemap_target_list})
