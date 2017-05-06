@@ -953,7 +953,7 @@ const ExtraInhabitantsValueWitnessTable METATYPE_VALUE_WITNESS_SYM(Bo); // Built
 
 /// Return the value witnesses for unmanaged pointers.
 static inline const ValueWitnessTable &getUnmanagedPointerValueWitnesses() {
-#ifdef __LP64__
+#if defined(__LP64__) || defined(_GLIBCXX_LLP64)
   return VALUE_WITNESS_SYM(Bi64_);
 #else
   return VALUE_WITNESS_SYM(Bi32_);

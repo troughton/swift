@@ -1489,7 +1489,7 @@ namespace {
     uint32_t Flags;
     uint32_t InstanceStart;
     uint32_t InstanceSize;
-#ifdef __LP64__
+#if defined(__LP64__) || defined(_GLIBCXX_LLP64)
     uint32_t Reserved;
 #endif
     const uint8_t *IvarLayout;

@@ -538,27 +538,36 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
     // The module map used for Glibc depends on the target we're compiling for,
     // and is not included in the resource directory with the other implicit
     // module maps. It's at {freebsd|linux}/{arch}/glibc.modulemap.
-    SmallString<128> GlibcModuleMapPath;
-    GlibcModuleMapPath = searchPathOpts.RuntimeResourcePath;
+    SmallString<128> DefaultLibcModuleMapDir;
+    SmallString<128> DefaultLibcModuleMapPath;
+    DefaultLibcModuleMapDir = searchPathOpts.RuntimeResourcePath;
 
     // Running without a resource directory is not a supported configuration.
-    assert(!GlibcModuleMapPath.empty());
+    assert(!DefaultLibcModuleMapDir.empty());
 
     llvm::sys::path::append(
-      GlibcModuleMapPath,
+      DefaultLibcModuleMapDir,
       swift::getPlatformNameForTriple(triple),
-      swift::getMajorArchitectureName(triple),
-      "glibc.modulemap");
+      swift::getMajorArchitectureName(triple));
 
-    // Only specify the module map if that file actually exists.
-    // It may not--for example in the case that
-    // `swiftc -target x86_64-unknown-linux-gnu -emit-ir` is invoked using
-    // a Swift compiler not built for Linux targets.
-    if (llvm::sys::fs::exists(GlibcModuleMapPath)) {
-      invocationArgStrs.push_back(
-        (Twine("-fmodule-map-file=") + GlibcModuleMapPath).str());
-    } else {
-      // FIXME: Emit a warning of some kind.
+    auto default_libc_module_map_list = { "glibc.modulemap", "legacy_msvcrt.modulemap",
+      "newlib.modulemap", "msvcrt.modulemap" };
+    for (auto &libcmm : default_libc_module_map_list ) {
+      // Only specify the module map if that file actually exists.
+      // It may not--for example in the case that
+      // `swiftc -target x86_64-unknown-linux-gnu -emit-ir` is invoked using
+      // a Swift compiler not built for Linux targets.
+
+      // DefaultLibcModuleMapPath = DefaultLibcModuleMapDir + libcmm;
+      DefaultLibcModuleMapPath = DefaultLibcModuleMapDir;
+      llvm::sys::path::append(DefaultLibcModuleMapPath, libcmm);
+      if (llvm::sys::fs::exists(DefaultLibcModuleMapPath)) {
+        invocationArgStrs.push_back(
+          (Twine("-fmodule-map-file=") + DefaultLibcModuleMapPath).str());
+        break;   
+      } else {
+        // FIXME: Emit a warning of some kind.
+      }
     }
   }
 

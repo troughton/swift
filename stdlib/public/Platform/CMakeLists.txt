@@ -115,7 +115,7 @@ foreach(sdk ${SWIFT_SDKS})
 endforeach()
 add_custom_target(glibc_modulemap DEPENDS ${glibc_modulemap_target_list})
 
-set(SWIFT_SDK_MINGW_PATH "C:/msys64/mingw64/x86_64-w64-mingw32/include")
+set(legacy_msvcrt_modulemap_target_list)
 foreach(sdk ${SWIFT_SDKS})
   if(NOT "${sdk}" STREQUAL "MINGW")
     continue()
@@ -124,31 +124,28 @@ foreach(sdk ${SWIFT_SDKS})
     set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
     set(module_dir "${SWIFTLIB_DIR}/${arch_subdir}")
     
-    set(GLIBC_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH}")
-    set(GLIBC_ARCH_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH}")
     set(MINGW_INCLUDE_PATH "C:/msys64/mingw64/include")
+    set(MINGW_X86_64_INCLUDE_PATH "C:/msys64/mingw64/x86_64-w64-mingw32/include")
     
-    set(glibc_modulemap_source "legacy_msvcrt.modulemap.gyb")
-    set(glibc_modulemap_out "${module_dir}/legacy_msvcrt.modulemap")
+    set(legacy_msvcrt_modulemap_source "legacy_msvcrt.modulemap.gyb")
+    set(legacy_msvcrt_modulemap_out "${module_dir}/legacy_msvcrt.modulemap")
 
-    # Configure the module map based on the target. Each platform needs to
-    # reference different headers, based on what's available in their glibc.
-    # This is the 'glibc.modulemap' in the 'resource-dir', so
+    # Configure the module map based on the target.
+    # This is the 'legacy_msvcrt.modulemap' in the 'resource-dir', so
     # it's the one we'll look at during the build process.
-    handle_gyb_source_single(glibc_modulemap_target
-        SOURCE "${glibc_modulemap_source}"
-        OUTPUT "${glibc_modulemap_out}"
+    handle_gyb_source_single(legacy_msvcrt_modulemap_target
+        SOURCE "${legacy_msvcrt_modulemap_source}"
+        OUTPUT "${legacy_msvcrt_modulemap_out}"
         FLAGS
             "-DCMAKE_SDK=${sdk}"
-            "-DGLIBC_INCLUDE_PATH=${GLIBC_INCLUDE_PATH}"
             "-DMINGW_INCLUDE_PATH=${MINGW_INCLUDE_PATH}"
-            "-DGLIBC_ARCH_INCLUDE_PATH=${GLIBC_ARCH_INCLUDE_PATH}")
+            "-DMINGW_X86_64_INCLUDE_PATH=${MINGW_X86_64_INCLUDE_PATH}")
 
-    list(APPEND glibc_modulemap_target_list ${glibc_modulemap_target})
+    list(APPEND legacy_msvcrt_modulemap_target_list ${legacy_msvcrt_modulemap_target})
             
     swift_install_in_component(sdk-overlay
-        FILES "${glibc_modulemap_out}"
+        FILES "${legacy_msvcrt_modulemap_out}"
         DESTINATION "lib/swift/${arch_subdir}")
   endforeach()
 endforeach()
-add_custom_target(legacy_msvc_modulemap DEPENDS ${glibc_modulemap_target_list})
+add_custom_target(legacy_msvc_modulemap DEPENDS ${legacy_msvcrt_modulemap_target_list})

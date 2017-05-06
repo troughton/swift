@@ -5,67 +5,67 @@ module SwiftLegacyMsvcrt [system] {
   // C standard library
   module C {
     module complex {
-      header "${GLIBC_INCLUDE_PATH}/complex.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/complex.h"
       export *
     }
 
     module ctype {
-      header "${GLIBC_INCLUDE_PATH}/ctype.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/ctype.h"
       export *
     }
     module errno {
-      header "${GLIBC_INCLUDE_PATH}/errno.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/errno.h"
       export *
     }
 
     module fenv {
-      header "${GLIBC_INCLUDE_PATH}/fenv.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/fenv.h"
       export *
     }
 
     module inttypes {
-      header "${GLIBC_INCLUDE_PATH}/inttypes.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/inttypes.h"
       export *
     }
 
     module locale {
-      header "${GLIBC_INCLUDE_PATH}/locale.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/locale.h"
       export *
     }
     module math {
-      header "${GLIBC_INCLUDE_PATH}/math.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/math.h"
       export *
     }
     module setjmp {
-      header "${GLIBC_INCLUDE_PATH}/setjmp.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/setjmp.h"
       export *
     }
     module signal {
-      header "${GLIBC_INCLUDE_PATH}/signal.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/signal.h"
       export *
     }
 
     module stdint {
-      header "${GLIBC_INCLUDE_PATH}/stdint.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/stdint.h"
       export *
     }
 
     module stdio {
-      header "${GLIBC_INCLUDE_PATH}/stdio.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/stdio.h"
       export *
     }
     module stdlib {
-      header "${GLIBC_INCLUDE_PATH}/stdlib.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/stdlib.h"
       export *
       export stddef
     }
     module string {
-      header "${GLIBC_INCLUDE_PATH}/string.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/string.h"
       export *
     }
 
     module time {
-      header "${GLIBC_INCLUDE_PATH}/time.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/time.h"
       export *
     }
   }
@@ -73,51 +73,51 @@ module SwiftLegacyMsvcrt [system] {
   // POSIX
   module POSIX {
     module ftw {
-      header "${GLIBC_INCLUDE_PATH}/ftw.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/ftw.h"
       export *
     }
     module iconv {
-      header "C:/msys64/mingw64/include/iconv.h"
+      header "${MINGW_INCLUDE_PATH}/iconv.h"
       export *
     }
     module search {
-      header "${GLIBC_INCLUDE_PATH}/search.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/search.h"
       export *
     }
     module dirent {
-      header "${GLIBC_INCLUDE_PATH}/dirent.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/dirent.h"
       export *
     }
     module dlfcn {
-      header "C:/msys64/mingw64/include/dlfcn.h"
+      header "${MINGW_INCLUDE_PATH}/dlfcn.h"
       export *
     }
     module fcntl {
-      header "${GLIBC_INCLUDE_PATH}/fcntl.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/fcntl.h"
       export *
     }
     module libgen {
-      header "${GLIBC_INCLUDE_PATH}/libgen.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/libgen.h"
       export *
     }
     module pthread {
-      header "${GLIBC_INCLUDE_PATH}/pthread.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/pthread.h"
       export *
     }
     module regex {
-      header "C:/msys64/mingw64/include/regex.h"
+      header "${MINGW_INCLUDE_PATH}/regex.h"
       export *
     }
     module sched {
-      header "${GLIBC_INCLUDE_PATH}/sched.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/sched.h"
       export *
     }
     module semaphore {
-      header "${GLIBC_INCLUDE_PATH}/semaphore.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/semaphore.h"
       export *
     }
     module strings {
-      header "${GLIBC_INCLUDE_PATH}/strings.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/strings.h"
       export *
     }
 
@@ -125,28 +125,28 @@ module SwiftLegacyMsvcrt [system] {
       export *
 
       module file {
-        header "${GLIBC_ARCH_INCLUDE_PATH}/sys/file.h"
+        header "${MINGW_X86_64_INCLUDE_PATH}/sys/file.h"
         export *
       }
       module stat {
-        header "${GLIBC_ARCH_INCLUDE_PATH}/sys/stat.h"
+        header "${MINGW_X86_64_INCLUDE_PATH}/sys/stat.h"
         export *
       }
       module time {
-        header "${GLIBC_ARCH_INCLUDE_PATH}/sys/time.h"
+        header "${MINGW_X86_64_INCLUDE_PATH}/sys/time.h"
         export *
       }
       module types {
-        header "${GLIBC_ARCH_INCLUDE_PATH}/sys/types.h"
+        header "${MINGW_X86_64_INCLUDE_PATH}/sys/types.h"
         export *
       }
     }
     module unistd {
-      header "${GLIBC_INCLUDE_PATH}/unistd.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/unistd.h"
       export *
     }
     module utime {
-      header "${GLIBC_INCLUDE_PATH}/utime.h"
+      header "${MINGW_X86_64_INCLUDE_PATH}/utime.h"
       export *
     }
   }

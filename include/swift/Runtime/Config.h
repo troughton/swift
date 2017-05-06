@@ -54,7 +54,7 @@
 /// According to the Objective-C ABI, this is true only for 64-bit
 /// platforms.
 #ifndef SWIFT_HAS_ISA_MASKING
-#if SWIFT_OBJC_INTEROP && defined(__LP64__)
+#if SWIFT_OBJC_INTEROP && (defined(__LP64__) || defined(_GLIBCXX_LLP64))
 #define SWIFT_HAS_ISA_MASKING 1
 #else
 #define SWIFT_HAS_ISA_MASKING 0

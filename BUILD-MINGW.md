@@ -61,6 +61,14 @@ Download sources
   cd cmark; git checkout master; cd ..
 ```
 
+Patch sources
+-------------
+```
+$WORKDIR\clang\lib\Headers\stddef.h
+Line 128: add //
+#if !defined(_WINT_T)  // || __has_feature(modules)
+```
+
 Build cmark
 -----------
 ```
@@ -89,10 +97,6 @@ cmake -G Ninja -D CMAKE_BUILD_TYPE=RELEASE -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX
 
 ninja
 ```
-```
-$WORKDIR\build\NinjaMinGW\swift\lib\swift\clang\include\stddef.h
-Line 25:  insert  #undef __need_wint_t
-```
 
 // Change Clang compiler
 cp -p clang clang++ /mingw64/bin
@@ -120,29 +124,3 @@ cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
 
 ninja
 ```
-
-ninja bin\\swift.exe  
-ninja stdlib/public/SwiftShims/CMakeFiles/copy_shim_headers
-
-  
-build Swift.obj by swift_obj.sh + swiftc Cygwin
-    - edit build.ninja COMMAND
-        next line to: build stdlib/public/core/mingw/x86_64/Swift.obj
-vi build.ninja                      
-/build stdlib.public.core.mingw.x86_64.Swift.obj
-j/&&
-llliecho [ESC]
-ninja lib/swift/mingw/x86_64/LegacyMsvcrt.swiftmodule
-
-/build stdlib.private.SwiftPrivate.mingw.x86_64.SwiftPrivate.obj
-j/&&
-llliecho [ESC]
-ninja stdlib/private/SwiftPrivate/mingw/x86_64/SwiftPrivate.obj
-
-    - sh ../swift_obj.sh , then retry
-    
-    - sh ../swift_priv_obj.sh, then retry
-
-
- 
-
