@@ -14,8 +14,10 @@ import SwiftPrivate
 import SwiftPrivateLibcExtras
 #if os(OSX) || os(iOS)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || CYGWIN
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
 import Glibc
+#elseif CYGWIN
+import Newlib
 #endif
 
 #if _runtime(_ObjC)
