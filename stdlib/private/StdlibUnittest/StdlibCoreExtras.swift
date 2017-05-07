@@ -18,6 +18,8 @@ import Darwin
 import Glibc
 #elseif CYGWIN
 import Newlib
+#elseif MINGW
+import LegacyMsvcrt
 #endif
 
 #if _runtime(_ObjC)

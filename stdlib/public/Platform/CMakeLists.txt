@@ -47,7 +47,7 @@ add_swift_library(swiftLegacyMsvcrt ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_O
     LegacyMsvcrt.swift
     ${swift_platform_sources}
 
-    SWIFT_COMPILE_FLAGS -Xcc -fmodule-map-file=C:/Work/swift_msvc/build/NinjaMinGW/swift/lib/swift/mingw/x86_64/legacy_msvcrt.modulemap -I C:/msys64/mingw64/include/c++/6.3.0 -I C:/msys64/mingw64/include/c++/6.3.0/x86_64-w64-mingw32 -I C:/msys64/mingw64/include/c++/6.3.0/backward -I C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/6.3.0/include -I C:/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/6.3.0/include-fixed -I C:/msys64/mingw64/x86_64-w64-mingw32/include -I C:/msys64/mingw64/include "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
+    SWIFT_COMPILE_FLAGS -Xcc --sysroot=C:/msys64/mingw64 "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
     LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
     TARGET_SDKS MINGW
     DEPENDS legacy_msvc_modulemap)

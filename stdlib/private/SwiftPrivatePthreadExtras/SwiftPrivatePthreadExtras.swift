@@ -21,6 +21,8 @@ import Darwin
 import Glibc
 #elseif CYGWIN
 import Newlib
+#elseif MINGW
+import LegacyMsvcrt
 #endif
 
 /// An abstract base class to encapsulate the context necessary to invoke
