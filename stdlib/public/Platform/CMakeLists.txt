@@ -43,14 +43,15 @@ add_swift_library(swiftNewlib ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
     TARGET_SDKS CYGWIN
     DEPENDS newlib_modulemap)
 
-add_swift_library(swiftLegacyMsvcrt ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
-    LegacyMsvcrt.swift
+set(MINGW_SYSROOT "c:/msys64/mingw64")
+add_swift_library(swiftMinGWCrt ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
+    MinGWCrt.swift
     ${swift_platform_sources}
 
-    SWIFT_COMPILE_FLAGS -Xcc --sysroot=C:/msys64/mingw64 "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
+    SWIFT_COMPILE_FLAGS -Xcc --sysroot="${MINGW_SYSROOT}" "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
     LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
     TARGET_SDKS MINGW
-    DEPENDS legacy_msvc_modulemap)
+    DEPENDS mingw_crt_modulemap)
 
 set(glibc_modulemap_target_list)
 foreach(sdk ${SWIFT_SDKS})
@@ -158,7 +159,7 @@ foreach(sdk ${SWIFT_SDKS})
 endforeach()
 add_custom_target(newlib_modulemap DEPENDS ${newlib_modulemap_target_list})
 
-set(legacy_msvcrt_modulemap_target_list)
+set(mingw_crt_modulemap_target_list)
 foreach(sdk ${SWIFT_SDKS})
   if(NOT "${sdk}" STREQUAL "MINGW")
     continue()
@@ -167,28 +168,27 @@ foreach(sdk ${SWIFT_SDKS})
     set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
     set(module_dir "${SWIFTLIB_DIR}/${arch_subdir}")
     
-    set(MINGW_INCLUDE_PATH "C:/msys64/mingw64/include")
-    set(MINGW_X86_64_INCLUDE_PATH "C:/msys64/mingw64/x86_64-w64-mingw32/include")
+    set(MINGW_INCLUDE_PATH "${MINGW_SYSROOT}/include")
+    set(DMINGW_ARCH_INCLUDE_PATH "${MINGW_SYSROOT}/x86_64-w64-mingw32/include")
     
-    set(legacy_msvcrt_modulemap_source "legacy_msvcrt.modulemap.gyb")
-    set(legacy_msvcrt_modulemap_out "${module_dir}/legacy_msvcrt.modulemap")
+    set(mingw_crt_modulemap_source "mingw_crt.modulemap.gyb")
+    set(mingw_crt_modulemap_out "${module_dir}/mingw_crt.modulemap")
 
     # Configure the module map based on the target.
-    # This is the 'legacy_msvcrt.modulemap' in the 'resource-dir', so
+    # This is the 'mingw_crt.modulemap' in the 'resource-dir', so
     # it's the one we'll look at during the build process.
-    handle_gyb_source_single(legacy_msvcrt_modulemap_target
-        SOURCE "${legacy_msvcrt_modulemap_source}"
-        OUTPUT "${legacy_msvcrt_modulemap_out}"
+    handle_gyb_source_single(mingw_crt_modulemap_target
+        SOURCE "${mingw_crt_modulemap_source}"
+        OUTPUT "${mingw_crt_modulemap_out}"
         FLAGS
-            "-DCMAKE_SDK=${sdk}"
             "-DMINGW_INCLUDE_PATH=${MINGW_INCLUDE_PATH}"
-            "-DMINGW_X86_64_INCLUDE_PATH=${MINGW_X86_64_INCLUDE_PATH}")
+            "-DMINGW_ARCH_INCLUDE_PATH=${DMINGW_ARCH_INCLUDE_PATH}")
 
-    list(APPEND legacy_msvcrt_modulemap_target_list ${legacy_msvcrt_modulemap_target})
+    list(APPEND mingw_crt_modulemap_target_list ${mingw_crt_modulemap_target})
             
     swift_install_in_component(sdk-overlay
-        FILES "${legacy_msvcrt_modulemap_out}"
+        FILES "${mingw_crt_modulemap_out}"
         DESTINATION "lib/swift/${arch_subdir}")
   endforeach()
 endforeach()
-add_custom_target(legacy_msvc_modulemap DEPENDS ${legacy_msvcrt_modulemap_target_list})
+add_custom_target(mingw_crt_modulemap DEPENDS ${mingw_crt_modulemap_target_list})

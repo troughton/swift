@@ -550,8 +550,8 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
       swift::getPlatformNameForTriple(triple),
       swift::getMajorArchitectureName(triple));
 
-    auto default_libc_module_map_list = { "glibc.modulemap", "legacy_msvcrt.modulemap",
-      "newlib.modulemap", "msvcrt.modulemap" };
+    auto default_libc_module_map_list = { "glibc.modulemap", "mingw_crt.modulemap",
+      "newlib.modulemap", "msvcrt.modulemap", "default_libc.modulemap" };
     for (auto &libcmm : default_libc_module_map_list ) {
       // Only specify the module map if that file actually exists.
       // It may not--for example in the case that

@@ -19,7 +19,7 @@ import Glibc
 #if CYGWIN
 import Newlib
 #elseif MINGW
-import LegacyMsvcrt
+import MinGWCrt
 #else
 import ucrt
 #endif

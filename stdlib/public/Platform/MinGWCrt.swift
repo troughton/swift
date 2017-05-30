@@ -10,4 +10,4 @@
 //
 //===----------------------------------------------------------------------===//
 
-@_exported import SwiftLegacyMsvcrt // Clang module
+@_exported import SwiftMinGWCrt // Clang module

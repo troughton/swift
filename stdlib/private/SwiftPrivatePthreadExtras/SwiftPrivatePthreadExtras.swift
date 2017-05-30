@@ -22,7 +22,7 @@ import Glibc
 #elseif CYGWIN
 import Newlib
 #elseif MINGW
-import LegacyMsvcrt
+import MinGWCrt
 #endif
 
 /// An abstract base class to encapsulate the context necessary to invoke
