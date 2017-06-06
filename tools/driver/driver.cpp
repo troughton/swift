@@ -120,6 +120,12 @@ int main(int argc_, const char **argv_) {
     return 1;
   }
 
+#if defined(__MINGW32__)
+  // The LLVM GetArgumentVector() overwrites argv[0] with GetModuleFileNameW().
+  // swift.exe should use the original argv[0] to make swift-invoker work well.
+  argv[0] = argv_[0];
+#endif
+
   // Check if this invocation should execute a subcommand.
   StringRef ExecName = llvm::sys::path::stem(argv[0]);
   SmallString<256> SubcommandName;
