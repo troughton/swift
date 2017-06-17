@@ -19,7 +19,7 @@
 import Darwin
 #elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
 import Glibc
-#elseif CYGWIN
+#elseif os(Cygwin)
 import Newlib
 #elseif MINGW
 import MinGWCrt
@@ -63,7 +63,7 @@ internal func invokeBlockContext(
   return context.run()
 }
 
-#if CYGWIN || os(FreeBSD)
+#if os(Cygwin) || os(FreeBSD)
 public typealias _stdlib_pthread_attr_t = UnsafePointer<pthread_attr_t?>
 #else
 public typealias _stdlib_pthread_attr_t = UnsafePointer<pthread_attr_t>

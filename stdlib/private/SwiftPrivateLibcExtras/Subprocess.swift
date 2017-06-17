@@ -15,14 +15,15 @@ import SwiftPrivate
 import Darwin
 #elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
 import Glibc
-#elseif CYGWIN
+#elseif os(Cygwin)
 import Newlib
 #endif
 
 
-
-#if !os(Windows) || CYGWIN
-// posix_spawn is not available on Android or Windows.
+#if os(Windows)
+// posix_spawn is not available on Windows.
+#else
+// posix_spawn is not available on Android.
 #if !os(Android)
 // swift_posix_spawn isn't available in the public watchOS SDK, we sneak by the
 // unavailable attribute declaration here of the APIs that we need.
@@ -267,7 +268,7 @@ public enum ProcessTerminationStatus : CustomStringConvertible {
 
 public func posixWaitpid(_ pid: pid_t) -> ProcessTerminationStatus {
   var status: CInt = 0
-#if CYGWIN
+#if os(Cygwin)
   withUnsafeMutablePointer(to: &status) {
     statusPtr in
     let statusPtrWrapper = __wait_status_ptr_t(__int_ptr: statusPtr)
@@ -307,7 +308,7 @@ internal func _getEnviron() -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?
   return environ
 #elseif os(Android)
   return environ
-#elseif CYGWIN
+#elseif os(Cygwin)
   return environ
 #else
   return __environ

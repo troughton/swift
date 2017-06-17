@@ -14,7 +14,7 @@
 import Darwin
 #elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
 import Glibc
-#elseif CYGWIN
+#elseif os(Cygwin)
 import Newlib
 #elseif MINGW
 import MinGWCrt
@@ -47,7 +47,7 @@ public var _stdlib_PTHREAD_BARRIER_SERIAL_THREAD: CInt {
 }
 
 public struct _stdlib_pthread_barrier_t {
-#if CYGWIN || os(FreeBSD)
+#if os(Cygwin) || os(FreeBSD)
   var mutex: UnsafeMutablePointer<pthread_mutex_t?>?
   var cond: UnsafeMutablePointer<pthread_cond_t?>?
 #else

@@ -16,7 +16,7 @@ import SwiftPrivateLibcExtras
 import Darwin
 #elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
 import Glibc
-#elseif CYGWIN
+#elseif os(Cygwin)
 import Newlib
 #elseif MINGW
 import LegacyMsvcrt
