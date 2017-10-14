@@ -1,24 +1,24 @@
 
-Install cygwin64 2.8.0
+Install cygwin64 2.9.0
 ----------------------
 ```
- Devel/automake           9-1
-      /clang              3.9.1-1 
+ Devel/automake           10-1
+      /clang              4.0.1-1 
       /cmake              3.6.2-1
-      /gcc-core           5.4.0-1
-      /gcc-g++            5.4.0-1
-      /git                2.8.3-1
+      /gcc-core           6.4.0-1
+      /gcc-g++            6.4.0-1
+      /git                2.14.2-2
       /pkg-config         0.29.1-1
-      /swig               3.0.7-1
-  Libs/libcurl-devel      7.50.3-1
+      /swig               3.0.12-1
+  Libs/libcurl-devel      7.55.1-1
       /libedit-devel      20130712-1
       /libiconv-devel     1.14-3
-      /libicu-devel       57.1-1
-      /libncurses-devel   6.0-7.20160806
-      /libsqlite3_0       3.14.1-1
-      /libstdc++6         5.4.0-1
+      /libicu-devel       58.2-1
+      /libncurses-devel   6.0-11.20170617
+      /libsqlite3_0       3.20.1-1
+      /libstdc++6         6.4.0-1
       /libuuid-devel      2.25.2-2
-      /libxml2-devel      2.9.4-1
+      /libxml2-devel      2.9.4-2
 ```
 
 Patch gcc header
@@ -26,22 +26,25 @@ Patch gcc header
   
  - The header file **`sys/unistd.h`** should be modified. (avoid use of keyword '__block')
 ```
-  Edit /usr/include/sys/unistd.h Line 53
-    Change the string '__block' to ''
--void    _EXFUN(encrypt, (char *__block, int __edflag)); 
-+void    _EXFUN(encrypt, (char *, int __edflag));
+  sed -i 's;__block;;' /usr/include/sys/unistd.h
+    Edit /usr/include/sys/unistd.h Line 53
+      Change the string '__block' to ''
+    -void    _EXFUN(encrypt, (char *__block, int __edflag)); 
+    +void    _EXFUN(encrypt, (char *, int __edflag));
 ```
 ```
   $ cd /usr/lib/gcc/i686-pc-cygwin
-  $ ln -s 5.4.0 4.7.3
-  $ cd /usr/lib/gcc/i686-pc-cygwin/5.4.0/include/c++
-  $ ln -s x86_64-pc-cygwin i686-pc-cygwin  
+  $ ln -s 6.4.0 4.7.3
+  $ cd /usr/lib/gcc/i686-pc-cygwin/6.4.0/include/c++
+  $ ln -s x86_64-pc-cygwin i686-pc-cygwin
+  
+  $ touch /usr/include/c++
 ```
 
  - The header file **`bits/c++config.h`** should be modified. (__float128 error)
    http://stackoverflow.com/questions/43316533/float128-is-not-supported-on-this-target
 ```
-  Edit /usr/lib/gcc/x86_64-pc-cygwin/5.4.0/include/c++/x86_64-pc-cygwin/bits/c++config.h
+  Edit /usr/lib/gcc/x86_64-pc-cygwin/6.4.0/include/c++/x86_64-pc-cygwin/bits/c++config.h
   Add `#undef _GLIBCXX_USE_FLOAT128` under the line `#define _GLIBCXX_USE_FLOAT128 1`
 ```
 
@@ -75,6 +78,7 @@ Download sources
 Build Compiler and Foundation
 -----------------------------
 ```
+  export CYGWIN=winsymlinks:nativestrict
   cd $WORK_DIR/swift
   utils/build-script -R --build-swift-static-stdlib --foundation --skip-build-libdispatch
 ```
