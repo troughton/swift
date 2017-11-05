@@ -28,10 +28,18 @@ public typealias CUnsignedShort = UInt16
 public typealias CUnsignedInt = UInt32
 
 /// The C 'unsigned long' type.
+#if os(Windows) && !os(Cygwin) && arch(x86_64)
+public typealias CUnsignedLong = UInt32
+#else
 public typealias CUnsignedLong = UInt
+#endif
 
 /// The C 'unsigned long long' type.
+#if os(Windows) && !os(Cygwin) && arch(x86_64)
+public typealias CUnsignedLongLong = UInt
+#else
 public typealias CUnsignedLongLong = UInt64
+#endif
 
 /// The C 'signed char' type.
 public typealias CSignedChar = Int8

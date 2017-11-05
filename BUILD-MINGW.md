@@ -124,3 +124,18 @@ cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
 
 ninja
 ```
+
+Build Foundation
+----------------
+```
+export PATH=$PATH:$WORKDIR/build/NinjaMinGW/swift/bin
+SWIFTC=/c/Work/swift_msvc/build/NinjaMinGW/swift/bin/swiftc 
+CLANG=/c/Work/swift_msvc/build/NinjaMinGW/llvm/bin/clang 
+SWIFT=/c/Work/swift_msvc/build/NinjaMinGW/swift/bin/swift 
+SDKROOT=/c/Work/swift_msvc/build/NinjaMinGW/swift 
+#BUILD_DIR=/c/Work/swift_msvc/build/NinjaMinGW/foundation
+BUILD_DIR=Build
+DSTROOT=/
+PREFIX=/usr/ 
+/usr/bin/python ./configure Release -DXCTEST_BUILD_DIR=/c/Work/swift_msvc/build/NinjaMinGW/xctest-cygwin-x86_64
+```
