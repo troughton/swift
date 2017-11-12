@@ -139,3 +139,10 @@ DSTROOT=/
 PREFIX=/usr/ 
 /usr/bin/python ./configure Release -DXCTEST_BUILD_DIR=/c/Work/swift_msvc/build/NinjaMinGW/xctest-cygwin-x86_64
 ```
+
+Not implemented Foundation features
+-----------------------------------
+- class NSData: .alwaysMapped is not implemented (mmap, munmap is not exist in Windows)
+- class Process: launch() method is not implemented
+- class Host: most part are not implemented
+- class NSFileManager: most part are not implemented

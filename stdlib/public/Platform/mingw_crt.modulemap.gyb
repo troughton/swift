@@ -68,6 +68,11 @@ module SwiftMinGWCrt [system] {
       header "${MINGW_ARCH_INCLUDE_PATH}/time.h"
       export *
     }
+    
+    module direct {
+      header "${MINGW_ARCH_INCLUDE_PATH}/direct.h"
+      export *
+    }
   }
 
   // POSIX
