@@ -146,3 +146,11 @@ Not implemented Foundation features
 - class Process: launch() method is not implemented
 - class Host: most part are not implemented
 - class NSFileManager: most part are not implemented
+
+Build hint
+----------
+sed -i 's/C\\:/C:/' $(find Build -name *.d)
+rm `find Build -name *.d`; ninja -j1 -k1 -f mingw.ninja  Build/Foundation/Foundation/XXXXX.swift.o
+
+ln -s Build/Foundation/Foundation bld_found
+Replace Build/Foundation/Foundation/ --> bld_found/
