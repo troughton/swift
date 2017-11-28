@@ -104,8 +104,8 @@ struct TwoWordPair {
   // in registers, so cram the result into an unsigned long long.
   // Use an enum class with implicit conversions so we don't dirty C callers
   // too much.
-#if __arm__ || __i386__ || defined(__CYGWIN__) || defined(_MSC_VER)
-#if defined(__CYGWIN__)
+#if __arm__ || __i386__ || defined(__CYGWIN__) || defined(_MSC_VER) || defined(__MINGW64__)
+#if defined(__CYGWIN__) || defined(__MINGW64__)
   enum class Return : unsigned __int128 {};
 #else
   enum class Return : unsigned long long {};
