@@ -1615,7 +1615,8 @@ function(add_swift_library name)
        endif()
 
        if(NOT "${sdk}" STREQUAL "WINDOWS" AND NOT "${name}" STREQUAL "swiftRemoteMirror")
-          # Add back the flags we removed from HandleLLVMOptions.
+          # Add back the flags we removed from the call to HandleLLVMOptions 
+          # in SwiftSharedCMakeConfig.cmake.
           list(APPEND swiftlib_link_flags_all "-Wl,-z,defs")
        endif()
 
