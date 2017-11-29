@@ -1470,7 +1470,7 @@ function(add_swift_library name)
         continue()
       endif()
 
-      # TODO support SwiftPrivate on Windows
+      # TODO Support SwiftPrivate on Windows (SR-6489)
       if ("${sdk}" STREQUAL "WINDOWS" AND "${name}" MATCHES "SwiftPrivate")
         continue()
       endif()
