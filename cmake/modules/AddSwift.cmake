@@ -1466,6 +1466,11 @@ function(add_swift_library name)
         continue()
       endif()
 
+      # TODO support SwiftPrivate on Windows
+      if ("${sdk}" STREQUAL "WINDOWS" AND "${name}" MATCHES "SwiftPrivate")
+        continue()
+      endif()
+
       set(THIN_INPUT_TARGETS)
 
       # For each architecture supported by this SDK
