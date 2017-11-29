@@ -1605,6 +1605,11 @@ function(add_swift_library name)
          endif()
        endif()
 
+       if(NOT "{sdk}" STREQUAL "WINDOWS" AND NOT "${name}" STREQUAL "swiftRemoteMirror")
+          # Add back the flags we removed from HandleLLVMOptions.
+          list(APPEND swiftlib_link_flags_all "-Wl,-z,defs")
+       endif()
+
         # Add this library variant.
         _add_swift_library_single(
           ${VARIANT_NAME}
