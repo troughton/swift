@@ -301,6 +301,7 @@ parse_operator:
     }
         
     case tok::kw_is: {
+      SyntaxParsingContext IsContext(SyntaxContext, SyntaxKind::IsExpr);
       // Parse a type after the 'is' token instead of an expression.
       ParserResult<Expr> is = parseExprIs();
       if (is.isNull() || is.hasCodeCompletion())
@@ -317,6 +318,7 @@ parse_operator:
     }
         
     case tok::kw_as: {
+      SyntaxParsingContext AsContext(SyntaxContext, SyntaxKind::AsExpr);
       ParserResult<Expr> as = parseExprAs();
       if (as.isNull() || as.hasCodeCompletion())
         return as;
@@ -461,6 +463,7 @@ ParserResult<Expr> Parser::parseExprSequenceElement(Diag<> message,
 ///     '&' expr-unary(Mode)
 ///
 ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
+  SyntaxParsingContext UnaryContext(SyntaxContext, SyntaxContextKind::Expr);
   UnresolvedDeclRefExpr *Operator;
   switch (Tok.getKind()) {
   default:
@@ -515,6 +518,9 @@ ParserResult<Expr> Parser::parseExprUnary(Diag<> Message, bool isExprBasic) {
     return makeParserCodeCompletionResult<Expr>();
   if (SubExpr.isNull())
     return nullptr;
+
+  // We are sure we can create a prefix prefix operator expr now.
+  UnaryContext.setCreateSyntax(SyntaxKind::PrefixOperatorExpr);
 
   // Check if we have a unary '-' with number literal sub-expression, for
   // example, "-42" or "-1.25".
@@ -572,7 +578,7 @@ ParserResult<Expr> Parser::parseExprKeyPath() {
     // operator token, and a single one at that (which means
     // peekToken().is(tok::identifier) is incorrect: it is true for .?.foo).
     auto position = getParserPosition();
-    auto dotLoc = consumeStartingCharacterOfCurrentToken();
+    auto dotLoc = consumeStartingCharacterOfCurrentToken(tok::period);
     if (Tok.is(tok::identifier))
       backtrackToPosition(position);
 
@@ -1187,7 +1193,7 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
                                                diag::expected_member_name);
       if (!Name)
         return nullptr;
-
+      SyntaxContext->createNodeInPlace(SyntaxKind::MemberAccessExpr);
       Result = makeParserResult(
           new (Context) UnresolvedDotExpr(Result.get(), TokLoc, Name, NameLoc,
                                           /*Implicit=*/false));
@@ -1404,12 +1410,37 @@ Parser::parseExprPostfixSuffix(ParserResult<Expr> Result, bool isExprBasic,
 ///     expr-trailing-closure
 ///
 ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
+  SyntaxParsingContext ExprContext(SyntaxContext, SyntaxContextKind::Expr);
+  auto Result = parseExprPostfixWithoutSuffix(ID, isExprBasic);
+  // If we had a parse error, don't attempt to parse suffixes.
+  if (Result.isParseError())
+    return Result;
+
+  bool hasBindOptional = false;
+  Result = parseExprPostfixSuffix(Result, isExprBasic,
+                                  /*periodHasKeyPathBehavior=*/InSwiftKeyPath,
+                                  hasBindOptional);
+  if (Result.isParseError() || Result.hasCodeCompletion())
+    return Result;
+
+  // If we had a ? suffix expression, bind the entire postfix chain
+  // within an OptionalEvaluationExpr.
+  if (hasBindOptional) {
+    Result = makeParserResult(new (Context) OptionalEvaluationExpr(Result.get()));
+  }
+
+  return Result;
+}
+
+ParserResult<Expr>
+Parser::parseExprPostfixWithoutSuffix(Diag<> ID, bool isExprBasic) {
+  SyntaxParsingContext ExprContext(SyntaxContext, SyntaxContextKind::Expr);
   ParserResult<Expr> Result;
   switch (Tok.getKind()) {
   case tok::integer_literal: {
     StringRef Text = copyAndStripUnderscores(Context, Tok.getText());
     SourceLoc Loc = consumeToken(tok::integer_literal);
-    SyntaxContext->createNodeInPlace(SyntaxKind::IntegerLiteralExpr);
+    SyntaxContext->setCreateSyntax(SyntaxKind::IntegerLiteralExpr);
     Result = makeParserResult(new (Context) IntegerLiteralExpr(Text, Loc,
                                                            /*Implicit=*/false));
     break;
@@ -1417,7 +1448,7 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
   case tok::floating_literal: {
     StringRef Text = copyAndStripUnderscores(Context, Tok.getText());
     SourceLoc Loc = consumeToken(tok::floating_literal);
-    SyntaxContext->createNodeInPlace(SyntaxKind::FloatLiteralExpr);
+    SyntaxContext->setCreateSyntax(SyntaxKind::FloatLiteralExpr);
     Result = makeParserResult(new (Context) FloatLiteralExpr(Text, Loc,
                                                            /*Implicit=*/false));
     break;
@@ -1530,8 +1561,8 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
     break;
 
   case tok::kw_Any: { // Any
-    ParserResult<TypeRepr> repr = parseAnyType();
-    auto expr = new (Context) TypeExpr(TypeLoc(repr.get()));
+    auto SynResult = parseAnyType();
+    auto expr = new (Context) TypeExpr(TypeLoc(SynResult.getAST()));
     Result = makeParserResult(expr);
     break;
   }
@@ -1718,7 +1749,8 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
     // as such.
     if (isCollectionLiteralStartingWithLSquareLit()) {
       // Split the token into two.
-      SourceLoc LSquareLoc = consumeStartingCharacterOfCurrentToken();
+      SourceLoc LSquareLoc =
+          consumeStartingCharacterOfCurrentToken(tok::l_square);
       // Consume the '[' token.
       Result = parseExprCollection(LSquareLoc);
       break;
@@ -1790,24 +1822,6 @@ ParserResult<Expr> Parser::parseExprPostfix(Diag<> ID, bool isExprBasic) {
     return nullptr;
   }
 
-  // If we had a parse error, don't attempt to parse suffixes.
-  if (Result.isParseError())
-    return Result;
-
-  bool hasBindOptional = false;
-  Result = parseExprPostfixSuffix(Result, isExprBasic,
-                                  /*periodHasKeyPathBehavior=*/InSwiftKeyPath,
-                                  hasBindOptional);
-  if (Result.isParseError() || Result.hasCodeCompletion())
-    return Result;
-
-  // If we had a ? suffix expression, bind the entire postfix chain
-  // within an OptionalEvaluationExpr.
-  if (hasBindOptional) {
-    Result = makeParserResult(
-               new (Context) OptionalEvaluationExpr(Result.get()));
-  }
-  
   return Result;
 }
 

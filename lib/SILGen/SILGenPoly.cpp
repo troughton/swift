@@ -523,6 +523,15 @@ ManagedValue Transform::transform(ManagedValue v,
                                    SGF.getLoweredLoadableType(outputSubstType));
   }
 
+  // - block to AnyObject conversion (under ObjC interop)
+  if (outputSubstType->isAnyObject() &&
+      SGF.getASTContext().LangOpts.EnableObjCInterop) {
+    if (auto inputFnType = dyn_cast<AnyFunctionType>(inputSubstType)) {
+      if (inputFnType->getRepresentation() == FunctionTypeRepresentation::Block)
+        return SGF.B.createBlockToAnyObject(Loc, v, loweredResultTy);
+    }
+  }
+
   //  - existentials
   if (outputSubstType->isAnyExistentialType()) {
     // We have to re-abstract payload if its a metatype or a function
@@ -2915,7 +2924,7 @@ static ManagedValue createThunk(SILGenFunction &SGF,
   SingleValueInstruction *thunkedFn =
     SGF.B.createPartialApply(loc, thunkValue,
                              SILType::getPrimitiveObjectType(substFnType),
-                             subs, fn.forward(SGF),
+                             subs, fn.ensurePlusOne(SGF, loc).forward(SGF),
                              SILType::getPrimitiveObjectType(expectedType));
   if (expectedType->isNoEscape()) {
     thunkedFn = SGF.B.createConvertFunction(loc, thunkedFn,

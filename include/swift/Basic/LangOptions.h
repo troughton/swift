@@ -46,6 +46,8 @@ namespace swift {
     Runtime,
     /// Conditional import of module
     CanImport,
+    /// Target Environment (currently just 'simulator' or absent)
+    TargetEnvironment,
   };
 
   /// Describes which Swift 3 Objective-C inference warnings should be
@@ -131,6 +133,9 @@ namespace swift {
     /// If true, <code>@testable import Foo</code> produces an error if \c Foo
     /// was not compiled with -enable-testing.
     bool EnableTestableAttrRequiresTestableModule = true;
+
+    /// Whether SE-0143: Conditional Conformances are enabled.
+    bool EnableConditionalConformances = false;
 
     ///
     /// Flags for developers
@@ -351,7 +356,7 @@ namespace swift {
     }
 
   private:
-    llvm::SmallVector<std::pair<PlatformConditionKind, std::string>, 4>
+    llvm::SmallVector<std::pair<PlatformConditionKind, std::string>, 5>
         PlatformConditionValues;
     llvm::SmallVector<std::string, 2> CustomConditionalCompilationFlags;
   };
