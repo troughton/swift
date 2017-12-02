@@ -340,8 +340,8 @@ func testDynamicSelf(_ queen: Bee, wobbler: NSWobbling) {
   // Instance method on a base class with instancetype result, called on the
   // class itself.
   // FIXME: This should be accepted.
-  // FIXME: The error is lousy, too.
-  let baseClass: ObjCParseExtras.Base.Type = ObjCParseExtras.Base.returnMyself() // expected-error{{missing argument for parameter #1 in call}}
+  let baseClass: ObjCParseExtras.Base.Type = ObjCParseExtras.Base.returnMyself()
+  // expected-error@-1 {{instance member 'returnMyself' cannot be used on type 'Base'}}
 }
 
 func testRepeatedProtocolAdoption(_ w: NSWindow) {
@@ -624,8 +624,8 @@ func testNSUInteger(_ obj: NSUIntegerTests, uint: UInt, int: Int) {
 }
 
 class NewtypeUser {
-  @objc func stringNewtype(a: SNTErrorDomain) {}
-  @objc func stringNewtypeOptional(a: SNTErrorDomain?) {}
+  @objc func stringNewtype(a: SNTErrorDomain) {} // expected-error {{'SNTErrorDomain' has been renamed to 'ErrorDomain'}}{{31-45=ErrorDomain}}
+  @objc func stringNewtypeOptional(a: SNTErrorDomain?) {} // expected-error {{'SNTErrorDomain' has been renamed to 'ErrorDomain'}}{{39-53=ErrorDomain}}
   @objc func intNewtype(a: MyInt) {}
   @objc func intNewtypeOptional(a: MyInt?) {} // expected-error {{method cannot be marked @objc because the type of the parameter cannot be represented in Objective-C}}
 }

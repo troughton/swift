@@ -25,10 +25,12 @@
 #include "swift/AST/Identifier.h"
 #include "swift/AST/AttrKind.h"
 #include "swift/AST/ConcreteDeclRef.h"
+#include "swift/AST/DeclNameLoc.h"
 #include "swift/AST/KnownProtocols.h"
 #include "swift/AST/Ownership.h"
 #include "swift/AST/PlatformKind.h"
 #include "swift/AST/Requirement.h"
+#include "swift/AST/TypeLoc.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -43,7 +45,6 @@ class Decl;
 class ClassDecl;
 class GenericFunctionType;
 class TrailingWhereClause;
-struct TypeLoc;
 
 /// TypeAttributes - These are attributes that may be applied to types.
 class TypeAttributes {
@@ -297,6 +298,9 @@ public:
     OnAssociatedType   = 1 << 29,
     OnParam            = 1 << 30,
     OnModule           = 1 << 31,
+
+    // Cannot have any attributes.
+    OnMissingMember = 0,
 
     // More coarse-grained aggregations for use in Attr.def.
     OnOperator = OnInfixOperator|OnPrefixOperator|OnPostfixOperator,
@@ -1127,6 +1131,54 @@ public:
   }
 };
 
+/// The @_implements attribute, which treats a decl as the implementation for
+/// some named protocol requirement (but otherwise not-visible by that name).
+class ImplementsAttr : public DeclAttribute {
+
+  TypeLoc ProtocolType;
+  DeclName MemberName;
+  DeclNameLoc MemberNameLoc;
+
+public:
+  ImplementsAttr(SourceLoc atLoc, SourceRange Range,
+                 TypeLoc ProtocolType,
+                 DeclName MemberName,
+                 DeclNameLoc MemberNameLoc);
+
+  static ImplementsAttr *create(ASTContext &Ctx, SourceLoc atLoc,
+                                SourceRange Range,
+                                TypeLoc ProtocolType,
+                                DeclName MemberName,
+                                DeclNameLoc MemberNameLoc);
+
+  TypeLoc getProtocolType() const;
+  TypeLoc &getProtocolType();
+  DeclName getMemberName() const { return MemberName; }
+  DeclNameLoc getMemberNameLoc() const { return MemberNameLoc; }
+
+  static bool classof(const DeclAttribute *DA) {
+    return DA->getKind() == DAK_Implements;
+  }
+};
+
+/// Defines the @NSKeyedArchiverClassNameAttr attribute.
+class NSKeyedArchiverClassNameAttr : public DeclAttribute {
+public:
+  NSKeyedArchiverClassNameAttr(StringRef Name, SourceLoc AtLoc, SourceRange Range, bool Implicit)
+    : DeclAttribute(DAK_NSKeyedArchiverClassName, AtLoc, Range, Implicit),
+      Name(Name) {}
+
+  NSKeyedArchiverClassNameAttr(StringRef Name, bool Implicit)
+    : NSKeyedArchiverClassNameAttr(Name, SourceLoc(), SourceRange(), /*Implicit=*/true) {}
+
+  /// The legacy mangled name.
+  const StringRef Name;
+
+  static bool classof(const DeclAttribute *DA) {
+    return DA->getKind() == DAK_NSKeyedArchiverClassName;
+  }
+};
+
 /// \brief Attributes that may be applied to declarations.
 class DeclAttributes {
   /// Linked list of declaration attributes.
@@ -1222,7 +1274,7 @@ public:
   template <typename ATTR>
   ATTR *getAttribute(bool AllowInvalid = false) {
     for (auto Attr : *this)
-      if (ATTR *SpecificAttr = dyn_cast<ATTR>(Attr))
+      if (auto *SpecificAttr = dyn_cast<ATTR>(Attr))
         if (SpecificAttr->isValid() || AllowInvalid)
           return SpecificAttr;
     return nullptr;

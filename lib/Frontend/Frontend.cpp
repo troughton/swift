@@ -580,6 +580,7 @@ void CompilerInstance::performParseOnly() {
   assert((Kind == InputFileKind::IFK_Swift ||
           Kind == InputFileKind::IFK_Swift_Library) &&
          "only supports parsing .swift files");
+  (void)Kind;
 
   auto modImpKind = SourceFile::ImplicitModuleImportKind::None;
 
@@ -632,4 +633,12 @@ void CompilerInstance::performParseOnly() {
 
   assert(Context->LoadedModules.size() == 1 &&
          "Loaded a module during parse-only");
+}
+
+void CompilerInstance::freeContextAndSIL() {
+  Context.reset();
+  TheSILModule.reset();
+  MainModule = nullptr;
+  SML = nullptr;
+  PrimarySourceFile = nullptr;
 }

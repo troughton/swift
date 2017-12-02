@@ -78,7 +78,7 @@ static void dumpPattern(const Pattern *p, llvm::raw_ostream &os) {
   }
 
   case PatternKind::OptionalSome:
-    os << ".Some";
+    os << ".some";
     return;
 
   case PatternKind::Bool:
@@ -422,7 +422,9 @@ private:
   void bindExprPattern(ExprPattern *pattern, ConsumableManagedValue v,
                        const FailureHandler &failure);
   void emitGuardBranch(SILLocation loc, Expr *guard,
-                       const FailureHandler &failure);
+                       const FailureHandler &failure,
+                       Pattern *usingImplicitVariablesFromPattern,
+                       CaseStmt *usingImplicitVariablesFromStmt);
 
   void bindIrrefutablePatterns(const ClauseRow &row, ArgArray args,
                                bool forIrrefutableRow, bool hasMultipleItems);
@@ -511,11 +513,6 @@ public:
   }
   MutableArrayRef<Pattern *> getColumns() {
     return Columns;
-  }
-
-  /// Add new columns to the end of the row.
-  void addColumns(ArrayRef<Pattern *> columns) {
-    Columns.append(columns.begin(), columns.end());
   }
 
   /// Specialize the given column to the given array of new columns.
@@ -678,7 +675,7 @@ void ClauseMatrix::print(llvm::raw_ostream &out) const {
       std::string &str = rowStrings.back();
       {
         llvm::raw_string_ostream ss(str);
-        dumpPattern(row[r], ss);
+        dumpPattern(row[c], ss);
         ss.flush();
       }
 
@@ -1056,9 +1053,8 @@ void PatternMatchEmission::emitWildcardDispatch(ClauseMatrix &clauses,
 
   // Emit the guard branch, if it exists.
   if (guardExpr) {
-    SGF.usingImplicitVariablesForPattern(clauses[row].getCasePattern(), dyn_cast<CaseStmt>(stmt), [&]{
-      this->emitGuardBranch(guardExpr, guardExpr, failure);
-    });
+    this->emitGuardBranch(guardExpr, guardExpr, failure,
+                      clauses[row].getCasePattern(), dyn_cast<CaseStmt>(stmt));
   }
 
   // Enter the row.
@@ -1120,7 +1116,8 @@ void PatternMatchEmission::bindExprPattern(ExprPattern *pattern,
   bindVariable(pattern, pattern->getMatchVar(), value,
                pattern->getType()->getCanonicalType(),
                /*isForSuccess*/ false, /* hasMultipleItems */ false);
-  emitGuardBranch(pattern, pattern->getMatchExpr(), failure);
+  emitGuardBranch(pattern, pattern->getMatchExpr(), failure,
+                  nullptr, nullptr);
 }
 
 /// Bind all the irrefutable patterns in the given row, which is nothing
@@ -1229,7 +1226,9 @@ void PatternMatchEmission::bindVariable(SILLocation loc, VarDecl *var,
 /// Evaluate a guard expression and, if it returns false, branch to
 /// the given destination.
 void PatternMatchEmission::emitGuardBranch(SILLocation loc, Expr *guard,
-                                           const FailureHandler &failure) {
+                                   const FailureHandler &failure,
+                                   Pattern *usingImplicitVariablesFromPattern,
+                                   CaseStmt *usingImplicitVariablesFromStmt) {
   SILBasicBlock *falseBB = SGF.B.splitBlockForFallthrough();
   SILBasicBlock *trueBB = SGF.B.splitBlockForFallthrough();
 
@@ -1237,7 +1236,16 @@ void PatternMatchEmission::emitGuardBranch(SILLocation loc, Expr *guard,
   SILValue testBool;
   {
     FullExpr scope(SGF.Cleanups, CleanupLocation(guard));
-    testBool = SGF.emitRValueAsSingleValue(guard).getUnmanagedValue();
+    auto emitTest = [&]{
+      testBool = SGF.emitRValueAsSingleValue(guard).getUnmanagedValue();
+    };
+    
+    if (usingImplicitVariablesFromPattern)
+      SGF.usingImplicitVariablesForPattern(usingImplicitVariablesFromPattern,
+                                           usingImplicitVariablesFromStmt,
+                                           emitTest);
+    else
+      emitTest();
   }
 
   SGF.B.createCondBranch(loc, testBool, trueBB, falseBB);
@@ -1759,7 +1767,7 @@ void PatternMatchEmission::emitEnumElementDispatchWithOwnership(
 
     SILType eltTy;
     bool hasElt = false;
-    if (elt->getArgumentInterfaceType()) {
+    if (elt->hasAssociatedValues()) {
       eltTy = src.getType().getEnumElementType(elt, SGF.SGM.M);
       hasElt = !eltTy.getSwiftRValueType()->isVoid();
     }
@@ -2017,7 +2025,7 @@ void PatternMatchEmission::emitEnumElementDispatch(
 
     SILType eltTy;
     bool hasElt = false;
-    if (elt->getArgumentInterfaceType()) {
+    if (elt->hasAssociatedValues()) {
       eltTy = src.getType().getEnumElementType(elt, SGF.SGM.M);
       hasElt = !eltTy.getSwiftRValueType()->isVoid();
     }

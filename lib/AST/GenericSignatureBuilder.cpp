@@ -20,6 +20,7 @@
 #include "swift/AST/ASTContext.h"
 #include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/DiagnosticEngine.h"
+#include "swift/AST/ExistentialLayout.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/Module.h"
 #include "swift/AST/ParameterList.h"
@@ -28,9 +29,11 @@
 #include "swift/AST/TypeRepr.h"
 #include "swift/AST/TypeWalker.h"
 #include "swift/Basic/Defer.h"
+#include "swift/Basic/Statistic.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -38,10 +41,14 @@
 using namespace swift;
 using llvm::DenseMap;
 
+/// Define this to 1 to enable expensive assertions.
+#define SWIFT_GSB_EXPENSIVE_ASSERTIONS 0
+
 namespace {
   typedef GenericSignatureBuilder::RequirementSource RequirementSource;
   typedef GenericSignatureBuilder::FloatingRequirementSource
     FloatingRequirementSource;
+  typedef GenericSignatureBuilder::ConstraintResult ConstraintResult;
   typedef GenericSignatureBuilder::PotentialArchetype PotentialArchetype;
   typedef GenericSignatureBuilder::ConcreteConstraint ConcreteConstraint;
   template<typename T> using Constraint =
@@ -50,6 +57,22 @@ namespace {
   typedef EquivalenceClass::DerivedSameTypeComponent DerivedSameTypeComponent;
 
 } // end anonymous namespace
+
+#define DEBUG_TYPE "Generic signature builder"
+STATISTIC(NumPotentialArchetypes, "# of potential archetypes");
+STATISTIC(NumConformances, "# of conformances tracked");
+STATISTIC(NumConformanceConstraints, "# of conformance constraints tracked");
+STATISTIC(NumSameTypeConstraints, "# of same-type constraints tracked");
+STATISTIC(NumConcreteTypeConstraints,
+          "# of same-type-to-concrete constraints tracked");
+STATISTIC(NumSuperclassConstraints, "# of superclass constraints tracked");
+STATISTIC(NumLayoutConstraints, "# of layout constraints tracked");
+STATISTIC(NumSelfDerived, "# of self-derived constraints removed");
+STATISTIC(NumRecursive, "# of recursive types we bail out on");
+STATISTIC(NumArchetypeAnchorCacheHits,
+          "# of hits in the archetype anchor cache");
+STATISTIC(NumArchetypeAnchorCacheMisses,
+          "# of misses in the archetype anchor cache");
 
 struct GenericSignatureBuilder::Implementation {
   /// Function used to look up conformances.
@@ -72,6 +95,9 @@ struct GenericSignatureBuilder::Implementation {
 
   /// The requirement sources used in this generic signature builder.
   llvm::FoldingSet<RequirementSource> RequirementSources;
+
+  /// The set of requirements that have been delayed for some reason.
+  SmallVector<DelayedRequirement, 4> DelayedRequirements;
 
 #ifndef NDEBUG
   /// Whether we've already finalized the builder.
@@ -111,6 +137,7 @@ bool RequirementSource::isAcceptableStorageKind(Kind kind,
     }
 
   case ProtocolRequirement:
+  case InferredProtocolRequirement:
     switch (storageKind) {
     case StorageKind::StoredType:
       return true;
@@ -173,6 +200,27 @@ const void *RequirementSource::getOpaqueStorage3() const {
   return nullptr;
 }
 
+bool RequirementSource::isInferredRequirement() const {
+  for (auto source = this; source; source = source->parent) {
+    switch (source->kind) {
+    case Inferred:
+    case InferredProtocolRequirement:
+      return true;
+
+    case Concrete:
+    case Explicit:
+    case NestedTypeNameMatch:
+    case Parent:
+    case ProtocolRequirement:
+    case RequirementSignatureSelf:
+    case Superclass:
+      break;
+    }
+  }
+
+  return false;
+}
+
 unsigned RequirementSource::classifyDiagKind() const {
   if (isInferredRequirement()) return 2;
   if (isDerivedRequirement()) return 1;
@@ -193,6 +241,7 @@ bool RequirementSource::isDerivedRequirement() const {
     return true;
 
   case ProtocolRequirement:
+  case InferredProtocolRequirement:
     // Requirements based on protocol requirements are derived unless they are
     // direct children of the requirement-signature source, in which case we
     // need to keep them for the requirement signature.
@@ -202,79 +251,43 @@ bool RequirementSource::isDerivedRequirement() const {
   llvm_unreachable("Unhandled RequirementSourceKind in switch.");
 }
 
-bool RequirementSource::isDerivedViaConcreteConformance() const {
-  for (auto source = this; source; source = source->parent) {
-    switch (source->kind) {
-    case Explicit:
-    case Inferred:
-    case NestedTypeNameMatch:
-    case RequirementSignatureSelf:
-      return false;
+bool RequirementSource::isSelfDerivedSource(PotentialArchetype *pa,
+                                            bool &derivedViaConcrete) const {
+  derivedViaConcrete = false;
 
-    case Parent:
-    case ProtocolRequirement:
-      continue;
-
-    case Superclass:
-    case Concrete:
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool RequirementSource::isSelfDerivedSource(PotentialArchetype *pa) const {
   // If it's not a derived requirement, it's not self-derived.
   if (!isDerivedRequirement()) return false;
 
-  // Collect the path of associated types from the root pa.
-  SmallVector<AssociatedTypeDecl *, 4> assocTypes;
-  PotentialArchetype *currentPA = nullptr;
-  for (auto source = this; source; source = source->parent) {
+  return visitPotentialArchetypesAlongPath(
+           [&](PotentialArchetype *currentPA, const RequirementSource *source) {
     switch (source->kind) {
-    case RequirementSource::Parent:
-      assocTypes.push_back(source->getAssociatedType());
-      break;
-
-    case RequirementSource::NestedTypeNameMatch:
-      return false;
-
     case RequirementSource::Explicit:
     case RequirementSource::Inferred:
     case RequirementSource::RequirementSignatureSelf:
-      currentPA = source->getRootPotentialArchetype();
-      while (auto parent = currentPA->getParent()) {
-        if (auto assocType = currentPA->getResolvedAssociatedType())
-          assocTypes.push_back(assocType);
-        currentPA = parent;
+      for (auto parent = currentPA->getParent(); parent;
+           parent = parent->getParent()) {
+        if (parent->isInSameEquivalenceClassAs(pa))
+          return true;
       }
-      break;
 
-    case RequirementSource::Concrete:
+      return false;
+
+    case RequirementSource::Parent:
+      return currentPA->isInSameEquivalenceClassAs(pa);
+
     case RequirementSource::ProtocolRequirement:
+    case RequirementSource::InferredProtocolRequirement:
+      // Note whether we saw derivation through a concrete type.
+      if (currentPA->isConcreteType())
+        derivedViaConcrete = true;
+      return false;
+
+    case RequirementSource::NestedTypeNameMatch:
+    case RequirementSource::Concrete:
     case RequirementSource::Superclass:
-      break;
+      return false;
     }
-  }
-
-  assert(currentPA && "Missing root potential archetype");
-
-  // Check whether anything of the potential archetypes in the path are
-  // equivalent to the end of the path.
-  auto rep = pa->getRepresentative();
-  for (auto assocType : reversed(assocTypes)) {
-    // Check whether this potential archetype is in the same equivalence class.
-    if (currentPA->getRepresentative() == rep) return true;
-
-    // Get the next nested type, but only if we've seen it before.
-    // FIXME: Feels hacky.
-    auto knownNested = currentPA->NestedTypes.find(assocType->getName());
-    if (knownNested == currentPA->NestedTypes.end()) return false;
-    currentPA = knownNested->second.front();
-  }
-
-  return false;
+  }) == nullptr;
 }
 
 /// Replace 'Self' in the given dependent type (\c depTy) with the given
@@ -338,8 +351,10 @@ static PotentialArchetype *replaceSelfWithPotentialArchetype(
   return selfPA;
 }
 
-bool RequirementSource::isSelfDerivedConformance(PotentialArchetype *currentPA,
-                                                 ProtocolDecl *proto) const {
+bool RequirementSource::isSelfDerivedConformance(
+                                             PotentialArchetype *currentPA,
+                                             ProtocolDecl *proto,
+                                             bool &derivedViaConcrete) const {
   /// Keep track of all of the requirements we've seen along the way. If
   /// we see the same requirement twice, it's a self-derived conformance.
   llvm::DenseSet<std::pair<PotentialArchetype *, ProtocolDecl *>>
@@ -354,65 +369,57 @@ bool RequirementSource::isSelfDerivedConformance(PotentialArchetype *currentPA,
   // Insert our end state.
   constraintsSeen.insert({currentPA->getRepresentative(), proto});
 
-  // Follow from the root of the
-  std::function<PotentialArchetype *(const RequirementSource *source)>
-    followFromRoot;
-
+  derivedViaConcrete = false;
   bool sawProtocolRequirement = false;
-  followFromRoot = [&](const RequirementSource *source) -> PotentialArchetype *{
-    // Handle protocol requirements.
-    if (source->kind == ProtocolRequirement) {
+
+  PotentialArchetype *rootPA = nullptr;
+  auto resultPA = visitPotentialArchetypesAlongPath(
+                    [&](PotentialArchetype *parentPA,
+                        const RequirementSource *source) {
+    switch (source->kind) {
+    case ProtocolRequirement:
+    case InferredProtocolRequirement: {
+      // Note that we've seen a protocol requirement.
       sawProtocolRequirement = true;
 
-      // Compute the base potential archetype.
-      auto basePA = followFromRoot(source->parent);
-      if (!basePA) return nullptr;
+      // If the base has been made concrete, note it.
+      if (parentPA->isConcreteType())
+        derivedViaConcrete = true;
 
-      // The base potential archetype must conform to the protocol in which
-      // this requirement results.
-      if (addConstraint(basePA, source->getProtocolDecl()))
-        return nullptr;
-
-      // If there's no stored type, return the base.
-      if (!source->getStoredType()) return basePA;
-
-      // Follow the dependent type in the protocol requirement.
-      return replaceSelfWithPotentialArchetype(basePA, source->getStoredType());
+      // The parent potential archetype must conform to the protocol in which
+      // this requirement resides.
+      return addConstraint(parentPA, source->getProtocolDecl());
     }
 
-    if (source->kind == Parent) {
-      // Compute the base potential archetype.
-      auto basePA = followFromRoot(source->parent);
-      if (!basePA) return nullptr;
-
-      // Add on this associated type.
-      return replaceSelfWithPotentialArchetype(
-               basePA,
-               source->getAssociatedType()->getDeclaredInterfaceType());
+    case Concrete:
+    case Superclass:
+    case Parent:
+      return false;
+    case Explicit:
+    case Inferred:
+    case NestedTypeNameMatch:
+    case RequirementSignatureSelf:
+      rootPA = parentPA;
+      return false;
     }
+  });
 
-    if (source->parent)
-      return followFromRoot(source->parent);
+  // If we saw a constraint twice, it's self-derived.
+  if (!resultPA) return true;
 
-    // We are at a root, so the root potential archetype is our result.
-    auto rootPA = source->getRootPotentialArchetype();
+  // If we haven't seen a protocol requirement, we're done.
+  if (!sawProtocolRequirement) return false;
 
-    // If we haven't seen a protocol requirement, we're done.
-    if (!sawProtocolRequirement) return rootPA;
-
-    // The root archetype might be a nested type, which implies constraints
-    // for each of the protocols of the associated types referenced (if any).
-    for (auto pa = rootPA; pa->getParent(); pa = pa->getParent()) {
-      if (auto assocType = pa->getResolvedAssociatedType()) {
-        if (addConstraint(pa->getParent(), assocType->getProtocol()))
-          return nullptr;
-      }
+  // The root archetype might be a nested type, which implies constraints
+  // for each of the protocols of the associated types referenced (if any).
+  for (auto pa = rootPA; pa->getParent(); pa = pa->getParent()) {
+    if (auto assocType = pa->getResolvedAssociatedType()) {
+      if (addConstraint(pa->getParent(), assocType->getProtocol()))
+        return true;
     }
+  }
 
-    return rootPA;
-  };
-
-  return followFromRoot(this) == nullptr;
+  return false;
 }
 
 #define REQUIREMENT_SOURCE_FACTORY_BODY(ProfileArgs, ConstructorArgs,      \
@@ -491,41 +498,21 @@ const RequirementSource *RequirementSource::forNestedTypeNameMatch(
                         0, WrittenRequirementLoc());
 }
 
-/// "Re-root" the given type parameter on the protocol's "Self", which replaces
-/// the
-static Type rerootOnProtocolSelf(Type depTy, ProtocolDecl *protocol) {
-  if (auto depMemTy = depTy->getAs<DependentMemberType>()) {
-    // FIXME: Allowing an identifier here is a hack.
-    if (auto assocType = depMemTy->getAssocType()) {
-      return DependentMemberType::get(
-                           rerootOnProtocolSelf(depMemTy->getBase(), protocol),
-                           assocType);
-    }
-
-    return DependentMemberType::get(
-                          rerootOnProtocolSelf(depMemTy->getBase(), protocol),
-                          depMemTy->getName());
-  }
-
-  assert(depTy->is<GenericTypeParamType>() && "not a type parameter!");
-  return protocol->getSelfInterfaceType();
-}
-
 const RequirementSource *RequirementSource::viaProtocolRequirement(
-    GenericSignatureBuilder &builder, Type dependentType,
-    ProtocolDecl *protocol,
-    GenericSignatureBuilder::WrittenRequirementLoc writtenLoc) const {
-  // Re-root the dependent type on the protocol.
-  // FIXME: we really want to canonicalize w.r.t. the requirement signature of
-  // the protocol, but it might not have been computed yet.
-  if (dependentType)
-    dependentType = rerootOnProtocolSelf(dependentType, protocol);
-
+            GenericSignatureBuilder &builder, Type dependentType,
+            ProtocolDecl *protocol,
+            bool inferred,
+            GenericSignatureBuilder::WrittenRequirementLoc writtenLoc) const {
   REQUIREMENT_SOURCE_FACTORY_BODY(
-                        (nodeID, ProtocolRequirement, this,
+                        (nodeID,
+                         inferred ? InferredProtocolRequirement
+                                  : ProtocolRequirement,
+                         this,
                          dependentType.getPointer(), protocol,
                          writtenLoc.getOpaqueValue()),
-                        (ProtocolRequirement, this, dependentType,
+                        (inferred ? InferredProtocolRequirement
+                                  : ProtocolRequirement,
+                         this, dependentType,
                          protocol, writtenLoc),
                         1, writtenLoc);
 }
@@ -576,6 +563,55 @@ PotentialArchetype *RequirementSource::getRootPotentialArchetype() const {
   return root->storage.rootArchetype;
 }
 
+PotentialArchetype *RequirementSource::getAffectedPotentialArchetype() const {
+  return visitPotentialArchetypesAlongPath(
+                         [](PotentialArchetype *, const RequirementSource *) {
+                           return false;
+                         });
+}
+
+PotentialArchetype *
+RequirementSource::visitPotentialArchetypesAlongPath(
+         llvm::function_ref<bool(PotentialArchetype *,
+                                 const RequirementSource *)> visitor) const {
+  switch (kind) {
+  case RequirementSource::Parent: {
+    auto parentPA = parent->visitPotentialArchetypesAlongPath(visitor);
+    if (!parentPA) return nullptr;
+
+    if (visitor(parentPA, this)) return nullptr;
+
+    return replaceSelfWithPotentialArchetype(
+                             parentPA,
+                             getAssociatedType()->getDeclaredInterfaceType());
+  }
+
+  case RequirementSource::NestedTypeNameMatch:
+  case RequirementSource::Explicit:
+  case RequirementSource::Inferred:
+  case RequirementSource::RequirementSignatureSelf: {
+    auto rootPA = getRootPotentialArchetype();
+    if (visitor(rootPA, this)) return nullptr;
+
+    return rootPA;
+  }
+
+  case RequirementSource::Concrete:
+  case RequirementSource::Superclass:
+    return parent->visitPotentialArchetypesAlongPath(visitor);
+
+  case RequirementSource::ProtocolRequirement:
+  case RequirementSource::InferredProtocolRequirement: {
+    auto parentPA = parent->visitPotentialArchetypesAlongPath(visitor);
+    if (!parentPA) return nullptr;
+
+    if (visitor(parentPA, this)) return nullptr;
+
+    return replaceSelfWithPotentialArchetype(parentPA, getStoredType());
+  }
+  }
+}
+
 Type RequirementSource::getStoredType() const {
   switch (storageKind) {
   case StorageKind::RootArchetype:
@@ -598,7 +634,7 @@ ProtocolDecl *RequirementSource::getProtocolDecl() const {
     return nullptr;
 
   case StorageKind::StoredType:
-    if (kind == ProtocolRequirement)
+    if (isProtocolRequirement())
       return getTrailingObjects<ProtocolDecl *>()[0];
     return nullptr;
 
@@ -622,7 +658,7 @@ SourceLoc RequirementSource::getLoc() const {
   // for a particular requirement, rather than turning on/off location info.
   // Locations that fall into this category should be advisory, emitted via
   // notes rather than as the normal location.
-  if (kind == ProtocolRequirement && parent &&
+  if (isProtocolRequirement() && parent &&
       parent->kind != RequirementSignatureSelf)
     return parent->getLoc();
 
@@ -653,13 +689,37 @@ SourceLoc RequirementSource::getLoc() const {
 static unsigned sourcePathLength(const RequirementSource *source) {
   unsigned count = 0;
   for (; source; source = source->parent) {
-    if (source->kind == RequirementSource::ProtocolRequirement)
+    if (source->isProtocolRequirement())
       ++count;
   }
   return count;
 }
 
+/// Check whether we have a NestedTypeNameMatch/ProtocolRequirement requirement
+/// pair, in which case we prefer the RequirementSignature.
+///
+/// This is part of staging out NestedTypeNameMatch requirement sources in
+/// favor of something more principled.
+static int isNestedTypeNameMatchAndRequirementSignaturePair(
+                                              const RequirementSource *lhs,
+                                              const RequirementSource *rhs) {
+  if (lhs->getRoot()->kind == RequirementSource::NestedTypeNameMatch &&
+      rhs->isProtocolRequirement())
+    return +1;
+
+  if (rhs->getRoot()->kind == RequirementSource::NestedTypeNameMatch &&
+      lhs->isProtocolRequirement())
+    return -1;
+
+  return 0;
+}
+
 int RequirementSource::compare(const RequirementSource *other) const {
+  // FIXME: Egregious hack while we phase out NestedTypeNameMatch
+  if (int compare =
+        isNestedTypeNameMatchAndRequirementSignaturePair(this, other))
+    return compare;
+
   // Prefer the derived option, if there is one.
   bool thisIsDerived = this->isDerivedRequirement();
   bool otherIsDerived = other->isDerivedRequirement();
@@ -729,6 +789,10 @@ void RequirementSource::print(llvm::raw_ostream &out,
     out << "Protocol requirement";
     break;
 
+  case InferredProtocolRequirement:
+    out << "Inferred protocol requirement";
+    break;
+
   case RequirementSignatureSelf:
     out << "Requirement signature self";
     break;
@@ -778,9 +842,25 @@ void RequirementSource::print(llvm::raw_ostream &out,
   }
 }
 
+/// Form the dependent type such that the given protocol's \c Self can be
+/// replaced by \c basePA to reach \c pa.
+static Type formProtocolRelativeType(ProtocolDecl *proto,
+                                     PotentialArchetype *basePA,
+                                     PotentialArchetype *pa) {
+  // Basis case: we've hit the base potential archetype.
+  if (basePA == pa)
+    return proto->getSelfInterfaceType();
+
+  // Recursive case: form a dependent member type.
+  auto baseType = formProtocolRelativeType(proto, basePA, pa->getParent());
+  if (auto assocType = pa->getResolvedAssociatedType())
+    return DependentMemberType::get(baseType, assocType);
+
+  return DependentMemberType::get(baseType, pa->getNestedName());
+}
+
 const RequirementSource *FloatingRequirementSource::getSource(
-                                                PotentialArchetype *pa,
-                                                Type dependentType) const {
+                                                PotentialArchetype *pa) const {
   switch (kind) {
   case Resolved:
       return storage.get<const RequirementSource *>();
@@ -796,13 +876,24 @@ const RequirementSource *FloatingRequirementSource::getSource(
     return RequirementSource::forInferred(pa, storage.get<const TypeRepr *>());
 
   case AbstractProtocol: {
-    // FIXME: dependent type would be derivable from \c pa and \c this if we
-    // were sure to never "re-root" \c pa by placing the requirement on
-    // the representative of the equivalence class.
+    // Derive the dependent type on which this requirement was written. It is
+    // the path from the requirement source on which this requirement is based
+    // to the potential archetype on which the requirement is being placed.
+    auto baseSource = storage.get<const RequirementSource *>();
+    auto baseSourcePA =
+      baseSource->getAffectedPotentialArchetype();
+
+    auto dependentType =
+      formProtocolRelativeType(protocolReq.protocol, baseSourcePA, pa);
+
     return storage.get<const RequirementSource *>()
       ->viaProtocolRequirement(*pa->getBuilder(), dependentType,
-                               protocolReq.protocol, protocolReq.written);
+                               protocolReq.protocol, protocolReq.inferred,
+                               protocolReq.written);
   }
+
+  case NestedTypeNameMatch:
+    return RequirementSource::forNestedTypeNameMatch(pa);
   }
 
   llvm_unreachable("Unhandled FloatingPointRequirementSourceKind in switch.");
@@ -835,12 +926,17 @@ bool FloatingRequirementSource::isExplicit() const {
     return true;
 
   case Inferred:
+  case NestedTypeNameMatch:
     return false;
 
   case AbstractProtocol:
+    // Requirements implied by other protocol conformance requirements are
+    // implicit, except when computing a requirement signature, where
+    // non-inferred ones are explicit, to allow flagging of redundant
+    // requirements.
     switch (storage.get<const RequirementSource *>()->kind) {
     case RequirementSource::RequirementSignatureSelf:
-      return true;
+      return !protocolReq.inferred;
 
     case RequirementSource::Concrete:
     case RequirementSource::Explicit:
@@ -848,6 +944,7 @@ bool FloatingRequirementSource::isExplicit() const {
     case RequirementSource::NestedTypeNameMatch:
     case RequirementSource::Parent:
     case RequirementSource::ProtocolRequirement:
+    case RequirementSource::InferredProtocolRequirement:
     case RequirementSource::Superclass:
       return false;
     }
@@ -862,6 +959,7 @@ bool FloatingRequirementSource::isExplicit() const {
         == RequirementSource::RequirementSignatureSelf;
 
     case RequirementSource::Inferred:
+    case RequirementSource::InferredProtocolRequirement:
     case RequirementSource::RequirementSignatureSelf:
     case RequirementSource::Concrete:
     case RequirementSource::NestedTypeNameMatch:
@@ -872,7 +970,64 @@ bool FloatingRequirementSource::isExplicit() const {
   }
 }
 
+
+FloatingRequirementSource FloatingRequirementSource::asInferred(
+                                              const TypeRepr *typeRepr) const {
+  switch (kind) {
+  case Explicit:
+    return forInferred(typeRepr);
+
+  case Inferred:
+  case Resolved:
+  case NestedTypeNameMatch:
+    return *this;
+
+  case AbstractProtocol:
+    return viaProtocolRequirement(storage.get<const RequirementSource *>(),
+                                  protocolReq.protocol, typeRepr,
+                                  /*inferred=*/true);
+  }
+}
+
+bool FloatingRequirementSource::isRecursive(
+                                    Type rootType,
+                                    GenericSignatureBuilder &builder) const {
+  llvm::SmallSet<std::pair<CanType, ProtocolDecl *>, 4> visitedAssocReqs;
+  for (auto storedSource = storage.dyn_cast<const RequirementSource *>();
+       storedSource; storedSource = storedSource->parent) {
+    if (!storedSource->isProtocolRequirement())
+      continue;
+
+    if (!visitedAssocReqs.insert(
+                          {storedSource->getStoredType()->getCanonicalType(),
+                           storedSource->getProtocolDecl()}).second)
+      return true;
+  }
+
+  // For a nested type match, look for another type with that name.
+  // FIXME: Actually, look for 5 of them. This is totally bogus.
+  if (kind == NestedTypeNameMatch) {
+    unsigned grossCount = 0;
+    auto pa = storage.dyn_cast<const RequirementSource *>()
+                ->getAffectedPotentialArchetype();
+    while (auto parent = pa->getParent()) {
+      if (pa->getNestedName() == nestedName) {
+        if (++grossCount > 4) {
+          ++NumRecursive;
+          return true;
+        }
+      }
+
+      pa = parent;
+    }
+  }
+
+  return false;
+}
+
 GenericSignatureBuilder::PotentialArchetype::~PotentialArchetype() {
+  ++NumPotentialArchetypes;
+
   for (const auto &nested : NestedTypes) {
     for (auto pa : nested.second) {
       if (pa != this)
@@ -1002,13 +1157,64 @@ bool EquivalenceClass::isConformanceSatisfiedBySuperclass(
   return false;
 }
 
-bool GenericSignatureBuilder::recordUnresolvedRequirement(
-                                         RequirementKind kind,
-                                         UnresolvedType lhs,
-                                         RequirementRHS rhs,
-                                         FloatingRequirementSource source) {
-  // FIXME: Drop the requirement for now. Nothing depends on this.
-  return false;
+void EquivalenceClass::dump(llvm::raw_ostream &out) const {
+  out << "Equivalence class represented by "
+    << members.front()->getRepresentative()->getDebugName() << ":\n";
+  out << "Members: ";
+  interleave(members, [&](PotentialArchetype *pa) {
+    out << pa->getDebugName();
+  }, [&]() {
+    out << ", ";
+  });
+  out << "\nConformances:";
+  interleave(conformsTo,
+             [&](const std::pair<
+                        ProtocolDecl *,
+                        std::vector<Constraint<ProtocolDecl *>>> &entry) {
+               out << entry.first->getNameStr();
+             },
+             [&] { out << ", "; });
+  out << "\nSame-type constraints:";
+  for (const auto &entry : sameTypeConstraints) {
+    out << "\n  " << entry.first->getDebugName() << " == ";
+    interleave(entry.second,
+               [&](const Constraint<PotentialArchetype *> &constraint) {
+                 out << constraint.value->getDebugName();
+
+                 if (constraint.source->isDerivedRequirement())
+                   out << " [derived]";
+               }, [&] {
+                 out << ", ";
+               });
+  }
+  if (concreteType)
+    out << "\nConcrete type: " << concreteType.getString();
+  if (superclass)
+    out << "\nSuperclass: " << superclass.getString();
+  if (layout)
+    out << "\nLayout: " << layout.getString();
+
+  out << "\n";
+}
+
+void EquivalenceClass::dump() const {
+  dump(llvm::errs());
+}
+
+ConstraintResult GenericSignatureBuilder::handleUnresolvedRequirement(
+                                   RequirementKind kind,
+                                   UnresolvedType lhs,
+                                   RequirementRHS rhs,
+                                   FloatingRequirementSource source,
+                                   UnresolvedHandlingKind unresolvedHandling) {
+  switch (unresolvedHandling) {
+  case UnresolvedHandlingKind::GenerateConstraints:
+    Impl->DelayedRequirements.push_back({kind, lhs, rhs, source});
+    return ConstraintResult::Resolved;
+
+  case UnresolvedHandlingKind::ReturnUnresolved:
+    return ConstraintResult::Unresolved;
+  }
 }
 
 const RequirementSource *GenericSignatureBuilder::resolveSuperConformance(
@@ -1040,6 +1246,7 @@ const RequirementSource *GenericSignatureBuilder::resolveSuperConformance(
   superclassSource =
     superclassSource->viaSuperclass(*this, conformance->getConcrete());
   paEquivClass->conformsTo[proto].push_back({pa, proto, superclassSource});
+  ++NumConformanceConstraints;
   return superclassSource;
 }
 
@@ -1060,19 +1267,12 @@ public:
     return ResolvedType(pa);
   }
 
-  static ResolvedType forNewTypeAlias(PotentialArchetype *pa) {
-    assert(pa->getParent() && pa->getTypeAliasDecl() &&
-           "not a new typealias");
-    return ResolvedType(pa);
-  }
-
   Type getType() const { return paOrT.dyn_cast<Type>(); }
   PotentialArchetype *getPotentialArchetype() const {
     return paOrT.dyn_cast<PotentialArchetype *>();
   }
 
   bool isType() const { return paOrT.is<Type>(); }
-  bool isPotentialArchetype() const { return paOrT.is<PotentialArchetype *>(); }
 };
 
 /// If there is a same-type requirement to be added for the given nested type
@@ -1098,7 +1298,8 @@ static void maybeAddSameTypeRequirementForNestedType(
   concreteType = superConformance->getDeclContext()
       ->mapTypeOutOfContext(concreteType);
 
-  builder.addSameTypeRequirement(nestedPA, concreteType, nestedSource);
+  builder.addSameTypeRequirement(nestedPA, concreteType, nestedSource,
+        GenericSignatureBuilder::UnresolvedHandlingKind::GenerateConstraints);
 }
 
 /// Walk the members of a protocol.
@@ -1123,11 +1324,14 @@ bool PotentialArchetype::addConformance(ProtocolDecl *proto,
   if (known != equivClass->conformsTo.end()) {
     // We already knew about this conformance; record this specific constraint.
     known->second.push_back({this, proto, source});
+    ++NumConformanceConstraints;
     return false;
   }
 
   // Add the conformance along with this constraint.
   equivClass->conformsTo[proto].push_back({this, proto, source});
+  ++NumConformanceConstraints;
+  ++NumConformances;
 
   // Determine whether there is a superclass constraint where the
   // superclass conforms to this protocol.
@@ -1316,25 +1520,48 @@ PotentialArchetype *PotentialArchetype::getArchetypeAnchor(
   if (auto parent = getParent()) {
     // For a nested type, retrieve the parent archetype anchor first.
     auto parentAnchor = parent->getArchetypeAnchor(builder);
-    anchor = parentAnchor->getNestedArchetypeAnchor(getNestedName(), builder);
+    anchor = parentAnchor->getNestedArchetypeAnchor(
+                                          getNestedName(), builder,
+                                          NestedTypeUpdate::ResolveExisting);
+
+    // FIXME: Hack for cases where we couldn't resolve the nested type.
+    if (!anchor)
+      anchor = rep;
   } else {
     anchor = rep;
   }
 
+  auto equivClass = rep->getEquivalenceClassIfPresent();
+  if (!equivClass) return anchor;
+
+  // Check whether
+  if (equivClass->archetypeAnchorCache.anchor &&
+      equivClass->archetypeAnchorCache.numMembers
+        == equivClass->members.size()) {
+    ++NumArchetypeAnchorCacheHits;
+
+    return equivClass->archetypeAnchorCache.anchor;
+  }
+
   // Find the best type within this equivalence class.
-  for (auto pa : rep->getEquivalenceClassMembers()) {
+  for (auto pa : equivClass->members) {
     if (compareDependentTypes(&pa, &anchor) < 0)
       anchor = pa;
   }
 
-#ifndef NDEBUG
+#if SWIFT_GSB_EXPENSIVE_ASSERTIONS
   // Make sure that we did, in fact, get one that is better than all others.
-  for (auto pa : anchor->getEquivalenceClassMembers()) {
+  for (auto pa : equivClass->members) {
     assert((pa == anchor || compareDependentTypes(&anchor, &pa) < 0) &&
            compareDependentTypes(&pa, &anchor) >= 0 &&
            "archetype anchor isn't a total order");
   }
 #endif
+
+  // Record the cache miss and update the cache.
+  ++NumArchetypeAnchorCacheMisses;
+  equivClass->archetypeAnchorCache.anchor = anchor;
+  equivClass->archetypeAnchorCache.numMembers = equivClass->members.size();
 
   return anchor;
 }
@@ -1366,7 +1593,7 @@ namespace {
       }
     }
   };
-}
+} // end anonymous namespace
 
 // Give a nested type the appropriately resolved concrete type, based off a
 // parent PA that has a concrete type.
@@ -1401,20 +1628,22 @@ static void concretizeNestedTypeFromConcreteParent(
     witnessType = DependentMemberType::get(concreteParent, assocType);
   }
 
-  builder.addSameTypeRequirement(nestedPA, witnessType, source,
-                                 DiagnoseSameTypeConflict{
-                                   builder.getASTContext().Diags,
-                                   source, nestedPA
-                                 });
+  builder.addSameTypeRequirement(
+         nestedPA, witnessType, source,
+         GenericSignatureBuilder::UnresolvedHandlingKind::GenerateConstraints,
+         DiagnoseSameTypeConflict{
+           builder.getASTContext().Diags,
+           source, nestedPA
+         });
 }
 
 PotentialArchetype *PotentialArchetype::getNestedType(
                                            Identifier nestedName,
                                            GenericSignatureBuilder &builder) {
   // If we already have a nested type with this name, return it.
-  if (!NestedTypes[nestedName].empty()) {
-    return NestedTypes[nestedName].front();
-  }
+  auto known = NestedTypes.find(nestedName);
+  if (known != NestedTypes.end())
+    return known->second.front();
 
   // Retrieve the nested archetype anchor, which is the best choice (so far)
   // for this nested type.
@@ -1437,7 +1666,8 @@ PotentialArchetype *PotentialArchetype::getNestedType(
 
 PotentialArchetype *PotentialArchetype::getNestedArchetypeAnchor(
                                            Identifier name,
-                                           GenericSignatureBuilder &builder) {
+                                           GenericSignatureBuilder &builder,
+                                           NestedTypeUpdate kind) {
   // Look for the best associated type or typealias within the protocols
   // we know about.
   AssociatedTypeDecl *bestAssocType = nullptr;
@@ -1480,6 +1710,18 @@ PotentialArchetype *PotentialArchetype::getNestedArchetypeAnchor(
                                               NestedTypeUpdate::AddIfMissing);
   }
 
+  // If we have an associated type, drop any typealiases that aren't in
+  // the same module as the protocol.
+  // FIXME: This is an unprincipled hack for an unprincipled feature.
+  typealiases.erase(
+    std::remove_if(typealiases.begin(), typealiases.end(),
+                   [&](TypeAliasDecl *typealias) {
+      return typealias->getParentModule() !=
+        typealias->getDeclContext()
+          ->getAsNominalTypeOrNominalTypeExtensionContext()->getParentModule();
+    }),
+    typealiases.end());
+
   // Update for all of the typealiases with this name, which will introduce
   // various same-type constraints.
   for (auto typealias : typealiases) {
@@ -1491,6 +1733,17 @@ PotentialArchetype *PotentialArchetype::getNestedArchetypeAnchor(
 
   if (resultPA)
     return resultPA;
+
+  // Check whether we can add a missing nested type for this case.
+  switch (kind) {
+  case NestedTypeUpdate::AddIfBetterAnchor:
+  case NestedTypeUpdate::AddIfMissing:
+    break;
+
+  case NestedTypeUpdate::ResolveExisting:
+    // Don't add a new type;
+    return nullptr;
+  }
 
   // Build an unresolved type if we don't have one yet.
   auto &nested = NestedTypes[name];
@@ -1504,8 +1757,9 @@ PotentialArchetype *PotentialArchetype::getNestedArchetypeAnchor(
 
       auto sameNamedSource =
         RequirementSource::forNestedTypeNameMatch(existingPA);
-      builder.addSameTypeRequirement(existingPA, nested.back(),
-                                     sameNamedSource);
+      builder.addSameTypeRequirement(
+                                 existingPA, nested.back(), sameNamedSource,
+                                 UnresolvedHandlingKind::GenerateConstraints);
     }
   }
 
@@ -1545,8 +1799,8 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
 PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
                       PointerUnion<AssociatedTypeDecl *, TypeAliasDecl *> type,
                       NestedTypeUpdate kind) {
-  AssociatedTypeDecl *assocType = type.dyn_cast<AssociatedTypeDecl *>();
-  TypeAliasDecl *typealias = type.dyn_cast<TypeAliasDecl *>();
+  auto *assocType = type.dyn_cast<AssociatedTypeDecl *>();
+  auto *typealias = type.dyn_cast<TypeAliasDecl *>();
   if (!assocType && !typealias)
     return nullptr;
 
@@ -1560,34 +1814,36 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
   // now) or a potential archetype with the appropriate associated type or
   // typealias.
   PotentialArchetype *resultPA = nullptr;
-  auto &allNested = NestedTypes[name];
+  auto knownNestedTypes = NestedTypes.find(name);
   bool shouldUpdatePA = false;
   auto &builder = *getBuilder();
-  for (auto existingPA : allNested) {
-    // Resolve an unresolved potential archetype.
-    if (existingPA->isUnresolvedNestedType) {
-      if (assocType) {
-        existingPA->resolveAssociatedType(assocType, builder);
-      } else {
-        existingPA->resolveTypeAlias(typealias, builder);
+  if (knownNestedTypes != NestedTypes.end()) {
+    for (auto existingPA : knownNestedTypes->second) {
+      // Resolve an unresolved potential archetype.
+      if (existingPA->isUnresolvedNestedType) {
+        if (assocType) {
+          existingPA->resolveAssociatedType(assocType, builder);
+        } else {
+          existingPA->resolveTypeAlias(typealias, builder);
+        }
+
+        // We've resolved this nested type; nothing more to do.
+        resultPA = existingPA;
+        shouldUpdatePA = true;
+        break;
       }
 
-      // We've resolved this nested type; nothing more to do.
-      resultPA = existingPA;
-      shouldUpdatePA = true;
-      break;
-    }
+      // Do we have an associated-type match?
+      if (assocType && existingPA->getResolvedAssociatedType() == assocType) {
+        resultPA = existingPA;
+        break;
+      }
 
-    // Do we have an associated-type match?
-    if (assocType && existingPA->getResolvedAssociatedType() == assocType) {
-      resultPA = existingPA;
-      break;
-    }
-
-    // Do we have a typealias match?
-    if (typealias && existingPA->getTypeAliasDecl() == typealias) {
-      resultPA = existingPA;
-      break;
+      // Do we have a typealias match?
+      if (typealias && existingPA->getTypeAliasDecl() == typealias) {
+        resultPA = existingPA;
+        break;
+      }
     }
   }
 
@@ -1606,6 +1862,7 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
       else
         resultPA = new PotentialArchetype(this, typealias);
 
+      auto &allNested = NestedTypes[name];
       allNested.push_back(resultPA);
 
       // We created a new type, which might be equivalent to a type by the
@@ -1626,7 +1883,9 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
       if (existingPA) {
         auto sameNamedSource =
           RequirementSource::forNestedTypeNameMatch(existingPA);
-        builder.addSameTypeRequirement(existingPA, resultPA, sameNamedSource);
+        builder.addSameTypeRequirement(
+                                 existingPA, resultPA, sameNamedSource,
+                                 UnresolvedHandlingKind::GenerateConstraints);
       }
 
       shouldUpdatePA = true;
@@ -1670,7 +1929,8 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
         builder.addSameTypeRequirement(
                          UnresolvedType(resultPA),
                          UnresolvedType(type),
-                         RequirementSource::forNestedTypeNameMatch(resultPA));
+                         RequirementSource::forNestedTypeNameMatch(resultPA),
+                         UnresolvedHandlingKind::GenerateConstraints);
       }
     }
 
@@ -1685,7 +1945,7 @@ PotentialArchetype *PotentialArchetype::updateNestedTypeForConformance(
     if (isConcreteType()) {
       for (auto equivT : getRepresentative()->getEquivalenceClassMembers()) {
         concretizeNestedTypeFromConcreteParent(
-            equivT, RequirementSource::forNestedTypeNameMatch(resultPA),
+            equivT, RequirementSource::forNestedTypeNameMatch(this),
             resultPA, builder,
             [&](ProtocolDecl *proto) -> ProtocolConformanceRef {
               auto depTy = resultPA->getDependentType({},
@@ -1727,7 +1987,8 @@ Type GenericSignatureBuilder::PotentialArchetype::getTypeInContext(
   if (Type concreteType = representative->getConcreteType()) {
     // Otherwise, substitute in the archetypes in the environment.
     // If this has a recursive type, return an error type.
-    if (representative->RecursiveConcreteType) {
+    auto equivClass = representative->getEquivalenceClassIfPresent();
+    if (equivClass->recursiveConcreteType) {
       return ErrorType::get(getDependentType(genericParams,
                                              /*allowUnresolved=*/true));
     }
@@ -1776,7 +2037,10 @@ Type GenericSignatureBuilder::PotentialArchetype::getTypeInContext(
                                      builder.getLookupConformanceFn());
 
       // If the member type maps to an archetype, resolve that archetype.
-      if (auto memberPA = builder.resolveArchetype(memberType)) {
+      if (auto memberPA =
+            builder.resolveArchetype(
+                               memberType,
+                               ArchetypeResolutionKind::CompleteWellFormed)) {
         if (memberPA->getRepresentative() != representative) {
           return memberPA->getTypeInContext(builder, genericEnv);
         }
@@ -1805,12 +2069,14 @@ Type GenericSignatureBuilder::PotentialArchetype::getTypeInContext(
   // type parameters, substitute them.
   Type superclass = representative->getSuperclass();
   if (superclass && superclass->hasTypeParameter()) {
-    if (representative->RecursiveSuperclassType) {
-      superclass = ErrorType::get(superclass);
+    if (equivClass->recursiveSuperclassType) {
+      superclass = Type();
     } else {
       superclass = genericEnv->mapTypeIntoContext(
                                               superclass,
                                               builder.getLookupConformanceFn());
+      if (superclass->is<ErrorType>())
+        superclass = Type();
 
       // We might have recursively recorded the archetype; if so, return early.
       // FIXME: This should be detectable before we end up building archetypes.
@@ -1871,7 +2137,9 @@ void ArchetypeType::resolveNestedType(
 
   Type interfaceType =
     genericEnv->mapTypeOutOfContext(const_cast<ArchetypeType *>(this));
-  auto parentPA = builder.resolveArchetype(interfaceType);
+  auto parentPA =
+    builder.resolveArchetype(interfaceType,
+                             ArchetypeResolutionKind::CompleteWellFormed);
   auto memberPA = parentPA->getNestedType(nested.first, builder);
   auto result = memberPA->getTypeInContext(builder, genericEnv);
   assert(!nested.second ||
@@ -2013,7 +2281,9 @@ void GenericSignatureBuilder::PotentialArchetype::dump(llvm::raw_ostream &Out,
 }
 
 #pragma mark Equivalence classes
-EquivalenceClass::EquivalenceClass(PotentialArchetype *representative) {
+EquivalenceClass::EquivalenceClass(PotentialArchetype *representative)
+  : recursiveConcreteType(false), recursiveSuperclassType(false)
+{
   members.push_back(representative);
 }
 
@@ -2022,6 +2292,8 @@ GenericSignatureBuilder::GenericSignatureBuilder(
                                std::function<GenericFunction> lookupConformance)
   : Context(ctx), Diags(Context.Diags), Impl(new Implementation) {
   Impl->LookupConformance = std::move(lookupConformance);
+  if (Context.Stats)
+    Context.Stats->getFrontendCounters().NumGenericSignatureBuilders++;
 }
 
 GenericSignatureBuilder::GenericSignatureBuilder(GenericSignatureBuilder &&) = default;
@@ -2050,7 +2322,9 @@ LazyResolver *GenericSignatureBuilder::getLazyResolver() const {
   return Context.getLazyResolver();
 }
 
-auto GenericSignatureBuilder::resolveArchetype(Type type) -> PotentialArchetype * {
+PotentialArchetype *GenericSignatureBuilder::resolveArchetype(
+                                     Type type,
+                                     ArchetypeResolutionKind resolutionKind) {
   if (auto genericParam = type->getAs<GenericTypeParamType>()) {
     unsigned index = GenericParamKey(genericParam).findIndexIn(
                                                            Impl->GenericParams);
@@ -2061,14 +2335,43 @@ auto GenericSignatureBuilder::resolveArchetype(Type type) -> PotentialArchetype 
   }
 
   if (auto dependentMember = type->getAs<DependentMemberType>()) {
-    auto base = resolveArchetype(dependentMember->getBase());
+    auto base = resolveArchetype(dependentMember->getBase(), resolutionKind);
     if (!base)
       return nullptr;
 
-    if (auto assocType = dependentMember->getAssocType())
-      return base->getNestedType(assocType, *this);
+    // Figure out what kind of nested type update we want.
+    typedef PotentialArchetype::NestedTypeUpdate NestedTypeUpdate;
+    NestedTypeUpdate updateKind;
+    switch (resolutionKind) {
+    case ArchetypeResolutionKind::AlreadyKnown:
+      updateKind = NestedTypeUpdate::ResolveExisting;
+      break;
 
-    return base->getNestedType(dependentMember->getName(), *this);
+    case ArchetypeResolutionKind::AlwaysPartial:
+    case ArchetypeResolutionKind::CompleteWellFormed:
+      updateKind = NestedTypeUpdate::AddIfMissing;
+      break;
+    }
+
+    // If we know the associated type already, get that specific type.
+    if (auto assocType = dependentMember->getAssocType())
+      return base->updateNestedTypeForConformance(assocType, updateKind);
+
+    // Resolve based on name alone.
+    auto name = dependentMember->getName();
+    switch (resolutionKind) {
+    case ArchetypeResolutionKind::AlreadyKnown: {
+      auto known = base->NestedTypes.find(name);
+      if (known == base->NestedTypes.end())
+        return nullptr;
+
+      return known->second.front();
+    }
+
+    case ArchetypeResolutionKind::AlwaysPartial:
+    case ArchetypeResolutionKind::CompleteWellFormed:
+      return base->getNestedArchetypeAnchor(name, *this, updateKind);
+    }
   }
 
   return nullptr;
@@ -2079,11 +2382,20 @@ auto GenericSignatureBuilder::resolve(UnresolvedType paOrT,
     -> Optional<ResolvedType> {
   auto pa = paOrT.dyn_cast<PotentialArchetype *>();
   if (auto type = paOrT.dyn_cast<Type>()) {
-    // FIXME: Limit the resolution of the archetype based on the source.
-    pa = resolveArchetype(type);
-    if (!pa) {
+    // If it's not a type parameter,
+    if (!type->isTypeParameter())
       return ResolvedType::forConcreteType(type);
-    }
+
+    // Determine what kind of resolution we want.
+    ArchetypeResolutionKind resolutionKind =
+      ArchetypeResolutionKind::AlwaysPartial;
+    if (!source.isExplicit() && source.isRecursive(type, *this))
+      resolutionKind = ArchetypeResolutionKind::AlreadyKnown;
+
+    // Attempt to resolve the type parameter to a potential archetype. If this
+    // fails, it's because we weren't allowed to resolve anything now.
+    pa = resolveArchetype(type, resolutionKind);
+    if (!pa) return None;
   }
 
   auto rep = pa->getRepresentative();
@@ -2112,10 +2424,9 @@ bool GenericSignatureBuilder::addGenericParameterRequirements(
   auto PA = Impl->PotentialArchetypes[Key.findIndexIn(Impl->GenericParams)];
   
   // Add the requirements from the declaration.
-  llvm::SmallPtrSet<ProtocolDecl *, 8> visited;
-  return addInheritedRequirements(GenericParam, PA,
-                                  GenericParam->getDeclaredInterfaceType(),
-                                  nullptr, visited);
+  return isErrorResult(
+           addInheritedRequirements(GenericParam, PA, nullptr,
+                                    GenericParam->getModuleContext()));
 }
 
 void GenericSignatureBuilder::addGenericParameter(GenericTypeParamType *GenericParam) {
@@ -2132,41 +2443,35 @@ void GenericSignatureBuilder::addGenericParameter(GenericTypeParamType *GenericP
   Impl->PotentialArchetypes.push_back(PA);
 }
 
-bool GenericSignatureBuilder::addConformanceRequirement(PotentialArchetype *PAT,
-                                                 ProtocolDecl *Proto,
-                                                 const RequirementSource *Source) {
-  llvm::SmallPtrSet<ProtocolDecl *, 8> Visited;
-  return addConformanceRequirement(PAT, Proto, Source, Visited);
-}
-
 /// Visit all of the types that show up in the list of inherited
 /// types.
-///
-/// \returns true if any of the invocations of \c visitor returned true.
-static bool visitInherited(
-                   ArrayRef<TypeLoc> inheritedTypes,
-                   llvm::function_ref<bool(Type, const TypeRepr *)> visitor) {
+static ConstraintResult visitInherited(
+         ArrayRef<TypeLoc> inheritedTypes,
+         llvm::function_ref<ConstraintResult(Type, const TypeRepr *)> visitType) {
   // Local function that (recursively) adds inherited types.
-  bool isInvalid = false;
+  ConstraintResult result = ConstraintResult::Resolved;
   std::function<void(Type, const TypeRepr *)> visitInherited;
-  visitInherited = [&](Type inheritedType, const TypeRepr *typeRepr) {
-    // Decompose protocol compositions.
-    auto composition = dyn_cast_or_null<CompositionTypeRepr>(typeRepr);
-    if (auto compositionType
-          = inheritedType->getAs<ProtocolCompositionType>()) {
-      unsigned index = 0;
-      for (auto protoType : compositionType->getProtocols()) {
-        if (composition && index < composition->getTypes().size())
-          visitInherited(protoType, composition->getTypes()[index]);
-        else
-          visitInherited(protoType, typeRepr);
 
-        ++index;
+  // FIXME: Should this whole thing use getExistentialLayout() instead?
+
+  visitInherited = [&](Type inheritedType, const TypeRepr *typeRepr) {
+    // Decompose explicitly-written protocol compositions.
+    if (auto composition = dyn_cast_or_null<CompositionTypeRepr>(typeRepr)) {
+      if (auto compositionType
+            = inheritedType->getAs<ProtocolCompositionType>()) {
+        unsigned index = 0;
+        for (auto memberType : compositionType->getMembers()) {
+          visitInherited(memberType, composition->getTypes()[index]);
+          index++;
+        }
+
+        return;
       }
-      return;
     }
 
-    isInvalid |= visitor(inheritedType, typeRepr);
+    auto recursiveResult = visitType(inheritedType, typeRepr);
+    if (isErrorResult(recursiveResult) && !isErrorResult(result))
+      result = recursiveResult;
   };
 
   // Visit all of the inherited types.
@@ -2174,35 +2479,18 @@ static bool visitInherited(
     visitInherited(inherited.getType(), inherited.getTypeRepr());
   }
 
-  return isInvalid;
+  return result;
 }
 
-bool GenericSignatureBuilder::addConformanceRequirement(PotentialArchetype *PAT,
-                                                 ProtocolDecl *Proto,
-                                                 const RequirementSource *Source,
-                               llvm::SmallPtrSetImpl<ProtocolDecl *> &Visited) {
+ConstraintResult GenericSignatureBuilder::addConformanceRequirement(
+                               PotentialArchetype *PAT,
+                               ProtocolDecl *Proto,
+                               const RequirementSource *Source) {
   // Add the requirement, if we haven't done so already.
   if (!PAT->addConformance(Proto, Source, *this))
-    return false;
+    return ConstraintResult::Resolved;
 
-  // FIXME: Ad hoc recursion breaking.
-  if (Visited.count(Proto)) {
-    markPotentialArchetypeRecursive(PAT, Proto, Source);
-    return true;
-  }
-
-
-  // Add the requirement to the representative.
-  auto T = PAT->getRepresentative();
-
-  bool inserted = Visited.insert(Proto).second;
-  assert(inserted);
-  (void) inserted;
-  SWIFT_DEFER {
-    Visited.erase(Proto);
-  };
-
-  auto concreteSelf = T->getDependentType({}, /*allowUnresolved=*/true);
+  auto concreteSelf = PAT->getDependentType({}, /*allowUnresolved=*/true);
   auto protocolSubMap = SubstitutionMap::getProtocolSubstitutions(
       Proto, concreteSelf, ProtocolConformanceRef(Proto));
 
@@ -2213,67 +2501,266 @@ bool GenericSignatureBuilder::addConformanceRequirement(PotentialArchetype *PAT,
     auto reqSig = Proto->getRequirementSignature();
 
     auto innerSource =
-      FloatingRequirementSource::viaProtocolRequirement(Source, Proto);
+      FloatingRequirementSource::viaProtocolRequirement(Source, Proto,
+                                                        /*inferred=*/false);
     for (auto req : reqSig->getRequirements()) {
-      if (addRequirement(req, innerSource, &protocolSubMap, Visited))
-        return true;
+      auto reqResult = addRequirement(req, innerSource, nullptr,
+                                      &protocolSubMap);
+      if (isErrorResult(reqResult)) return reqResult;
     }
 
-    return false;
+    return ConstraintResult::Resolved;
   }
 
   // Add all of the inherited protocol requirements, recursively.
   if (auto resolver = getLazyResolver())
     resolver->resolveInheritedProtocols(Proto);
 
-  if (addInheritedRequirements(Proto, PAT, Proto->getSelfInterfaceType(),
-                               Source, Visited))
-    return true;
+  auto protoModule = Proto->getParentModule();
+
+  auto inheritedReqResult =
+    addInheritedRequirements(Proto, PAT, Source, protoModule);
+  if (isErrorResult(inheritedReqResult))
+    return inheritedReqResult;
 
   // Add any requirements in the where clause on the protocol.
   if (auto WhereClause = Proto->getTrailingWhereClause()) {
     for (auto &req : WhereClause->getRequirements()) {
       auto innerSource = FloatingRequirementSource::viaProtocolRequirement(
-          Source, Proto, &req);
-      addRequirement(&req, innerSource, &protocolSubMap);
+          Source, Proto, &req, /*inferred=*/false);
+      addRequirement(&req, innerSource, &protocolSubMap, protoModule);
     }
   }
+
+  // Collect all of the inherited associated types and typealiases in the
+  // inherited protocols (recursively).
+  llvm::MapVector<DeclName, TinyPtrVector<TypeDecl *>> inheritedTypeDecls;
+  {
+    Proto->walkInheritedProtocols(
+        [&](ProtocolDecl *inheritedProto) -> TypeWalker::Action {
+      if (inheritedProto == Proto) return TypeWalker::Action::Continue;
+
+      for (auto req : getProtocolMembers(inheritedProto)) {
+        if (auto typeReq = dyn_cast<TypeDecl>(req))
+          inheritedTypeDecls[typeReq->getFullName()].push_back(typeReq);
+      }
+      return TypeWalker::Action::Continue;
+    });
+  }
+
+  // Local function to find the insertion point for the protocol's "where"
+  // clause, as well as the string to start the insertion ("where" or ",");
+  auto getProtocolWhereLoc = [&]() -> std::pair<SourceLoc, const char *> {
+    // Already has a trailing where clause.
+    if (auto trailing = Proto->getTrailingWhereClause())
+      return { trailing->getRequirements().back().getSourceRange().End, ", " };
+
+    // Inheritance clause.
+    return { Proto->getInherited().back().getSourceRange().End, " where " };
+  };
+
+  // Retrieve the set of requirements that a given associated type declaration
+  // produces, in the form that would be seen in the where clause.
+  auto getAssociatedTypeReqs = [&](AssociatedTypeDecl *assocType,
+                                   const char *start) {
+    std::string result;
+    {
+      llvm::raw_string_ostream out(result);
+      out << start;
+      interleave(assocType->getInherited(), [&](TypeLoc inheritedType) {
+        out << assocType->getFullName() << ": ";
+        if (auto inheritedTypeRepr = inheritedType.getTypeRepr())
+          inheritedTypeRepr->print(out);
+        else
+          inheritedType.getType().print(out);
+      }, [&] {
+        out << ", ";
+      });
+    }
+    return result;
+  };
+
+  // Retrieve the requirement that a given typealias introduces when it
+  // overrides an inherited associated type with the same name, as a string
+  // suitable for use in a where clause.
+  auto getTypeAliasReq = [&](TypeAliasDecl *typealias, const char *start) {
+    std::string result;
+    {
+      llvm::raw_string_ostream out(result);
+      out << start;
+      out << typealias->getFullName() << " == ";
+      if (auto underlyingTypeRepr =
+            typealias->getUnderlyingTypeLoc().getTypeRepr())
+        underlyingTypeRepr->print(out);
+      else
+        typealias->getUnderlyingTypeLoc().getType().print(out);
+    }
+    return result;
+  };
+
+  // Form an unsubstituted type referring to the given type declaration,
+  // for use in an inferred same-type requirement.
+  auto formUnsubstitutedType = [&](TypeDecl *typeDecl) -> Type {
+    if (auto assocType = dyn_cast<AssociatedTypeDecl>(typeDecl)) {
+      return DependentMemberType::get(
+                               assocType->getProtocol()->getSelfInterfaceType(),
+                               assocType);
+    }
+
+    if (auto typealias = dyn_cast<TypeAliasDecl>(typeDecl)) {
+      // Resolve the underlying type, if we haven't done so yet.
+      if (!typealias->hasInterfaceType()) {
+        getLazyResolver()->resolveDeclSignature(typealias);
+      }
+
+      return typealias->getUnderlyingTypeLoc().getType();
+    }
+
+    return Type();
+  };
+
+  // An inferred same-type requirement between the two type declarations
+  // within this protocol or a protocol it inherits.
+  auto addInferredSameTypeReq = [&](TypeDecl *first, TypeDecl *second) {
+    Type firstType = formUnsubstitutedType(first);
+    if (!firstType) return;
+
+    Type secondType = formUnsubstitutedType(second);
+    if (!secondType) return;
+
+    auto inferredSameTypeSource =
+      FloatingRequirementSource::viaProtocolRequirement(
+                    Source, Proto, WrittenRequirementLoc(), /*inferred=*/true);
+
+    addRequirement(
+      Requirement(RequirementKind::SameType, firstType, secondType),
+      inferredSameTypeSource, Proto->getParentModule(),
+      &protocolSubMap);
+  };
 
   // Add requirements for each of the associated types.
   for (auto Member : getProtocolMembers(Proto)) {
-    if (auto AssocType = dyn_cast<AssociatedTypeDecl>(Member)) {
+    if (auto assocTypeDecl = dyn_cast<AssociatedTypeDecl>(Member)) {
       // Add requirements placed directly on this associated type.
-      auto AssocPA = T->getNestedType(AssocType, *this);
+      Type assocType = DependentMemberType::get(concreteSelf, assocTypeDecl);
+      auto assocResult =
+        addInheritedRequirements(assocTypeDecl, assocType, Source, protoModule);
+      if (isErrorResult(assocResult))
+        return assocResult;
 
-      if (AssocPA != T) {
-        if (addInheritedRequirements(AssocType, AssocPA,
-                                     AssocType->getDeclaredInterfaceType(),
-                                     Source, Visited))
-          return true;
-      }
-      if (auto WhereClause = AssocType->getTrailingWhereClause()) {
+      // Add requirements from this associated type's where clause.
+      if (auto WhereClause = assocTypeDecl->getTrailingWhereClause()) {
         for (auto &req : WhereClause->getRequirements()) {
           auto innerSource =
-            FloatingRequirementSource::viaProtocolRequirement(Source, Proto,
-                                                              &req);
-          addRequirement(&req, innerSource, &protocolSubMap);
+            FloatingRequirementSource::viaProtocolRequirement(
+                                      Source, Proto, &req, /*inferred=*/false);
+          addRequirement(&req, innerSource, &protocolSubMap, protoModule);
         }
       }
-    } else if (auto TypeAlias = dyn_cast<TypeAliasDecl>(Member)) {
-      // FIXME: this should check that the typealias is makes sense (e.g. has
-      // the same/compatible type as typealiases in parent protocols) and
-      // set-up any same type requirements required. Forcing the PA to be
-      // created with getNestedType is currently worse than useless due to the
-      // 'recursive decl validation' FIXME in that function: it creates an
-      // unresolved PA that prints an error later.
-      (void)TypeAlias;
+
+      // Check whether we inherited any types with the same name.
+      auto knownInherited =
+        inheritedTypeDecls.find(assocTypeDecl->getFullName());
+      if (knownInherited == inheritedTypeDecls.end()) continue;
+
+      bool shouldWarnAboutRedeclaration =
+        Source->kind == RequirementSource::RequirementSignatureSelf &&
+        assocTypeDecl->getDefaultDefinitionLoc().isNull();
+      for (auto inheritedType : knownInherited->second) {
+        // If we have inherited associated type...
+        if (auto inheritedAssocTypeDecl =
+              dyn_cast<AssociatedTypeDecl>(inheritedType)) {
+          // Infer a same-type requirement among the same-named associated
+          // types.
+          addInferredSameTypeReq(assocTypeDecl, inheritedAssocTypeDecl);
+
+          // Complain about the first redeclaration.
+          if (shouldWarnAboutRedeclaration) {
+            auto inheritedFromProto = inheritedAssocTypeDecl->getProtocol();
+            auto fixItWhere = getProtocolWhereLoc();
+            Diags.diagnose(assocTypeDecl,
+                           diag::inherited_associated_type_redecl,
+                           assocTypeDecl->getFullName(),
+                           inheritedFromProto->getDeclaredInterfaceType())
+              .fixItInsertAfter(
+                       fixItWhere.first,
+                       getAssociatedTypeReqs(assocTypeDecl, fixItWhere.second))
+              .fixItRemove(assocTypeDecl->getSourceRange());
+
+            Diags.diagnose(inheritedAssocTypeDecl, diag::decl_declared_here,
+                           inheritedAssocTypeDecl->getFullName());
+
+            shouldWarnAboutRedeclaration = false;
+          }
+
+          continue;
+        }
+
+        // FIXME: this is a weird situation.
+      }
+
+      inheritedTypeDecls.erase(knownInherited);
+      continue;
+    }
+
+    if (auto typealias = dyn_cast<TypeAliasDecl>(Member)) {
+      // Check whether we inherited any types with the same name.
+      auto knownInherited = inheritedTypeDecls.find(typealias->getFullName());
+      if (knownInherited == inheritedTypeDecls.end()) continue;
+
+      bool shouldWarnAboutRedeclaration =
+        Source->kind == RequirementSource::RequirementSignatureSelf;
+
+      for (auto inheritedType : knownInherited->second) {
+        // If we have inherited associated type...
+        if (auto inheritedAssocTypeDecl =
+              dyn_cast<AssociatedTypeDecl>(inheritedType)) {
+          // Infer a same-type requirement between the typealias' underlying
+          // type and the inherited associated type.
+          addInferredSameTypeReq(inheritedAssocTypeDecl, typealias);
+
+          // Warn that one should use where clauses for this.
+          if (shouldWarnAboutRedeclaration) {
+            auto inheritedFromProto = inheritedAssocTypeDecl->getProtocol();
+            auto fixItWhere = getProtocolWhereLoc();
+            Diags.diagnose(typealias,
+                           diag::typealias_override_associated_type,
+                           typealias->getFullName(),
+                           inheritedFromProto->getDeclaredInterfaceType())
+              .fixItInsertAfter(fixItWhere.first,
+                                getTypeAliasReq(typealias, fixItWhere.second))
+              .fixItRemove(typealias->getSourceRange());
+            Diags.diagnose(inheritedAssocTypeDecl, diag::decl_declared_here,
+                           inheritedAssocTypeDecl->getFullName());
+
+            shouldWarnAboutRedeclaration = false;
+          }
+
+          continue;
+        }
+
+        // FIXME: More typealiases
+      }
+
+      inheritedTypeDecls.erase(knownInherited);
+      continue;
     }
   }
 
-  return false;
+  // Infer same-type requirements among inherited type declarations.
+  for (auto &entry : inheritedTypeDecls) {
+    if (entry.second.size() < 2) continue;
+
+    auto firstDecl = entry.second.front();
+    for (auto otherDecl : ArrayRef<TypeDecl *>(entry.second).slice(1)) {
+      addInferredSameTypeReq(firstDecl, otherDecl);
+    }
+  }
+
+  return ConstraintResult::Resolved;
 }
 
-bool GenericSignatureBuilder::addLayoutRequirementDirect(
+ConstraintResult GenericSignatureBuilder::addLayoutRequirementDirect(
                                              PotentialArchetype *PAT,
                                              LayoutConstraint Layout,
                                              const RequirementSource *Source) {
@@ -2281,6 +2768,7 @@ bool GenericSignatureBuilder::addLayoutRequirementDirect(
 
   // Record this layout constraint.
   equivClass->layoutConstraints.push_back({PAT, Layout, Source});
+  ++NumLayoutConstraints;
 
   // Update the layout in the equivalence class, if we didn't have one already.
   if (!equivClass->layout)
@@ -2292,19 +2780,19 @@ bool GenericSignatureBuilder::addLayoutRequirementDirect(
       equivClass->layout = mergedLayout;
   }
 
-  return false;
+  return ConstraintResult::Resolved;
 }
 
-bool GenericSignatureBuilder::addLayoutRequirement(
+ConstraintResult GenericSignatureBuilder::addLayoutRequirement(
                                              UnresolvedType subject,
                                              LayoutConstraint layout,
                                              FloatingRequirementSource source,
-                                             Type dependentType) {
+                                             UnresolvedHandlingKind unresolvedHandling) {
   // Resolve the subject.
   auto resolvedSubject = resolve(subject, source);
   if (!resolvedSubject) {
-    return recordUnresolvedRequirement(RequirementKind::Layout, subject,
-                                       layout, source);
+    return handleUnresolvedRequirement(RequirementKind::Layout, subject,
+                                       layout, source, unresolvedHandling);
   }
 
   // If this layout constraint applies to a concrete type, we can fully
@@ -2315,21 +2803,20 @@ bool GenericSignatureBuilder::addLayoutRequirement(
     if (source.isExplicit() && source.getLoc().isValid()) {
       Diags.diagnose(source.getLoc(), diag::requires_not_suitable_archetype,
                      0, TypeLoc::withoutLoc(resolvedSubject->getType()), 0);
-      return true;
+      return ConstraintResult::Concrete;
     }
 
     // FIXME: Check whether the layout constraint makes sense for this
     // concrete type!
 
-    return false;
+    return ConstraintResult::Resolved;
   }
 
   auto pa = resolvedSubject->getPotentialArchetype();
-  return addLayoutRequirementDirect(pa, layout,
-                                    source.getSource(pa, dependentType));
+  return addLayoutRequirementDirect(pa, layout, source.getSource(pa));
 }
 
-bool GenericSignatureBuilder::updateSuperclass(
+void GenericSignatureBuilder::updateSuperclass(
                                            PotentialArchetype *T,
                                            Type superclass,
                                            const RequirementSource *source) {
@@ -2373,7 +2860,7 @@ bool GenericSignatureBuilder::updateSuperclass(
                                  : LayoutConstraintKind::NativeClass,
                              getASTContext()),
                          layoutReqSource);
-    return false;
+    return;
   }
 
   // T already has a superclass; make sure it's related.
@@ -2388,27 +2875,29 @@ bool GenericSignatureBuilder::updateSuperclass(
   //
   // then the second constraint should be allowed, constraining U to Bar
   // and secondarily imposing a T == Int constraint.
-  if (existingSuperclass->isExactSuperclassOf(superclass, nullptr)) {
+  if (existingSuperclass->isExactSuperclassOf(superclass)) {
     equivClass->superclass = superclass;
 
     // We've strengthened the bound, so update superclass conformances.
     updateSuperclassConformances();
-    return false;
+    return;
   }
 
-  return false;
+  return;
 }
 
-bool GenericSignatureBuilder::addSuperclassRequirementDirect(
+ConstraintResult GenericSignatureBuilder::addSuperclassRequirementDirect(
                                             PotentialArchetype *T,
                                             Type superclass,
                                             const RequirementSource *source) {
   // Record the constraint.
   T->getOrCreateEquivalenceClass()->superclassConstraints
     .push_back(ConcreteConstraint{T, superclass, source});
+  ++NumSuperclassConstraints;
 
   // Update the equivalence class with the constraint.
-  return updateSuperclass(T, superclass, source);
+  updateSuperclass(T, superclass, source);
+  return ConstraintResult::Resolved;
 }
 
 /// Map an unresolved type to a requirement right-hand-side.
@@ -2420,22 +2909,17 @@ toRequirementRHS(GenericSignatureBuilder::UnresolvedType unresolved) {
   return unresolved.dyn_cast<Type>();
 }
 
-bool GenericSignatureBuilder::addTypeRequirement(
+ConstraintResult GenericSignatureBuilder::addTypeRequirement(
                              UnresolvedType subject,
                              UnresolvedType constraint,
                              FloatingRequirementSource source,
-                             Type dependentType,
-                             llvm::SmallPtrSetImpl<ProtocolDecl *> *visited) {
-  // Make sure we always have a "visited" set to pass down.
-  SmallPtrSet<ProtocolDecl *, 4> visitedSet;
-  if (!visited)
-    visited = &visitedSet;
-
+                             UnresolvedHandlingKind unresolvedHandling) {
   // Resolve the constraint.
   auto resolvedConstraint = resolve(constraint, source);
   if (!resolvedConstraint) {
-    return recordUnresolvedRequirement(RequirementKind::Conformance, subject,
-                                       toRequirementRHS(constraint), source);
+    return handleUnresolvedRequirement(RequirementKind::Conformance, subject,
+                                       toRequirementRHS(constraint), source,
+                                       unresolvedHandling);
   }
 
   // The right-hand side needs to be concrete.
@@ -2449,7 +2933,7 @@ bool GenericSignatureBuilder::addTypeRequirement(
                      1, TypeLoc::withoutLoc(constraintType), 0);
     }
 
-    return true;
+    return ConstraintResult::Concrete;
   }
 
   // Check whether we have a reasonable constraint type at all.
@@ -2458,7 +2942,7 @@ bool GenericSignatureBuilder::addTypeRequirement(
   if (!constraintType->isExistentialType() &&
       !constraintType->getClassOrBoundGenericClass()) {
     if (source.getLoc().isValid() && !constraintType->hasError()) {
-      Type subjectType = subject.dyn_cast<Type>();
+      auto subjectType = subject.dyn_cast<Type>();
       if (!subjectType)
         subjectType = subject.get<PotentialArchetype *>()
                         ->getDependentType(Impl->GenericParams,
@@ -2469,7 +2953,7 @@ bool GenericSignatureBuilder::addTypeRequirement(
                      TypeLoc::withoutLoc(constraintType));
     }
 
-    return true;
+    return ConstraintResult::Conflicting;
   }
 
   // Resolve the subject. If we can't, delay the constraint.
@@ -2479,8 +2963,8 @@ bool GenericSignatureBuilder::addTypeRequirement(
       constraintType->isExistentialType()
         ? RequirementKind::Conformance
         : RequirementKind::Superclass;
-    return recordUnresolvedRequirement(recordedKind, subject, constraintType,
-                                       source);
+    return handleUnresolvedRequirement(recordedKind, subject, constraintType,
+                                       source, unresolvedHandling);
   }
 
   // If the resolved subject is a type, we can probably perform diagnostics
@@ -2493,31 +2977,46 @@ bool GenericSignatureBuilder::addTypeRequirement(
                        0, TypeLoc::withoutLoc(resolvedSubject->getType()), 0);
       }
 
-      return true;
+      return ConstraintResult::Concrete;
     }
 
     // FIXME: Check the constraint now.
-    return false;
+    return ConstraintResult::Resolved;
   }
 
   auto subjectPA = resolvedSubject->getPotentialArchetype();
   assert(subjectPA && "No potential archetype?");
 
-  auto resolvedSource = source.getSource(subjectPA, dependentType);
+  auto resolvedSource = source.getSource(subjectPA);
 
   // Protocol requirements.
   if (constraintType->isExistentialType()) {
-    // FIXME: "Class" or arbitrary layout requirements.
-    SmallVector<ProtocolDecl *, 4> protocols;
-    (void)constraintType->getExistentialTypeProtocols(protocols);
     bool anyErrors = false;
-    for (auto proto : protocols) {
-      if (addConformanceRequirement(subjectPA, proto, resolvedSource,
-                                    *visited))
+    auto layout = constraintType->getExistentialLayout();
+
+    if (auto layoutConstraint = layout.getLayoutConstraint()) {
+      if (isErrorResult(addLayoutRequirementDirect(subjectPA,
+                                                   layoutConstraint,
+                                                   resolvedSource)))
         anyErrors = true;
     }
 
-    return anyErrors;
+    if (layout.superclass) {
+      if (isErrorResult(addSuperclassRequirementDirect(subjectPA,
+                                                       layout.superclass,
+                                                       resolvedSource)))
+        anyErrors = true;
+    }
+
+    for (auto *proto : layout.getProtocols()) {
+      auto *protoDecl = proto->getDecl();
+      if (isErrorResult(addConformanceRequirement(subjectPA, protoDecl,
+                                                  resolvedSource)))
+        anyErrors = true;
+    }
+
+    return anyErrors ? ConstraintResult::Conflicting
+                     : ConstraintResult::Resolved;
   }
 
   // Superclass constraint.
@@ -2531,15 +3030,18 @@ void GenericSignatureBuilder::PotentialArchetype::addSameTypeConstraint(
   // Update the same-type constraints of this PA to reference the other PA.
   getOrCreateEquivalenceClass()->sameTypeConstraints[this]
     .push_back({this, otherPA, source});
+  ++NumSameTypeConstraints;
 
   if (this != otherPA) {
     // Update the same-type constraints of the other PA to reference this PA.
     otherPA->getOrCreateEquivalenceClass()->sameTypeConstraints[otherPA]
       .push_back({otherPA, this, source});
+    ++NumSameTypeConstraints;
   }
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirementBetweenArchetypes(
+ConstraintResult
+GenericSignatureBuilder::addSameTypeRequirementBetweenArchetypes(
        PotentialArchetype *OrigT1,
        PotentialArchetype *OrigT2,
        const RequirementSource *Source) 
@@ -2553,7 +3055,7 @@ bool GenericSignatureBuilder::addSameTypeRequirementBetweenArchetypes(
 
   // If the representatives are already the same, we're done.
   if (T1 == T2)
-    return false;
+    return ConstraintResult::Resolved;
 
   // Decide which potential archetype is to be considered the representative.
   // It doesn't specifically matter which we use, but it's a minor optimization
@@ -2590,6 +3092,7 @@ bool GenericSignatureBuilder::addSameTypeRequirementBetweenArchetypes(
     if (equivClass->concreteType) {
       (void)addSameTypeRequirement(equivClass->concreteType,
                                    equivClass2->concreteType, Source,
+                                   UnresolvedHandlingKind::GenerateConstraints,
                                    DiagnoseSameTypeConflict{Diags, Source, T1});
     } else {
       equivClass->concreteType = equivClass2->concreteType;
@@ -2634,21 +3137,24 @@ bool GenericSignatureBuilder::addSameTypeRequirementBetweenArchetypes(
   }
 
   // Recursively merge the associated types of T2 into T1.
+  auto dependentT1 = T1->getDependentType({ }, /*allowUnresolved=*/true);
   for (auto equivT2 : equivClass2Members) {
     for (auto T2Nested : equivT2->NestedTypes) {
-      auto T1Nested = T1->getNestedType(T2Nested.first, *this);
-      if (addSameTypeRequirement(
-                           T1Nested, T2Nested.second.front(),
-                           RequirementSource::forNestedTypeNameMatch(T1Nested),
-                           DiagnoseSameTypeConflict{Diags, Source, T1Nested}))
-        return true;
+      Type nestedT1 = DependentMemberType::get(dependentT1, T2Nested.first);
+      if (isErrorResult(
+            addSameTypeRequirement(
+               nestedT1, T2Nested.second.front(),
+               FloatingRequirementSource::forNestedTypeNameMatch(
+                                                      Source, T2Nested.first),
+               UnresolvedHandlingKind::GenerateConstraints)))
+        return ConstraintResult::Conflicting;
     }
   }
 
-  return false;
+  return ConstraintResult::Resolved;
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirementToConcrete(
+ConstraintResult GenericSignatureBuilder::addSameTypeRequirementToConcrete(
        PotentialArchetype *T,
        Type Concrete,
        const RequirementSource *Source) {
@@ -2658,18 +3164,14 @@ bool GenericSignatureBuilder::addSameTypeRequirementToConcrete(
   // Record the concrete type and its source.
   equivClass->concreteTypeConstraints.push_back(
                                       ConcreteConstraint{T, Concrete, Source});
+  ++NumConcreteTypeConstraints;
 
   // If we've already been bound to a type, match that type.
   if (equivClass->concreteType) {
-    bool mismatch = addSameTypeRequirement(equivClass->concreteType, Concrete,
-                                           Source,
-                                           DiagnoseSameTypeConflict{
-                                             Diags, Source, T});
+    return addSameTypeRequirement(equivClass->concreteType, Concrete, Source,
+                                  UnresolvedHandlingKind::GenerateConstraints,
+                                  DiagnoseSameTypeConflict{ Diags, Source, T});
 
-    if (mismatch) return true;
-
-    // Nothing more to do; the types matched.
-    return false;
   }
 
   // Record the requirement.
@@ -2686,10 +3188,12 @@ bool GenericSignatureBuilder::addSameTypeRequirementToConcrete(
                                protocol->getDeclaredInterfaceType()
                                  ->castTo<ProtocolType>());
     if (!conformance) {
-      Diags.diagnose(Source->getLoc(),
-                     diag::requires_generic_param_same_type_does_not_conform,
-                     Concrete, protocol->getName());
-      return true;
+      if (!Concrete->hasError()) {
+        Diags.diagnose(Source->getLoc(),
+                       diag::requires_generic_param_same_type_does_not_conform,
+                       Concrete, protocol->getName());
+      }
+      return ConstraintResult::Conflicting;
     }
 
     conformances.insert({protocol, *conformance});
@@ -2704,6 +3208,7 @@ bool GenericSignatureBuilder::addSameTypeRequirementToConcrete(
                                                 ? conformance->getConcrete()
                                                 : nullptr);
     equivClass->conformsTo[protocol].push_back({T, protocol, concreteSource});
+    ++NumConformanceConstraints;
   }
 
   // Eagerly resolve any existing nested types to their concrete forms (others
@@ -2718,10 +3223,10 @@ bool GenericSignatureBuilder::addSameTypeRequirementToConcrete(
     }
   }
 
-  return false;
+  return ConstraintResult::Resolved;
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirementBetweenConcrete(
+ConstraintResult GenericSignatureBuilder::addSameTypeRequirementBetweenConcrete(
     Type type1, Type type2, FloatingRequirementSource source,
     llvm::function_ref<void(Type, Type)> diagnoseMismatch) {
   // Local class to handle matching the two sides of the same-type constraint.
@@ -2750,48 +3255,55 @@ bool GenericSignatureBuilder::addSameTypeRequirementBetweenConcrete(
         diagnoseMismatch(sugaredFirstType, secondType);
         return false;
       }
+
       auto failed = builder.addSameTypeRequirement(
-          sugaredFirstType, Type(secondType), source, diagnoseMismatch);
-      return !failed;
+          sugaredFirstType, Type(secondType), source,
+          UnresolvedHandlingKind::GenerateConstraints, diagnoseMismatch);
+      return !isErrorResult(failed);
     }
   } matcher(*this, source, type1, type2, diagnoseMismatch);
 
-  return !matcher.match(type1, type2);
+  return matcher.match(type1, type2) ? ConstraintResult::Resolved
+                                     : ConstraintResult::Conflicting;
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirement(
-                                             UnresolvedType paOrT1,
-                                             UnresolvedType paOrT2,
-                                             FloatingRequirementSource source) {
-  return addSameTypeRequirement(paOrT1, paOrT2, source,
+ConstraintResult GenericSignatureBuilder::addSameTypeRequirement(
+                                 UnresolvedType paOrT1,
+                                 UnresolvedType paOrT2,
+                                 FloatingRequirementSource source,
+                                 UnresolvedHandlingKind unresolvedHandling) {
+  return addSameTypeRequirement(paOrT1, paOrT2, source, unresolvedHandling,
                                 [&](Type type1, Type type2) {
       Diags.diagnose(source.getLoc(), diag::requires_same_concrete_type,
                      type1, type2);
     });
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirement(
+ConstraintResult GenericSignatureBuilder::addSameTypeRequirement(
     UnresolvedType paOrT1, UnresolvedType paOrT2,
     FloatingRequirementSource source,
+    UnresolvedHandlingKind unresolvedHandling,
     llvm::function_ref<void(Type, Type)> diagnoseMismatch) {
 
   auto resolved1 = resolve(paOrT1, source);
   if (!resolved1) {
-    return recordUnresolvedRequirement(RequirementKind::SameType, paOrT1,
-                                       toRequirementRHS(paOrT2), source);
+    return handleUnresolvedRequirement(RequirementKind::SameType, paOrT1,
+                                       toRequirementRHS(paOrT2), source,
+                                       unresolvedHandling);
   }
 
   auto resolved2 = resolve(paOrT2, source);
   if (!resolved2) {
-    return recordUnresolvedRequirement(RequirementKind::SameType, paOrT1,
-                                       toRequirementRHS(paOrT2), source);
+    return handleUnresolvedRequirement(RequirementKind::SameType, paOrT1,
+                                       toRequirementRHS(paOrT2), source,
+                                       unresolvedHandling);
   }
 
   return addSameTypeRequirementDirect(*resolved1, *resolved2, source,
                                       diagnoseMismatch);
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirementDirect(
+ConstraintResult GenericSignatureBuilder::addSameTypeRequirementDirect(
                                            ResolvedType paOrT1,
                                            ResolvedType paOrT2,
                                            FloatingRequirementSource source) {
@@ -2802,7 +3314,7 @@ bool GenericSignatureBuilder::addSameTypeRequirementDirect(
   });
 }
 
-bool GenericSignatureBuilder::addSameTypeRequirementDirect(
+ConstraintResult GenericSignatureBuilder::addSameTypeRequirementDirect(
     ResolvedType paOrT1, ResolvedType paOrT2, FloatingRequirementSource source,
     llvm::function_ref<void(Type, Type)> diagnoseMismatch) {
   auto pa1 = paOrT1.getPotentialArchetype();
@@ -2813,15 +3325,12 @@ bool GenericSignatureBuilder::addSameTypeRequirementDirect(
   // If both sides of the requirement are type parameters, equate them.
   if (pa1 && pa2) {
     return addSameTypeRequirementBetweenArchetypes(pa1, pa2,
-                                                   source.getSource(pa1,
-                                                                    Type()));
+                                                   source.getSource(pa1));
     // If just one side is a type parameter, map it to a concrete type.
   } else if (pa1) {
-    return addSameTypeRequirementToConcrete(pa1, t2,
-                                            source.getSource(pa1, Type()));
+    return addSameTypeRequirementToConcrete(pa1, t2, source.getSource(pa1));
   } else if (pa2) {
-    return addSameTypeRequirementToConcrete(pa2, t1,
-                                            source.getSource(pa2, Type()));
+    return addSameTypeRequirementToConcrete(pa2, t1, source.getSource(pa2));
   } else {
     return addSameTypeRequirementBetweenConcrete(t1, t2, source,
                                                  diagnoseMismatch);
@@ -2850,61 +3359,94 @@ void GenericSignatureBuilder::markPotentialArchetypeRecursive(
   assocType->setInvalid();
 }
 
-bool GenericSignatureBuilder::addInheritedRequirements(
+ConstraintResult GenericSignatureBuilder::addInheritedRequirements(
                              TypeDecl *decl,
-                             PotentialArchetype *pa,
-                             Type dependentType,
+                             UnresolvedType type,
                              const RequirementSource *parentSource,
-                             llvm::SmallPtrSetImpl<ProtocolDecl *> &visited) {
+                             ModuleDecl *inferForModule) {
   if (isa<AssociatedTypeDecl>(decl) &&
       decl->hasInterfaceType() &&
       decl->getInterfaceType()->is<ErrorType>())
-    return false;
+    return ConstraintResult::Resolved;
 
   // Walk the 'inherited' list to identify requirements.
   if (auto resolver = getLazyResolver())
     resolver->resolveInheritanceClause(decl);
 
-  return visitInherited(
-                    decl->getInherited(),
-                    [&](Type inheritedType, const TypeRepr *typeRepr) -> bool {
-    // Local function to get the source.
-    auto getFloatingSource = [&] {
-      if (parentSource) {
-        if (auto assocType = dyn_cast<AssociatedTypeDecl>(decl)) {
-          auto proto = assocType->getProtocol();
-          return FloatingRequirementSource::viaProtocolRequirement(
-                                                parentSource, proto, typeRepr);
-        }
-
-        auto proto = cast<ProtocolDecl>(decl);
+  // Local function to get the source.
+  auto getFloatingSource = [&](const TypeRepr *typeRepr, bool forInferred) {
+    if (parentSource) {
+      if (auto assocType = dyn_cast<AssociatedTypeDecl>(decl)) {
+        auto proto = assocType->getProtocol();
         return FloatingRequirementSource::viaProtocolRequirement(
-                                              parentSource, proto, typeRepr);
+          parentSource, proto, typeRepr, forInferred);
       }
 
-      // Explicit requirement.
-      if (typeRepr)
-        return FloatingRequirementSource::forExplicit(typeRepr);
+      auto proto = cast<ProtocolDecl>(decl);
+      return FloatingRequirementSource::viaProtocolRequirement(
+        parentSource, proto, typeRepr, forInferred);
+    }
 
-      // An abstract explicit requirement.
-      return FloatingRequirementSource::forAbstract();
-    };
+    // We are inferring requirements.
+    if (forInferred)
+      return FloatingRequirementSource::forInferred(typeRepr);
 
-    // Protocol requirement.
-    return addTypeRequirement(pa, inheritedType, getFloatingSource(),
-                              dependentType, &visited);
-  });
+    // Explicit requirement.
+    if (typeRepr)
+      return FloatingRequirementSource::forExplicit(typeRepr);
+
+    // An abstract explicit requirement.
+    return FloatingRequirementSource::forAbstract();
+  };
+
+  auto visitType = [&](Type inheritedType, const TypeRepr *typeRepr) {
+    if (inferForModule) {
+      inferRequirements(*inferForModule,
+                        TypeLoc(const_cast<TypeRepr *>(typeRepr),
+                                inheritedType),
+                        getFloatingSource(typeRepr, /*forInferred=*/true));
+    }
+
+    // Check for direct recursion.
+    if (auto assocType = dyn_cast<AssociatedTypeDecl>(decl)) {
+      auto proto = assocType->getProtocol();
+      if (auto inheritedProto = inheritedType->getAs<ProtocolType>()) {
+        if (inheritedProto->getDecl() == proto ||
+            inheritedProto->getDecl()->inheritsFrom(proto)) {
+          auto source = getFloatingSource(typeRepr, /*forInferred=*/false);
+          if (auto resolved = resolve(type, source)) {
+            if (auto pa = resolved->getPotentialArchetype()) {
+              markPotentialArchetypeRecursive(pa, proto, source.getSource(pa));
+              return ConstraintResult::Conflicting;
+            }
+          }
+        }
+      }
+    }
+
+    return addTypeRequirement(type, inheritedType,
+                              getFloatingSource(typeRepr,
+                                                /*forInferred=*/false),
+                              UnresolvedHandlingKind::GenerateConstraints);
+  };
+
+  return visitInherited(decl->getInherited(), visitType);
 }
 
-bool GenericSignatureBuilder::addRequirement(const RequirementRepr *req) {
+ConstraintResult GenericSignatureBuilder::addRequirement(
+                                                 const RequirementRepr *req,
+                                                 ModuleDecl *inferForModule) {
   return addRequirement(req,
                         FloatingRequirementSource::forExplicit(req),
-                        nullptr);
+                        nullptr,
+                        inferForModule);
 }
 
-bool GenericSignatureBuilder::addRequirement(const RequirementRepr *Req,
+ConstraintResult GenericSignatureBuilder::addRequirement(
+                                             const RequirementRepr *Req,
                                              FloatingRequirementSource source,
-                                             const SubstitutionMap *subMap) {
+                                             const SubstitutionMap *subMap,
+                                             ModuleDecl *inferForModule) {
   auto subst = [&](Type t) {
     if (subMap)
       return t.subst(*subMap);
@@ -2912,18 +3454,44 @@ bool GenericSignatureBuilder::addRequirement(const RequirementRepr *Req,
     return t;
   };
 
+  auto getInferredTypeLoc = [=](Type type, TypeLoc existingTypeLoc) {
+    if (subMap) return TypeLoc::withoutLoc(type);
+    return existingTypeLoc;
+  };
+
   switch (Req->getKind()) {
-  case RequirementReprKind::LayoutConstraint:
-    return addLayoutRequirement(subst(Req->getSubject()),
+  case RequirementReprKind::LayoutConstraint: {
+    auto subject = subst(Req->getSubject());
+    if (inferForModule) {
+      inferRequirements(*inferForModule,
+                        getInferredTypeLoc(subject, Req->getSubjectLoc()),
+                        source.asInferred(Req->getSubjectLoc().getTypeRepr()));
+    }
+
+    return addLayoutRequirement(subject,
                                 Req->getLayoutConstraint(),
-                                source, Req->getSubject());
+                                source,
+                                UnresolvedHandlingKind::GenerateConstraints);
+  }
 
-  case RequirementReprKind::TypeConstraint:
-    return addTypeRequirement(subst(Req->getSubject()),
-                              subst(Req->getConstraint()),
-                              source, Req->getSubject());
+  case RequirementReprKind::TypeConstraint: {
+    auto subject = subst(Req->getSubject());
+    auto constraint = subst(Req->getConstraint());
+    if (inferForModule) {
+      inferRequirements(*inferForModule,
+                        getInferredTypeLoc(subject, Req->getSubjectLoc()),
+                        source.asInferred(Req->getSubjectLoc().getTypeRepr()));
+      inferRequirements(*inferForModule,
+                        getInferredTypeLoc(constraint,
+                                           Req->getConstraintLoc()),
+                        source.asInferred(
+                                      Req->getConstraintLoc().getTypeRepr()));
+    }
+    return addTypeRequirement(subject, constraint, source,
+                              UnresolvedHandlingKind::GenerateConstraints);
+  }
 
-  case RequirementReprKind::SameType:
+  case RequirementReprKind::SameType: {
     // Require that at least one side of the requirement contain a type
     // parameter.
     if (!Req->getFirstType()->hasTypeParameter() &&
@@ -2936,30 +3504,36 @@ bool GenericSignatureBuilder::addRequirement(const RequirementRepr *Req,
           .highlight(Req->getSecondTypeLoc().getSourceRange());
       }
 
-      return true;
+      return ConstraintResult::Concrete;
     }
 
+    auto firstType = subst(Req->getFirstType());
+    auto secondType = subst(Req->getSecondType());
+    if (inferForModule) {
+      inferRequirements(*inferForModule,
+                        getInferredTypeLoc(firstType, Req->getFirstTypeLoc()),
+                        source.asInferred(
+                                        Req->getFirstTypeLoc().getTypeRepr()));
+      inferRequirements(*inferForModule,
+                        getInferredTypeLoc(secondType,
+                                           Req->getSecondTypeLoc()),
+                        source.asInferred(
+                                        Req->getSecondTypeLoc().getTypeRepr()));
+    }
     return addRequirement(Requirement(RequirementKind::SameType,
-                                      subst(Req->getFirstType()),
-                                      subst(Req->getSecondType())),
-                          source);
+                                      firstType, secondType),
+                          source, nullptr);
+  }
   }
 
   llvm_unreachable("Unhandled requirement?");
 }
 
-bool GenericSignatureBuilder::addRequirement(const Requirement &req,
-                                             FloatingRequirementSource source,
-                                             const SubstitutionMap *subMap) {
-  llvm::SmallPtrSet<ProtocolDecl *, 8> visited;
-  return addRequirement(req, source, subMap, visited);
-}
-
-bool GenericSignatureBuilder::addRequirement(
+ConstraintResult GenericSignatureBuilder::addRequirement(
                             const Requirement &req,
                             FloatingRequirementSource source,
-                            const SubstitutionMap *subMap,
-                            llvm::SmallPtrSetImpl<ProtocolDecl *> &Visited) {
+                            ModuleDecl *inferForModule,
+                            const SubstitutionMap *subMap) {
   auto subst = [&](Type t) {
     if (subMap)
       return t.subst(*subMap);
@@ -2970,26 +3544,59 @@ bool GenericSignatureBuilder::addRequirement(
 
   switch (req.getKind()) {
   case RequirementKind::Superclass:
-  case RequirementKind::Conformance:
-    return addTypeRequirement(subst(req.getFirstType()),
-                              subst(req.getSecondType()),
-                              source, req.getFirstType(),
-                              &Visited);
+  case RequirementKind::Conformance: {
+    auto firstType = subst(req.getFirstType());
+    auto secondType = subst(req.getSecondType());
+    if (!firstType || !secondType)
+      return ConstraintResult::Conflicting;
 
-  case RequirementKind::Layout:
-    return addLayoutRequirement(subst(req.getFirstType()),
-                                req.getLayoutConstraint(),
-                                source,
-                                req.getFirstType());
+    if (inferForModule) {
+      inferRequirements(*inferForModule, TypeLoc::withoutLoc(firstType),
+                        FloatingRequirementSource::forInferred(nullptr));
+      inferRequirements(*inferForModule, TypeLoc::withoutLoc(secondType),
+                        FloatingRequirementSource::forInferred(nullptr));
+    }
 
-  case RequirementKind::SameType:
+    return addTypeRequirement(firstType, secondType, source,
+                              UnresolvedHandlingKind::GenerateConstraints);
+  }
+
+  case RequirementKind::Layout: {
+    auto firstType = subst(req.getFirstType());
+    if (!firstType)
+      return ConstraintResult::Conflicting;
+
+    if (inferForModule) {
+      inferRequirements(*inferForModule, TypeLoc::withoutLoc(firstType),
+                        FloatingRequirementSource::forInferred(nullptr));
+    }
+
+    return addLayoutRequirement(firstType, req.getLayoutConstraint(), source,
+                                UnresolvedHandlingKind::GenerateConstraints);
+  }
+
+  case RequirementKind::SameType: {
+    auto firstType = subst(req.getFirstType());
+    auto secondType = subst(req.getSecondType());
+    if (!firstType || !secondType)
+      return ConstraintResult::Conflicting;
+
+    if (inferForModule) {
+      inferRequirements(*inferForModule, TypeLoc::withoutLoc(firstType),
+                        FloatingRequirementSource::forInferred(nullptr));
+      inferRequirements(*inferForModule, TypeLoc::withoutLoc(secondType),
+                        FloatingRequirementSource::forInferred(nullptr));
+    }
+
     return addSameTypeRequirement(
-        subst(req.getFirstType()), subst(req.getSecondType()), source,
+        firstType, secondType, source,
+        UnresolvedHandlingKind::GenerateConstraints,
         [&](Type type1, Type type2) {
           if (source.getLoc().isValid())
             Diags.diagnose(source.getLoc(), diag::requires_same_concrete_type,
                            type1, type2);
         });
+  }
   }
 
   llvm_unreachable("Unhandled requirement?");
@@ -2999,13 +3606,13 @@ bool GenericSignatureBuilder::addRequirement(
 class GenericSignatureBuilder::InferRequirementsWalker : public TypeWalker {
   ModuleDecl &module;
   GenericSignatureBuilder &Builder;
-  TypeRepr *typeRepr;
+  FloatingRequirementSource source;
 
 public:
   InferRequirementsWalker(ModuleDecl &module,
                           GenericSignatureBuilder &builder,
-                          TypeRepr *typeRepr)
-    : module(module), Builder(builder), typeRepr(typeRepr) { }
+                          FloatingRequirementSource source)
+    : module(module), Builder(builder), source(source) { }
 
   Action walkToTypePost(Type ty) override {
     auto boundGeneric = ty->getAs<BoundGenericType>();
@@ -3023,21 +3630,22 @@ public:
 
     // Handle the requirements.
     // FIXME: Inaccurate TypeReprs.
-    auto source = FloatingRequirementSource::forInferred(typeRepr);
     for (const auto &req : genericSig->getRequirements()) {
-      Builder.addRequirement(req, source, &subMap);
+      Builder.addRequirement(req, source, nullptr, &subMap);
     }
 
     return Action::Continue;
   }
 };
 
-void GenericSignatureBuilder::inferRequirements(ModuleDecl &module,
-                                                TypeLoc type) {
+void GenericSignatureBuilder::inferRequirements(
+                                          ModuleDecl &module,
+                                          TypeLoc type,
+                                          FloatingRequirementSource source) {
   if (!type.getType())
     return;
   // FIXME: Crummy source-location information.
-  InferRequirementsWalker walker(module, *this, type.getTypeRepr());
+  InferRequirementsWalker walker(module, *this, source);
   type.getType().walk(walker);
 }
 
@@ -3048,8 +3656,11 @@ void GenericSignatureBuilder::inferRequirements(
   if (genericParams == nullptr)
     return;
 
-  for (auto P : *params)
-    inferRequirements(module, P->getTypeLoc());
+  for (auto P : *params) {
+    inferRequirements(module, P->getTypeLoc(),
+                      FloatingRequirementSource::forInferred(
+                                            P->getTypeLoc().getTypeRepr()));
+  }
 }
 
 /// Perform typo correction on the given nested type, producing the
@@ -3129,7 +3740,7 @@ namespace swift {
            lhs.value->isEqual(rhs.value) &&
            lhs.source == rhs.source;
   }
-}
+} // namespace swift
 
 namespace {
   /// Retrieve the representative constraint that will be used for diagnostics.
@@ -3193,12 +3804,15 @@ namespace {
 
     return representativeConstraint;
   }
-}
+} // end anonymous namespace
 
 void
 GenericSignatureBuilder::finalize(SourceLoc loc,
                            ArrayRef<GenericTypeParamType *> genericParams,
                            bool allowConcreteGenericParams) {
+  // Process any delayed requirements that we can handle now.
+  processDelayedRequirements();
+
   assert(!Impl->finalized && "Already finalized builder");
 #ifndef NDEBUG
   Impl->finalized = true;
@@ -3225,7 +3839,9 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
       if (concreteType->hasTypeParameter()) {
         concreteType.visit([&](Type type) {
           if (type->isTypeParameter()) {
-            if (auto referencedPA = resolveArchetype(type)) {
+            if (auto referencedPA =
+                  resolveArchetype(type,
+                                   ArchetypeResolutionKind::AlreadyKnown)) {
               referencedPAs.insert(referencedPA->getRepresentative());
             }
           }
@@ -3251,7 +3867,8 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
 
       return type.findIf([&](Type type) {
         if (type->isTypeParameter()) {
-          if (auto referencedPA = resolveArchetype(type)) {
+          if (auto referencedPA =
+                resolveArchetype(type, ArchetypeResolutionKind::AlreadyKnown)) {
             referencedPA = referencedPA->getRepresentative();
             if (referencedPA == archetype) return true;
 
@@ -3307,7 +3924,7 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
                          constraint->value);
         }
 
-        archetype->RecursiveConcreteType = true;
+        equivClass->recursiveConcreteType = true;
       } else {
         checkConcreteTypeConstraints(genericParams, archetype);
       }
@@ -3325,7 +3942,7 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
                          equivClass->superclass);
         }
 
-        archetype->RecursiveSuperclassType = true;
+        equivClass->recursiveSuperclassType = true;
       } else {
         checkSuperclassConstraints(genericParams, archetype);
       }
@@ -3426,9 +4043,9 @@ GenericSignatureBuilder::finalize(SourceLoc loc,
       auto replacement = pa->getParent()->getNestedType(correction, *this);
       pa->resolveAssociatedType(replacement->getResolvedAssociatedType(),
                                 *this);
-      addSameTypeRequirement(
-          pa, replacement,
-          RequirementSource::forNestedTypeNameMatch(pa));
+      addSameTypeRequirement(pa, replacement,
+                             RequirementSource::forNestedTypeNameMatch(pa),
+                             UnresolvedHandlingKind::GenerateConstraints);
     });
   }
 }
@@ -3451,6 +4068,68 @@ bool GenericSignatureBuilder::diagnoseRemainingRenames(
   return invalid;
 }
 
+/// Turn a requirement right-hand side into an unresolved type.
+static GenericSignatureBuilder::UnresolvedType asUnresolvedType(
+                                GenericSignatureBuilder::RequirementRHS rhs) {
+  if (auto pa = rhs.dyn_cast<PotentialArchetype *>())
+    return GenericSignatureBuilder::UnresolvedType(pa);
+
+  return GenericSignatureBuilder::UnresolvedType(rhs.get<Type>());
+}
+
+void GenericSignatureBuilder::processDelayedRequirements() {
+  bool anySolved = !Impl->DelayedRequirements.empty();
+  while (anySolved) {
+    // Steal the delayed requirements so we can reprocess them.
+    anySolved = false;
+    auto delayed = std::move(Impl->DelayedRequirements);
+    Impl->DelayedRequirements.clear();
+
+    // Process delayed requirements.
+    for (const auto &req : delayed) {
+      // Reprocess the delayed requirement.
+      ConstraintResult reqResult;
+      switch (req.kind) {
+      case RequirementKind::Conformance:
+      case RequirementKind::Superclass:
+        reqResult = addTypeRequirement(
+                       req.lhs, asUnresolvedType(req.rhs), req.source,
+                       UnresolvedHandlingKind::ReturnUnresolved);
+        break;
+
+      case RequirementKind::Layout:
+        reqResult = addLayoutRequirement(
+                           req.lhs, req.rhs.get<LayoutConstraint>(), req.source,
+                           UnresolvedHandlingKind::ReturnUnresolved);
+        break;
+
+      case RequirementKind::SameType:
+        reqResult = addSameTypeRequirement(
+                               req.lhs, asUnresolvedType(req.rhs), req.source,
+                               UnresolvedHandlingKind::ReturnUnresolved);
+        break;
+      }
+
+      // Update our state based on what happened.
+      switch (reqResult) {
+      case ConstraintResult::Concrete:
+      case ConstraintResult::Conflicting:
+        anySolved = true;
+        break;
+
+      case ConstraintResult::Resolved:
+        anySolved = true;
+        break;
+
+      case ConstraintResult::Unresolved:
+        // Add the requirement back.
+        Impl->DelayedRequirements.push_back(req);
+        break;
+      }
+    }
+  }
+}
+
 template<typename T>
 Constraint<T> GenericSignatureBuilder::checkConstraintList(
                            ArrayRef<GenericTypeParamType *> genericParams,
@@ -3471,6 +4150,51 @@ Constraint<T> GenericSignatureBuilder::checkConstraintList(
                                    /*removeSelfDerived=*/true);
 }
 
+namespace {
+  /// Remove self-derived sources from the given vector of constraints.
+  ///
+  /// \returns true if any derived-via-concrete constraints were found.
+  template<typename T>
+  bool removeSelfDerived(std::vector<Constraint<T>> &constraints,
+                         bool dropDerivedViaConcrete = true) {
+    bool anyDerivedViaConcrete = false;
+    // Remove self-derived constraints.
+    Optional<Constraint<T>> remainingConcrete;
+    constraints.erase(
+      std::remove_if(constraints.begin(), constraints.end(),
+                     [&](const Constraint<T> &constraint) {
+                       bool derivedViaConcrete;
+                       if (constraint.source->isSelfDerivedSource(
+                                constraint.archetype, derivedViaConcrete)) {
+                         ++NumSelfDerived;
+                         return true;
+                       }
+
+                       if (!derivedViaConcrete)
+                         return false;
+
+                       anyDerivedViaConcrete = true;
+
+                       if (!dropDerivedViaConcrete)
+                         return false;
+
+                       // Drop derived-via-concrete requirements.
+                       if (!remainingConcrete)
+                         remainingConcrete = constraint;
+
+                       ++NumSelfDerived;
+                       return true;
+                     }),
+      constraints.end());
+
+    if (constraints.empty() && remainingConcrete)
+      constraints.push_back(*remainingConcrete);
+
+    assert(!constraints.empty() && "All constraints were self-derived!");
+    return anyDerivedViaConcrete;
+  }
+} // end anonymous namespace
+
 template<typename T, typename DiagT>
 Constraint<T> GenericSignatureBuilder::checkConstraintList(
                            ArrayRef<GenericTypeParamType *> genericParams,
@@ -3487,15 +4211,7 @@ Constraint<T> GenericSignatureBuilder::checkConstraintList(
                            bool removeSelfDerived) {
   assert(!constraints.empty() && "No constraints?");
   if (removeSelfDerived) {
-    // Remove self-derived constraints.
-    constraints.erase(
-      std::remove_if(constraints.begin(), constraints.end(),
-                     [&](const Constraint<T> &constraint) {
-                       return constraint.source->isSelfDerivedSource(
-                                constraint.archetype);
-                     }),
-      constraints.end());
-    assert(!constraints.empty() && "All constraints were self-derived!");
+    ::removeSelfDerived(constraints);
   }
 
   // Sort the constraints, so we get a deterministic ordering of diagnostics.
@@ -3612,13 +4328,34 @@ void GenericSignatureBuilder::checkConformanceConstraints(
   for (auto &entry : equivClass->conformsTo) {
     // Remove self-derived constraints.
     assert(!entry.second.empty() && "No constraints to work with?");
+    Optional<Constraint<ProtocolDecl *>> remainingConcrete;
     entry.second.erase(
       std::remove_if(entry.second.begin(), entry.second.end(),
                      [&](const Constraint<ProtocolDecl *> &constraint) {
-                       return constraint.source->isSelfDerivedConformance(
-                                constraint.archetype, entry.first);
+                       bool derivedViaConcrete;
+                       if (constraint.source->isSelfDerivedConformance(
+                                constraint.archetype, entry.first,
+                                derivedViaConcrete)) {
+                         ++NumSelfDerived;
+                         return true;
+                       }
+
+                       if (!derivedViaConcrete)
+                         return false;
+
+                       // Drop derived-via-concrete requirements.
+                       if (!remainingConcrete)
+                         remainingConcrete = constraint;
+
+                       ++NumSelfDerived;
+                       return true;
                      }),
       entry.second.end());
+
+    // If we only had concrete conformances, put one back.
+    if (entry.second.empty() && remainingConcrete)
+      entry.second.push_back(*remainingConcrete);
+
     assert(!entry.second.empty() && "All constraints were self-derived!");
 
     checkConstraintList<ProtocolDecl *, ProtocolDecl *>(
@@ -3676,6 +4413,18 @@ namespace swift {
                  const DerivedSameTypeComponent &rhs) {
     return compareDependentTypes(&lhs.anchor, &rhs.anchor) < 0;
   }
+} // namespace swift
+
+/// Retrieve the "local" archetype anchor for the given potential archetype,
+/// which rebuilds this potential archetype using the archetype anchors of
+/// the parent types.
+static PotentialArchetype *getLocalAnchor(PotentialArchetype *pa,
+                                          GenericSignatureBuilder &builder) {
+  auto parent = pa->getParent();
+  if (!parent) return pa;
+
+  auto parentAnchor = getLocalAnchor(parent, builder);
+  return parentAnchor->getNestedArchetypeAnchor(pa->getNestedName(), builder);
 }
 
 /// Computes the ordered set of archetype anchors required to form a minimum
@@ -3716,8 +4465,10 @@ namespace swift {
 /// canonical edges connects vertex i to vertex i+1 for i in 0..<size-1.
 static void computeDerivedSameTypeComponents(
               PotentialArchetype *rep,
-              std::vector<DerivedSameTypeComponent> &components,
               llvm::SmallDenseMap<PotentialArchetype *, unsigned> &componentOf){
+  // Perform a depth-first search to identify the components.
+  auto equivClass = rep->getOrCreateEquivalenceClass();
+  auto &components = equivClass->derivedSameTypeComponents;
   for (auto pa : rep->getEquivalenceClassMembers()) {
     // If we've already seen this potential archetype, there's nothing else to
     // do.
@@ -3732,11 +4483,19 @@ static void computeDerivedSameTypeComponents(
 
   // If there is a concrete type, figure out the best concrete type anchor
   // per component.
-  auto equivClass = rep->getOrCreateEquivalenceClass();
   for (const auto &concrete : equivClass->concreteTypeConstraints) {
     // Dig out the component associated with constraint.
     assert(componentOf.count(concrete.archetype) > 0);
     auto &component = components[componentOf[concrete.archetype]];
+
+    // FIXME: Skip self-derived sources. This means our attempts to "stage"
+    // construction of self-derived sources really don't work, because we
+    // discover more information later, so we need a more on-line or
+    // iterative approach.
+    bool derivedViaConcrete;
+    if (concrete.source->isSelfDerivedSource(concrete.archetype,
+                                             derivedViaConcrete))
+      continue;
 
     // If it has a better source than we'd seen before for this component,
     // keep it.
@@ -3782,7 +4541,7 @@ namespace {
       return lhs.constraint < rhs.constraint;
     }
   };
-}
+} // end anonymous namespace
 
 void GenericSignatureBuilder::checkSameTypeConstraints(
                           ArrayRef<GenericTypeParamType *> genericParams,
@@ -3791,19 +4550,23 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   if (!equivClass || !equivClass->derivedSameTypeComponents.empty())
     return;
 
+  // Make sure that we've build the archetype anchors for each potential
+  // archetype in this equivalence class. This is important to do for *all*
+  // potential archetypes because some non-archetype anchors will nonetheless
+  // be used in the canonicalized requirements.
+  for (auto pa : pa->getEquivalenceClassMembers()) {
+    (void)getLocalAnchor(pa, *this);
+  }
+  equivClass = pa->getEquivalenceClassIfPresent();
+  assert(equivClass && "Equivalence class disappeared?");
+
+  bool anyDerivedViaConcrete = false;
   for (auto &entry : equivClass->sameTypeConstraints) {
     auto &constraints = entry.second;
 
     // Remove self-derived constraints.
-    assert(!constraints.empty() && "No constraints?");
-    constraints.erase(
-      std::remove_if(constraints.begin(), constraints.end(),
-                     [&](const Constraint<PotentialArchetype *> &constraint) {
-                       return constraint.source->isSelfDerivedSource(
-                                constraint.archetype);
-                     }),
-      constraints.end());
-    assert(!constraints.empty() && "All constraints were self-derived!");
+    if (removeSelfDerived(constraints, /*dropDerivedViaConcrete=*/false))
+      anyDerivedViaConcrete = true;
 
     // Sort the constraints, so we get a deterministic ordering of diagnostics.
     llvm::array_pod_sort(constraints.begin(), constraints.end());
@@ -3812,8 +4575,7 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   // Compute the components in the subgraph of the same-type constraint graph
   // that includes only derived constraints.
   llvm::SmallDenseMap<PotentialArchetype *, unsigned> componentOf;
-  computeDerivedSameTypeComponents(pa, equivClass->derivedSameTypeComponents,
-                                   componentOf);
+  computeDerivedSameTypeComponents(pa, componentOf);
 
   // Go through all of the same-type constraints, collecting all of the
   // non-derived constraints to put them into bins: intra-component and
@@ -3878,6 +4640,18 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
       // Ignore inferred requirements; we don't want to diagnose them.
       intercomponentEdges.push_back(
         IntercomponentEdge(firstComponent, secondComponent, constraint));
+    }
+  }
+
+  // If there were any derived-via-concrete constraints, drop them now before
+  // we emit other diagnostics.
+  if (anyDerivedViaConcrete) {
+    for (auto &entry : equivClass->sameTypeConstraints) {
+      auto &constraints = entry.second;
+
+      // Remove derived-via-concrete constraints.
+      (void)removeSelfDerived(constraints);
+        anyDerivedViaConcrete = true;
     }
   }
 
@@ -3985,6 +4759,27 @@ void GenericSignatureBuilder::checkSameTypeConstraints(
   }
 }
 
+/// Resolve any unresolved dependent member types using the given builder.
+static Type resolveDependentMemberTypes(GenericSignatureBuilder &builder,
+                                        Type type) {
+  if (!type->hasTypeParameter()) return type;
+
+  return type.transformRec([&builder](TypeBase *type) -> Optional<Type> {
+    if (auto depTy = dyn_cast<DependentMemberType>(type)) {
+      if (depTy->getAssocType()) return None;
+
+      auto pa = builder.resolveArchetype(
+                             type, ArchetypeResolutionKind::CompleteWellFormed);
+      if (!pa)
+        return ErrorType::get(depTy);
+
+      return pa->getDependentType({ }, /*allowUnresolved=*/false);
+    }
+
+    return None;
+  });
+}
+
 void GenericSignatureBuilder::checkConcreteTypeConstraints(
                                  ArrayRef<GenericTypeParamType *> genericParams,
                                  PotentialArchetype *representative) {
@@ -4009,6 +4804,10 @@ void GenericSignatureBuilder::checkConcreteTypeConstraints(
     None,
     diag::redundant_same_type_to_concrete,
     diag::same_type_redundancy_here);
+
+  // Resolve any this-far-unresolved dependent types.
+  equivClass->concreteType =
+    resolveDependentMemberTypes(*this, equivClass->concreteType);
 }
 
 void GenericSignatureBuilder::checkSuperclassConstraints(
@@ -4037,7 +4836,7 @@ void GenericSignatureBuilder::checkSuperclassConstraints(
       },
       [&](Type superclass) {
         // If this class is a superclass of the "best"
-        if (superclass->isExactSuperclassOf(equivClass->superclass, nullptr))
+        if (superclass->isExactSuperclassOf(equivClass->superclass))
           return ConstraintRelation::Redundant;
 
         // Otherwise, it conflicts.
@@ -4047,12 +4846,15 @@ void GenericSignatureBuilder::checkSuperclassConstraints(
       diag::redundant_superclass_constraint,
       diag::superclass_redundancy_here);
 
+  // Resolve any this-far-unresolved dependent types.
+  equivClass->superclass =
+    resolveDependentMemberTypes(*this, equivClass->superclass);
+
   // If we have a concrete type, check it.
   // FIXME: Substitute into the concrete type.
   if (equivClass->concreteType) {
     // Make sure the concrete type fulfills the superclass requirement.
-    if (!equivClass->superclass->isExactSuperclassOf(equivClass->concreteType,
-                                                     nullptr)) {
+    if (!equivClass->superclass->isExactSuperclassOf(equivClass->concreteType)) {
       if (auto existing = equivClass->findAnyConcreteConstraintAsWritten(
                             representativeConstraint.archetype)) {
         Diags.diagnose(existing->source->getLoc(), diag::type_does_not_inherit,
@@ -4172,7 +4974,7 @@ namespace {
     }
     return bestSource;
   }
-}
+} // end anonymous namespace
 
 void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
                      void (RequirementKind kind,
@@ -4242,6 +5044,10 @@ void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
             ? knownAnchor->concreteTypeSource
             : RequirementSource::forAbstract(archetype);
 
+        // Drop recursive concrete-type constraints.
+        if (equivClass->recursiveConcreteType)
+          continue;
+
         f(RequirementKind::SameType, archetype, concreteType, source);
         continue;
       }
@@ -4269,21 +5075,13 @@ void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
       continue;
 
     // If we have a superclass, produce a superclass requirement
-    if (equivClass->superclass) {
+    if (equivClass->superclass && !equivClass->recursiveSuperclassType) {
       f(RequirementKind::Superclass, archetype, equivClass->superclass,
         getBestConstraintSource<Type>(equivClass->superclassConstraints));
     }
 
     // If we have a layout constraint, produce a layout requirement.
     if (equivClass->layout) {
-      // Find the best source among the constraints that describe the layout
-      // of this type.
-      auto bestSource = equivClass->layoutConstraints.front().source;
-      for (const auto &constraint : equivClass->layoutConstraints) {
-        if (constraint.source->compare(bestSource) < 0)
-          bestSource = constraint.source;
-      }
-
       f(RequirementKind::Layout, archetype, equivClass->layout,
         getBestConstraintSource<LayoutConstraint>(
                                               equivClass->layoutConstraints));
@@ -4297,14 +5095,6 @@ void GenericSignatureBuilder::enumerateRequirements(llvm::function_ref<
         protocols.push_back(conforms.first);
         assert(protocolSources.count(conforms.first) == 0 && 
                "redundant protocol requirement?");
-
-        // Find the best source among the constraints that describe conformance
-        // to this protocol.
-        auto bestSource = conforms.second.front().source;
-        for (const auto &constraint : conforms.second) {
-          if (constraint.source->compare(bestSource) < 0)
-            bestSource = constraint.source;
-        }
 
         protocolSources.insert(
           {conforms.first,
@@ -4390,12 +5180,12 @@ void GenericSignatureBuilder::addGenericSignature(GenericSignature *sig) {
     if (reqt.getKind() == RequirementKind::SameType)
       sameTypeRequirements.push_back(reqt);
     else
-      addRequirement(reqt, FloatingRequirementSource::forAbstract());
+      addRequirement(reqt, FloatingRequirementSource::forAbstract(), nullptr);
   }
 
   // Handle same-type requirements.
   for (auto &reqt : sameTypeRequirements) {
-    addRequirement(reqt, FloatingRequirementSource::forAbstract());
+    addRequirement(reqt, FloatingRequirementSource::forAbstract(), nullptr);
   }
 }
 
@@ -4465,3 +5255,11 @@ GenericSignature *GenericSignatureBuilder::getGenericSignature() {
   auto sig = GenericSignature::get(Impl->GenericParams, requirements);
   return sig;
 }
+
+GenericSignature *GenericSignatureBuilder::computeGenericSignature(
+                                          SourceLoc loc,
+                                          bool allowConcreteGenericParams) {
+  finalize(loc, Impl->GenericParams, allowConcreteGenericParams);
+  return getGenericSignature();
+}
+

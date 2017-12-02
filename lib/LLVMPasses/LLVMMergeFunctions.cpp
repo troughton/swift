@@ -125,7 +125,7 @@ cmpOperandsIgnoringConsts(const Instruction *L, const Instruction *R,
   if (!isEligibleForConstantSharing(L))
     return Res;
 
-  if (const CallInst *CL = dyn_cast<CallInst>(L)) {
+  if (const auto *CL = dyn_cast<CallInst>(L)) {
     if (CL->isInlineAsm())
       return Res;
     if (Function *CalleeL = CL->getCalledFunction()) {
@@ -672,7 +672,7 @@ void SwiftMergeFunctions::updateUnhandledCalleeCount(FunctionEntry *FE,
   // Iterate over all functions of FE's equivalence class.
   do {
     for (Use &U : FE->F->uses()) {
-      if (Instruction *I = dyn_cast<Instruction>(U.getUser())) {
+      if (auto *I = dyn_cast<Instruction>(U.getUser())) {
         FunctionEntry *CallerFE = getEntry(I->getFunction());
         if (CallerFE && CallerFE->TreeIter != FnTree.end()) {
           // Accumulate the count in the first entry of the equivalence class.
@@ -782,31 +782,20 @@ bool SwiftMergeFunctions::deriveParams(ParamInfos &Params,
 
 /// Returns true if the \p OpIdx's constant operand in the current instruction
 /// does differ in any of the functions in \p FInfos.
-///
-/// But it accepts the case where all operands refer to their containing
-/// functions (in case of self recursive functions).
 bool SwiftMergeFunctions::constsDiffer(const FunctionInfos &FInfos,
                                        unsigned OpIdx) {
   Constant *CommonConst = nullptr;
-  bool matching = true;
-  bool selfReferencing = true;
 
   for (const FunctionInfo &FI : FInfos) {
     Value *Op = FI.CurrentInst->getOperand(OpIdx);
-    if (Constant *C = dyn_cast<Constant>(Op)) {
-      if (C != FI.F)
-        selfReferencing = false;
-
+    if (auto *C = dyn_cast<Constant>(Op)) {
       if (!CommonConst) {
         CommonConst = C;
       } else if (C != CommonConst) {
-        matching = false;
-      }
-      if (!selfReferencing && !matching)
         return true;
+      }
     }
   }
-  assert(selfReferencing || matching);
   return false;
 }
 
@@ -872,7 +861,7 @@ void SwiftMergeFunctions::mergeWithParams(const FunctionInfos &FInfos,
   // a name which can be demangled in a meaningful way.
   Function *NewFunction = Function::Create(funcType,
                                            FirstF->getLinkage(),
-                                           FirstF->getName() + "_merged");
+                                           FirstF->getName() + "Tm");
   NewFunction->copyAttributesFrom(FirstF);
   // NOTE: this function is not externally available, do ensure that we reset
   // the DLL storage
@@ -895,6 +884,8 @@ void SwiftMergeFunctions::mergeWithParams(const FunctionInfos &FInfos,
     OrigArg.replaceAllUsesWith(&NewArg);
   }
 
+  SmallPtrSet<Function *, 8> SelfReferencingFunctions;
+
   // Replace all differing operands with a parameter.
   for (const ParamInfo &PI : Params) {
     Argument *NewArg = &*NewArgIter++;
@@ -902,11 +893,20 @@ void SwiftMergeFunctions::mergeWithParams(const FunctionInfos &FInfos,
       OL.I->setOperand(OL.OpIndex, NewArg);
     }
     ParamTypes.push_back(PI.Values[0]->getType());
+
+    // Collect all functions which are referenced by any parameter.
+    for (Value *V : PI.Values) {
+      if (auto *F = dyn_cast<Function>(V))
+        SelfReferencingFunctions.insert(F);
+    }
   }
 
   for (unsigned FIdx = 0, NumFuncs = FInfos.size(); FIdx < NumFuncs; ++FIdx) {
     Function *OrigFunc = FInfos[FIdx].F;
-    if (replaceDirectCallers(OrigFunc, NewFunction, Params, FIdx)) {
+    // Don't try to replace all callers of functions which are used as
+    // parameters because we must not delete such functions.
+    if (SelfReferencingFunctions.count(OrigFunc) == 0 &&
+        replaceDirectCallers(OrigFunc, NewFunction, Params, FIdx)) {
       // We could replace all uses (and the function is not externally visible),
       // so we can delete the original function.
       auto Iter = FuncEntries.find(OrigFunc);
@@ -1026,7 +1026,7 @@ bool SwiftMergeFunctions::replaceDirectCallers(Function *Old, Function *New,
   SmallVector<CallInst *, 8> Callers;
   
   for (Use &U : Old->uses()) {
-    Instruction *I = dyn_cast<Instruction>(U.getUser());
+    auto *I = dyn_cast<Instruction>(U.getUser());
     if (!I) {
       AllReplaced = false;
       continue;
@@ -1035,7 +1035,7 @@ bool SwiftMergeFunctions::replaceDirectCallers(Function *Old, Function *New,
     if (FE)
       removeEquivalenceClassFromTree(FE);
     
-    CallInst *CI = dyn_cast<CallInst>(I);
+    auto *CI = dyn_cast<CallInst>(I);
     if (!CI || CI->getCalledValue() != Old) {
       AllReplaced = false;
       continue;
@@ -1075,12 +1075,8 @@ bool SwiftMergeFunctions::replaceDirectCallers(Function *Old, Function *New,
     for (const ParamInfo &PI : Params) {
       assert(ParamIdx < NewFuncTy->getNumParams());
       Constant *ArgValue = PI.Values[FuncIdx];
-
-      // Check if it's a self referencing function. We must not use the old
-      // function pointer as argument.
-      if (ArgValue == Old)
-        ArgValue = New;
-
+      assert(ArgValue != Old &&
+        "should not try to replace all callers of self referencing functions");
       NewArgs.push_back(ArgValue);
       OldParamTypes.push_back(ArgValue->getType());
       ++ParamIdx;

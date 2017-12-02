@@ -214,22 +214,10 @@ public struct Mirror {
     children: C,
     displayStyle: DisplayStyle? = nil,
     ancestorRepresentation: AncestorRepresentation = .generated
-  ) where
-    C.Iterator.Element == Child,
-    // FIXME(ABI)#47 (Associated Types with where clauses): these constraints should be applied to
-    // associated types of Collection.
-    C.SubSequence : Collection,
-    C.SubSequence.Iterator.Element == Child,
-    C.SubSequence.Index == C.Index,
-    C.SubSequence.Indices : Collection,
-    C.SubSequence.Indices.Iterator.Element == C.Index,
-    C.SubSequence.Indices.Index == C.Index,
-    C.SubSequence.Indices.SubSequence == C.SubSequence.Indices,
-    C.SubSequence.SubSequence == C.SubSequence,
-    C.Indices : Collection,
-    C.Indices.Iterator.Element == C.Index,
-    C.Indices.Index == C.Index,
-    C.Indices.SubSequence == C.Indices {
+  ) where C.Element == Child 
+  // FIXME(ABI) (Revert Where Clauses): Remove these 
+  , C.SubSequence : Collection, C.SubSequence.Indices : Collection, C.Indices : Collection
+  {
 
     self.subjectType = Subject.self
     self._makeSuperclassMirror = Mirror._superclassIterator(
@@ -276,15 +264,10 @@ public struct Mirror {
     unlabeledChildren: C,
     displayStyle: DisplayStyle? = nil,
     ancestorRepresentation: AncestorRepresentation = .generated
-  ) where
-    // FIXME(ABI)#48 (Associated Types with where clauses): these constraints should be applied to
-    // associated types of Collection.
-    C.SubSequence : Collection,
-    C.SubSequence.SubSequence == C.SubSequence,
-    C.Indices : Collection,
-    C.Indices.Iterator.Element == C.Index,
-    C.Indices.Index == C.Index,
-    C.Indices.SubSequence == C.Indices {
+  ) 
+  // FIXME(ABI) (Revert Where Clauses): Remove these two clauses
+  where C.SubSequence : Collection, C.Indices : Collection
+  {
 
     self.subjectType = Subject.self
     self._makeSuperclassMirror = Mirror._superclassIterator(
@@ -390,7 +373,6 @@ public protocol CustomLeafReflectable : CustomReflectable {}
 // FIXME(ABI)#49 (Sealed Protocols): this protocol should be "non-open" and you shouldn't be able to
 // create conformances.
 public protocol MirrorPath {}
-extension IntMax : MirrorPath {}
 extension Int : MirrorPath {}
 extension String : MirrorPath {}
 

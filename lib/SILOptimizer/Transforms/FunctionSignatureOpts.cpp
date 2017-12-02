@@ -637,8 +637,17 @@ void FunctionSignatureTransform::createFunctionSignatureOptimizedFunction() {
   // Create the optimized function !
   SILModule &M = F->getModule();
   std::string Name = createOptimizedSILFunctionName();
+
+  // Any function that can be seen in other compilation units within this module
+  // (either because the function is from another module, or because it public
+  // or internal) needs to be considered shared, because those compilation units
+  // may choose to do exactly the same specialization. However, specializations
+  // of serialized functions are serialized too, and so behave more like the
+  // original.
   SILLinkage linkage = F->getLinkage();
-  if (isAvailableExternally(linkage))
+  auto localVisibleInOtherObjects =
+      !hasPrivateVisibility(linkage) && !F->isSerialized();
+  if (isAvailableExternally(linkage) || localVisibleInOtherObjects)
     linkage = SILLinkage::Shared;
 
   DEBUG(llvm::dbgs() << "  -> create specialized function " << Name << "\n");
@@ -654,7 +663,7 @@ void FunctionSignatureTransform::createFunctionSignatureOptimizedFunction() {
   NewF = M.createFunction(
       linkage, Name, NewFTy, NewFGenericEnv, F->getLocation(), F->isBare(),
       F->isTransparent(), F->isSerialized(), F->isThunk(),
-      F->getClassVisibility(), F->getInlineStrategy(), F->getEffectsKind(),
+      F->getClassSubclassScope(), F->getInlineStrategy(), F->getEffectsKind(),
       nullptr, F->getDebugScope());
   if (F->hasUnqualifiedOwnership()) {
     NewF->setUnqualifiedOwnership();
@@ -736,16 +745,13 @@ void FunctionSignatureTransform::createFunctionSignatureOptimizedFunction() {
         SILType::getPrimitiveObjectType(FunctionTy->getErrorResult().getType());
     auto *ErrorArg =
         ErrorBlock->createPHIArgument(Error, ValueOwnershipKind::Owned);
-    Builder.createTryApply(Loc, FRI, SubstCalleeSILType, Subs,
-                           ThunkArgs, NormalBlock, ErrorBlock);
+    Builder.createTryApply(Loc, FRI, Subs, ThunkArgs, NormalBlock, ErrorBlock);
 
     Builder.setInsertionPoint(ErrorBlock);
     Builder.createThrow(Loc, ErrorArg);
     Builder.setInsertionPoint(NormalBlock);
   } else {
-    ReturnValue = Builder.createApply(Loc, FRI, SubstCalleeSILType, ResultType,
-                                      Subs, ThunkArgs,
-                                      false);
+    ReturnValue = Builder.createApply(Loc, FRI, Subs, ThunkArgs, false);
   }
 
   // Set up the return results.
@@ -1234,7 +1240,6 @@ public:
     }
   }
 
-  StringRef getName() override { return "Function Signature Optimization"; }
 };
 
 } // end anonymous namespace

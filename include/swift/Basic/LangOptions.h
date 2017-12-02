@@ -46,6 +46,19 @@ namespace swift {
   };
   enum { NumPlatformConditionKind = 4 };
 
+  /// Describes which Swift 3 Objective-C inference warnings should be
+  /// emitted.
+  enum class Swift3ObjCInferenceWarnings {
+    /// No warnings; this is the default.
+    None,
+    /// "Minimal" warnings driven by uses of declarations that make use of
+    /// the Objective-C entry point directly.
+    Minimal,
+    /// "Complete" warnings that add "@objc" for every entry point that
+    /// Swift 3 would have inferred as "@objc" but Swift 4 will not.
+    Complete,
+  };
+
   /// \brief A collection of options that affect the language dialect and
   /// provide compiler debugging facilities.
   class LangOptions {
@@ -158,6 +171,9 @@ namespace swift {
 
     unsigned SolverBindingThreshold = 1024 * 1024;
 
+    /// The maximum depth to which to test decl circularity.
+    unsigned MaxCircularityDepth = 500;
+
     /// \brief Perform all dynamic allocations using malloc/free instead of
     /// optimized custom allocator, so that memory debugging tools can be used.
     bool UseMalloc = false;
@@ -177,6 +193,12 @@ namespace swift {
     /// Should we check the target OSs of serialized modules to see that they're
     /// new enough?
     bool EnableTargetOSChecking = true;
+
+    /// Whether to attempt to recover from missing cross-references and other
+    /// errors when deserializing from a Swift module.
+    ///
+    /// This is a staging flag; eventually it will be removed.
+    bool EnableDeserializationRecovery = true;
 
     /// Should we use \c ASTScope-based resolution for unqualified name lookup?
     bool EnableASTScopeLookup = false;
@@ -203,7 +225,20 @@ namespace swift {
 
     /// Warn about cases where Swift 3 would infer @objc but later versions
     /// of Swift do not.
-    bool WarnSwift3ObjCInference = false;
+    Swift3ObjCInferenceWarnings WarnSwift3ObjCInference =
+      Swift3ObjCInferenceWarnings::None;
+
+    /// Diagnose uses of NSCoding with classes that have unstable mangled names.
+    bool EnableNSKeyedArchiverDiagnostics = false;
+    
+    /// Enable keypath components that aren't fully implemented.
+    bool EnableExperimentalKeyPathComponents = false;
+
+    /// When a conversion from String to Substring fails, emit a fix-it to append
+    /// the void subscript '[]'.
+    /// FIXME: Remove this flag when void subscripts are implemented.
+    /// This is used to guard preemptive testing for the fix-it.
+    bool FixStringToSubstringConversions = false;
 
     /// Sets the target we are building for and updates platform conditions
     /// to match.

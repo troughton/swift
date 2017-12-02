@@ -3,7 +3,7 @@
 func bet() where A : B {} // expected-error {{'where' clause cannot be attached to a non-generic declaration}}
 
 typealias gimel where A : B // expected-error {{'where' clause cannot be attached to a non-generic declaration}}
-// expected-error@-1 {{expected '=' in typealias declaration}}
+// expected-error@-1 {{expected '=' in type alias declaration}}
 
 class dalet where A : B {} // expected-error {{'where' clause cannot be attached to a non-generic declaration}}
 
@@ -53,9 +53,9 @@ func eatDinnerConcrete(d: Pizzas<Pepper>.DeepDish,
 
 func badDiagnostic1() {
 
-  _ = Lunch<Pizzas<Pepper>.NewYork>.Dinner<HotDog>( // expected-error {{expression type 'Lunch<Pizzas<Pepper>.NewYork>.Dinner<HotDog>' is ambiguous without more context}}
+  _ = Lunch<Pizzas<Pepper>.NewYork>.Dinner<HotDog>(
       leftovers: Pizzas<ChiliFlakes>.NewYork(),
-      transformation: { _ in HotDog() })
+      transformation: { _ in HotDog() }) // expected-error {{cannot convert value of type 'HotDog' to closure result type '_'}}
 }
 
 func badDiagnostic2() {

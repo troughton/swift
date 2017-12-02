@@ -1,7 +1,9 @@
-// RUN: %target-swift-frontend -disable-objc-attr-requires-foundation-module -typecheck -verify %s -swift-version 3
+// RUN: %target-swift-frontend -disable-objc-attr-requires-foundation-module -typecheck -verify %s -swift-version 3 -warn-swift3-objc-inference-minimal
 // REQUIRES: objc_interop
 
 import Foundation
+
+struct SwiftStruct { }
 
 class ObjCSubclass : NSObject {
   func foo() { } // expected-note 2{{add '@objc' to expose this instance method to Objective-C}}{{3-3=@objc }}
@@ -22,12 +24,15 @@ class ObjCSubclass : NSObject {
 
     set { }
   }
+
+  @IBInspectable var ibvar: SwiftStruct = SwiftStruct() // expected-warning{{'@IBInspectable' attribute is meaningless on a property that cannot be represented in Objective-C}}{{3-18=}}
+  @GKInspectable var gkvar: SwiftStruct = SwiftStruct() // expected-warning{{'@GKInspectable' attribute is meaningless on a property that cannot be represented in Objective-C}}{{3-18=}}
 }
 
 class DynamicMembers {
-  dynamic func foo() { }
+  dynamic func foo() { } // expected-warning{{inference of '@objc' for 'dynamic' members is deprecated}}{{3-3=@objc }}
   
-  dynamic var bar: NSObject? = nil
+  dynamic var bar: NSObject? = nil // expected-warning{{inference of '@objc' for 'dynamic' members is deprecated}}{{3-3=@objc }}
 
   func overridableFunc() { }
   var overridableVar: NSObject? = nil

@@ -61,8 +61,8 @@
 // this value and using the same storage over the interval from this value to
 // the use does not overlap with the existing live range.
 //
-// Checking interference requries checking all operands that have been marked as
-// projections. In the case of block arguments, it meens checking the terminator
+// Checking interference requires checking all operands that have been marked as
+// projections. In the case of block arguments, it means checking the terminator
 // operands of all predecessor blocks.
 //
 // [REUSE] Rather than checking all value operands, each live range will contain
@@ -207,6 +207,7 @@ public:
   ValueStorage &insertValue(SILValue value) {
     auto hashResult =
         valueHashMap.insert(std::make_pair(value, valueVector.size()));
+    (void)hashResult;
     assert(hashResult.second && "SILValue already mapped");
 
     valueVector.emplace_back(value, ValueStorage());
@@ -381,14 +382,15 @@ protected:
 
 /// Top-level entry point: allocate storage for all opaque/resilient values.
 void OpaqueStorageAllocation::allocateOpaqueStorage() {
-  /* TODO: I think we need a GenericContextScope for mapTypeIntoContext, but all
-     tests are currently passing without it.
+  // TODO: I think we need a GenericContextScope for mapTypeIntoContext, but all
+  // tests are currently passing without it.
+#if 0
   auto canFnType = pass.F->getLoweredFunctionType();
 
   // Setup a generic context for argument and result types.
   swift::Lowering::GenericContextScope scope(pass.F->getModule().Types,
                                              canFnType->getGenericSignature());
-  */
+#endif
   // Fixup this function's argument types with temporary loads.
   convertIndirectFunctionArgs();
 
@@ -542,7 +544,7 @@ void OpaqueStorageAllocation::allocateForValue(SILValue value,
   assert(!isa<SILFunctionArgument>(value));
 
   if (ApplySite::isa(value)) {
-    // Result tuples will be canonicalized during apply rewritting so the tuple
+    // Result tuples will be canonicalized during apply rewriting so the tuple
     // itself is unused.
     if (value->getType().is<TupleType>()) {
       assert(ApplySite(value).getSubstCalleeType()->getNumResults() > 1);
@@ -560,7 +562,7 @@ void OpaqueStorageAllocation::allocateForValue(SILValue value,
     // TODO: Handle block arguments.
     // TODO: Handle subobjects with a single composition, and other non-mutating
     // uses such as @in arguments.
-    if (SILInstruction *def = dyn_cast<SILInstruction>(value)) {
+    if (auto *def = dyn_cast<SILInstruction>(value)) {
       Operand *useOper = *value->use_begin();
       if (canProjectFrom(def, useOper->getUser())) {
         storage.setComposedOperand(useOper);
@@ -593,7 +595,7 @@ namespace {
 /// `SILBuilder`.
 ///
 /// This is a common utility for ApplyRewriter, AddressOnlyDefRewriter,
-/// and AddressOnlyUseRewritter.
+/// and AddressOnlyUseRewriter.
 class AddressMaterialization {
   AddressLoweringState &pass;
   SILBuilder &B;
@@ -725,7 +727,7 @@ protected:
   SILValue materializeIndirectResultAddress(SILInstruction *origDirectResultVal,
                                             SILType argTy);
 };
-}
+} // end anonymous namespace
 
 /// Rewrite any indirect parameter in place.
 void ApplyRewriter::rewriteParameters() {
@@ -835,7 +837,7 @@ void ApplyRewriter::canonicalizeResults(
 }
 
 /// Return the storage address for the indirect result corresponding to the
-/// given orignal result value. Allocate temporary argument storage for any
+/// given original result value. Allocate temporary argument storage for any
 /// indirect results that are unmapped because they are loadable or unused.
 ///
 /// origDirectResultVal may be nullptr for unused results.
@@ -963,9 +965,9 @@ void ApplyRewriter::convertApplyWithIndirectResults() {
   switch (origCallInst->getKind()) {
   case ValueKind::ApplyInst:
     newCallInst = callBuilder.createApply(
-        loc, apply.getCallee(), apply.getSubstCalleeSILType(),
-        loweredCalleeConv.getSILResultType(), apply.getSubstitutions(),
-        newCallArgs, cast<ApplyInst>(origCallInst)->isNonThrowing());
+        loc, apply.getCallee(), apply.getSubstitutions(), newCallArgs,
+        cast<ApplyInst>(origCallInst)->isNonThrowing(),
+        SILModuleConventions::getLoweredAddressConventions());
     break;
   case ValueKind::TryApplyInst:
     // TODO: insert dealloc in the catch block.
@@ -1069,6 +1071,7 @@ void ReturnRewriter::rewriteReturn(ReturnInst *returnInst) {
   }
 
   SILFunctionConventions origFnConv(pass.F->getConventions());
+  (void)origFnConv;
 
   // Convert each result.
   SmallVector<SILValue, 8> newDirectResults;
@@ -1452,8 +1455,6 @@ class AddressLowering : public SILModuleTransform {
   /// The entry point to this function transformation.
   void run() override;
 
-  StringRef getName() override { return "Address Lowering"; }
-
   void runOnFunction(SILFunction *F);
 };
 } // end anonymous namespace
@@ -1485,9 +1486,10 @@ void AddressLowering::runOnFunction(SILFunction *F) {
       continue;
 
     DEBUG(llvm::dbgs() << "DEAD "; deadInst->dump());
+#ifndef NDEBUG
     for (Operand *operand : deadInst->getUses())
       assert(pass.instsToDelete.count(operand->getUser()));
-
+#endif
     pass.instsToDelete.insert(deadInst);
   }
   pass.valueStorageMap.clear();

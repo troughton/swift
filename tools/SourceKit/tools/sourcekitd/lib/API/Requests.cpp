@@ -192,6 +192,7 @@ static void reportNameInfo(const NameTranslatingInfo &Info, ResponseReceiver Rec
 
 static void findRelatedIdents(StringRef Filename,
                               int64_t Offset,
+                              bool CancelOnSubsequentRequest,
                               ArrayRef<const char *> Args,
                               ResponseReceiver Rec);
 
@@ -225,7 +226,8 @@ editorOpenInterface(StringRef Name, StringRef ModuleName,
 static sourcekitd_response_t
 editorOpenHeaderInterface(StringRef Name, StringRef HeaderName,
                           ArrayRef<const char *> Args,
-                          bool SynthesizedExtensions);
+                          bool SynthesizedExtensions,
+                          Optional<unsigned> swiftVersion);
 
 static void
 editorOpenSwiftSourceInterface(StringRef Name, StringRef SourceName,
@@ -524,8 +526,12 @@ void handleRequestImpl(sourcekitd_object_t ReqObj, ResponseReceiver Rec) {
     int64_t SynthesizedExtension = false;
     Req.getInt64(KeySynthesizedExtension, SynthesizedExtension,
                  /*isOptional=*/true);
+    Optional<int64_t> swiftVerVal = Req.getOptionalInt64(KeySwiftVersion);
+    Optional<unsigned> swiftVer;
+    if (swiftVerVal.hasValue())
+      swiftVer = *swiftVerVal;
     return Rec(editorOpenHeaderInterface(*Name, *HeaderName, Args,
-                                         SynthesizedExtension));
+                                         SynthesizedExtension, swiftVer));
   }
 
   if (ReqUID == RequestEditorOpenSwiftSourceInterface) {
@@ -753,6 +759,11 @@ handleSemanticRequest(RequestDict Req,
   if (ReqUID == RequestCursorInfo) {
     LangSupport &Lang = getGlobalContext().getSwiftLangSupport();
 
+    // For backwards compatibility, the default is 1.
+    int64_t CancelOnSubsequentRequest = 1;
+    Req.getInt64(KeyCancelOnSubsequentRequest, CancelOnSubsequentRequest,
+                 /*isOptional=*/true);
+
     int64_t Offset;
     if (!Req.getInt64(KeyOffset, Offset, /*isOptional=*/false)) {
       int64_t Length = 0;
@@ -760,12 +771,12 @@ handleSemanticRequest(RequestDict Req,
       int64_t Actionables = false;
       Req.getInt64(KeyActionable, Actionables, /*isOptional=*/true);
       return Lang.getCursorInfo(
-          *SourceFile, Offset, Length, Actionables, Args,
-          [Rec](const CursorInfo &Info) { reportCursorInfo(Info, Rec); });
+          *SourceFile, Offset, Length, Actionables, CancelOnSubsequentRequest,
+          Args, [Rec](const CursorInfo &Info) { reportCursorInfo(Info, Rec); });
     }
     if (auto USR = Req.getString(KeyUSR)) {
       return Lang.getCursorInfoFromUSR(
-          *SourceFile, *USR, Args,
+          *SourceFile, *USR, CancelOnSubsequentRequest, Args,
           [Rec](const CursorInfo &Info) { reportCursorInfo(Info, Rec); });
     }
 
@@ -777,9 +788,14 @@ handleSemanticRequest(RequestDict Req,
     LangSupport &Lang = getGlobalContext().getSwiftLangSupport();
     int64_t Offset;
     int64_t Length;
+    // For backwards compatibility, the default is 1.
+    int64_t CancelOnSubsequentRequest = 1;
+    Req.getInt64(KeyCancelOnSubsequentRequest, CancelOnSubsequentRequest,
+                 /*isOptional=*/true);
     if (!Req.getInt64(KeyOffset, Offset, /*isOptional=*/false)) {
       if (!Req.getInt64(KeyLength, Length, /*isOptional=*/false)) {
-        return Lang.getRangeInfo(*SourceFile, Offset, Length, Args,
+        return Lang.getRangeInfo(*SourceFile, Offset, Length,
+                                 CancelOnSubsequentRequest, Args,
           [Rec](const RangeInfo &Info) { reportRangeInfo(Info, Rec); });
       }
     }
@@ -818,10 +834,7 @@ handleSemanticRequest(RequestDict Req,
     }
     std::transform(ArgParts.begin(), ArgParts.end(),
                    std::back_inserter(Input.ArgNames),
-      [](const char *C) {
-        StringRef Original(C);
-        return Original == "_" ? StringRef() : Original;
-      });
+                   [](const char *C) { return StringRef(C); });
     std::transform(Selectors.begin(), Selectors.end(),
                    std::back_inserter(Input.ArgNames),
                    [](const char *C) { return StringRef(C); });
@@ -833,7 +846,14 @@ handleSemanticRequest(RequestDict Req,
     int64_t Offset;
     if (Req.getInt64(KeyOffset, Offset, /*isOptional=*/false))
       return Rec(createErrorRequestInvalid("missing 'key.offset'"));
-    return findRelatedIdents(*SourceFile, Offset, Args, Rec);
+
+    // For backwards compatibility, the default is 1.
+    int64_t CancelOnSubsequentRequest = 1;
+    Req.getInt64(KeyCancelOnSubsequentRequest, CancelOnSubsequentRequest,
+                 /*isOptional=*/true);
+
+    return findRelatedIdents(*SourceFile, Offset, CancelOnSubsequentRequest,
+                             Args, Rec);
   }
 
   {
@@ -882,7 +902,7 @@ public:
 
     DependenciesStack.push_back({UIdent(), TopDict, ResponseBuilder::Array() });
   }
-  ~SKIndexingConsumer() {
+  ~SKIndexingConsumer() override {
     assert(Cancelled ||
            (EntitiesStack.size() == 1 && DependenciesStack.size() == 1));
     (void) Cancelled;
@@ -906,7 +926,7 @@ public:
 
   bool finishSourceEntity(UIdent Kind) override;
 };
-}
+} // end anonymous namespace
 
 static sourcekitd_response_t indexSource(StringRef Filename,
                                          ArrayRef<const char *> Args,
@@ -1084,7 +1104,7 @@ public:
           ResponseBuilder::Array(),
           ResponseBuilder::Array() });
   }
-  ~SKDocConsumer() {
+  ~SKDocConsumer() override {
     assert(Cancelled || EntitiesStack.size() == 1);
     (void) Cancelled;
   }
@@ -1114,7 +1134,7 @@ public:
 
   bool handleDiagnostic(const DiagnosticEntryInfo &Info) override;
 };
-}
+} // end anonymous namespace
 
 static bool isSwiftPrefixed(StringRef MangledName) {
   if (MangledName.size() < 2)
@@ -1208,6 +1228,8 @@ void SKDocConsumer::addDocEntityInfoToDict(const DocEntityInfo &Info,
     Elem.set(KeyName, Info.Name);
   if (!Info.Argument.empty())
     Elem.set(KeyKeyword, Info.Argument);
+  if (!Info.SubModuleName.empty())
+    Elem.set(KeyModuleName, Info.SubModuleName);
   if (!Info.USR.empty())
     Elem.set(KeyUSR, Info.USR);
   if (!Info.OriginalUSR.empty())
@@ -1501,6 +1523,9 @@ static void reportNameInfo(const NameTranslatingInfo &Info, ResponseReceiver Rec
       NameEle.set(KeyName, N);
     }
   }
+  if (Info.IsZeroArgSelector) {
+    Elem.set(KeyIsZeroArgSelector, Info.IsZeroArgSelector);
+  }
   Rec(RespBuilder.createResponse());
 }
 
@@ -1510,11 +1535,12 @@ static void reportNameInfo(const NameTranslatingInfo &Info, ResponseReceiver Rec
 
 static void findRelatedIdents(StringRef Filename,
                               int64_t Offset,
+                              bool CancelOnSubsequentRequest,
                               ArrayRef<const char *> Args,
                               ResponseReceiver Rec) {
   LangSupport &Lang = getGlobalContext().getSwiftLangSupport();
-  Lang.findRelatedIdentifiersInFile(Filename, Offset, Args,
-                                    [Rec](const RelatedIdentsInfo &Info) {
+  Lang.findRelatedIdentifiersInFile(Filename, Offset, CancelOnSubsequentRequest,
+                                    Args, [Rec](const RelatedIdentsInfo &Info) {
     if (Info.IsCancelled)
       return Rec(createErrorRequestCancelled());
 
@@ -1561,7 +1587,7 @@ public:
 
   bool handleResult(const CodeCompletionInfo &Info) override;
 };
-}
+} // end anonymous namespace
 
 static sourcekitd_response_t codeComplete(llvm::MemoryBuffer *InputBuf,
                                           int64_t Offset,
@@ -1932,13 +1958,13 @@ public:
 
   bool handleSourceText(StringRef Text) override;
 
-  virtual void finished() override {
+  void finished() override {
     if (RespReceiver)
       RespReceiver(createResponse());
   }
 };
 
-}
+} // end anonymous namespace
 
 static sourcekitd_response_t
 editorOpen(StringRef Name, llvm::MemoryBuffer *Buf, bool EnableSyntaxMap,
@@ -2017,14 +2043,15 @@ static sourcekitd_response_t editorConvertMarkupToXML(StringRef Source) {
 static sourcekitd_response_t
 editorOpenHeaderInterface(StringRef Name, StringRef HeaderName,
                           ArrayRef<const char *> Args,
-                          bool SynthesizedExtensions) {
+                          bool SynthesizedExtensions,
+                          Optional<unsigned> swiftVersion) {
   SKEditorConsumer EditC(/*EnableSyntaxMap=*/true,
                          /*EnableStructure=*/true,
                          /*EnableDiagnostics=*/false,
                          /*SyntacticOnly=*/false);
   LangSupport &Lang = getGlobalContext().getSwiftLangSupport();
   Lang.editorOpenHeaderInterface(EditC, Name, HeaderName, Args,
-                                 SynthesizedExtensions);
+                                 SynthesizedExtensions, swiftVersion);
   return EditC.createResponse();
 }
 

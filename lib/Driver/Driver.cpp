@@ -669,12 +669,9 @@ std::unique_ptr<Compilation> Driver::buildCompilation(
 
   buildJobs(Actions, OI, OFM.get(), *TC, *C);
 
-  // For updating code we need to go through all the files and pick up changes,
-  // even if they have compiler errors. Also for getting bulk fixits, or for when
-  // users explicitly request to continue building despite errors.
-  if (OI.CompilerMode == OutputInfo::Mode::UpdateCode ||
-      OI.ShouldGenerateFixitEdits ||
-      ContinueBuildingAfterErrors)
+  // For getting bulk fixits, or for when users explicitly request to continue
+  // building despite errors.
+  if (ContinueBuildingAfterErrors)
     C->setContinueBuildingAfterErrors();
 
   if (ShowIncrementalBuildDecisions || ShowJobLifecycle)
@@ -1075,10 +1072,6 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
     } else if (driverKind != DriverKind::Interactive) {
       OI.LinkAction = LinkKind::Executable;
     }
-  } else if (Args.hasArg(options::OPT_update_code)) {
-    OI.CompilerMode = OutputInfo::Mode::UpdateCode;
-    OI.CompilerOutputType = types::TY_Remapping;
-    OI.LinkAction = LinkKind::None;
   } else {
     diagnoseOutputModeArg(Diags, OutputModeArg, !Inputs.empty(), Args,
                           driverKind == DriverKind::Interactive, Name);
@@ -1251,10 +1244,6 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
     }
   }
 
-  if (Args.hasArg(options::OPT_fixit_code)) {
-    OI.ShouldGenerateFixitEdits = true;
-  }
-
   {
     if (const Arg *A = Args.getLastArg(options::OPT_sdk)) {
       OI.SDKPath = A->getValue();
@@ -1338,8 +1327,7 @@ void Driver::buildActions(const ToolChain &TC,
   ActionList AllLinkerInputs;
 
   switch (OI.CompilerMode) {
-  case OutputInfo::Mode::StandardCompile:
-  case OutputInfo::Mode::UpdateCode: {
+  case OutputInfo::Mode::StandardCompile: {
 
     // If the user is importing a textual (.h) bridging header and we're in
     // standard-compile (non-WMO) mode, we take the opportunity to precompile
@@ -1354,7 +1342,12 @@ void Driver::buildActions(const ToolChain &TC,
         auto Ty = TC.lookupTypeForExtension(llvm::sys::path::extension(Value));
         if (Ty == types::TY_ObjCHeader) {
           std::unique_ptr<Action> HeaderInput(new InputAction(*A, Ty));
-          PCH = new GeneratePCHJobAction(HeaderInput.release());
+          StringRef PersistentPCHDir;
+          if (const Arg *A = Args.getLastArg(options::OPT_pch_output_dir)) {
+            PersistentPCHDir = A->getValue();
+          }
+          PCH = new GeneratePCHJobAction(HeaderInput.release(),
+                                         PersistentPCHDir);
           Actions.push_back(PCH);
         }
       }
@@ -1441,6 +1434,7 @@ void Driver::buildActions(const ToolChain &TC,
       case types::TY_PCH:
       case types::TY_ImportedModules:
       case types::TY_TBD:
+      case types::TY_ModuleTrace:
         // We could in theory handle assembly or LLVM input, but let's not.
         // FIXME: What about LTO?
         Diags.diagnose(SourceLoc(), diag::error_unexpected_input_file,
@@ -1705,6 +1699,36 @@ void Driver::buildJobs(const ActionList &Actions, const OutputInfo &OI,
   }
 }
 
+static Optional<StringRef> getOutputFilenameFromPathArgOrAsTopLevel(
+    const OutputInfo &OI, const llvm::opt::DerivedArgList &Args,
+    llvm::opt::OptSpecifier PathArg, types::ID ExpectedOutputType,
+    bool TreatAsTopLevelOutput, StringRef ext, llvm::SmallString<128> &Buffer) {
+  if (const Arg *A = Args.getLastArg(PathArg))
+    return StringRef(A->getValue());
+
+  if (TreatAsTopLevelOutput) {
+    if (const Arg *A = Args.getLastArg(options::OPT_o)) {
+      if (OI.CompilerOutputType == ExpectedOutputType)
+        return StringRef(A->getValue());
+
+      // Otherwise, put the file next to the top-level output.
+      Buffer = A->getValue();
+      llvm::sys::path::remove_filename(Buffer);
+      llvm::sys::path::append(Buffer, OI.ModuleName);
+      llvm::sys::path::replace_extension(Buffer, ext);
+      return Buffer.str();
+    }
+
+    // A top-level output wasn't specified, so just output to
+    // <ModuleName>.<ext>.
+    Buffer = OI.ModuleName;
+    llvm::sys::path::replace_extension(Buffer, ext);
+    return Buffer.str();
+  }
+
+  return None;
+}
+
 static StringRef getOutputFilename(Compilation &C,
                                    const JobAction *JA,
                                    const OutputInfo &OI,
@@ -1727,29 +1751,14 @@ static StringRef getOutputFilename(Compilation &C,
 
   // Process Action-specific output-specifying options next,
   // since we didn't find anything applicable in the OutputMap.
+
   if (isa<MergeModuleJobAction>(JA)) {
-    if (const Arg *A = Args.getLastArg(options::OPT_emit_module_path))
-      return A->getValue();
-
-    if (OI.ShouldTreatModuleAsTopLevelOutput) {
-      if (const Arg *A = Args.getLastArg(options::OPT_o)) {
-        if (OI.CompilerOutputType == types::TY_SwiftModuleFile)
-          return A->getValue();
-
-        // Otherwise, put the module next to the top-level output.
-        Buffer = A->getValue();
-        llvm::sys::path::remove_filename(Buffer);
-        llvm::sys::path::append(Buffer, OI.ModuleName);
-        llvm::sys::path::replace_extension(Buffer, SERIALIZED_MODULE_EXTENSION);
-        return Buffer.str();
-      }
-
-      // A top-level output wasn't specified, so just output to
-      // <ModuleName>.swiftmodule.
-      Buffer = OI.ModuleName;
-      llvm::sys::path::replace_extension(Buffer, SERIALIZED_MODULE_EXTENSION);
-      return Buffer.str();
-    }
+    auto optFilename = getOutputFilenameFromPathArgOrAsTopLevel(
+        OI, Args, options::OPT_emit_module_path, types::TY_SwiftModuleFile,
+        OI.ShouldTreatModuleAsTopLevelOutput, SERIALIZED_MODULE_EXTENSION,
+        Buffer);
+    if (optFilename)
+      return *optFilename;
   }
 
   // dSYM actions are never treated as top-level.
@@ -1760,11 +1769,17 @@ static StringRef getOutputFilename(Compilation &C,
     return Buffer.str();
   }
 
+  auto ShouldPreserveOnSignal = PreserveOnSignal::No;
+
   // FIXME: Treat GeneratePCHJobAction as non-top-level (to get tempfile and not
   // use the -o arg) even though, based on ownership considerations within the
   // driver, it is stored as a "top level" JobAction.
-  if (isa<GeneratePCHJobAction>(JA)) {
+  if (auto *PCHAct = dyn_cast<GeneratePCHJobAction>(JA)) {
+    // For a persistent PCH we don't use an output, the frontend determines
+    // the filename to use for the PCH.
+    assert(!PCHAct->isPersistentPCH());
     AtTopLevel = false;
+    ShouldPreserveOnSignal = PreserveOnSignal::Yes;
   }
 
   // We don't have an output from an Action-specific command line option,
@@ -1799,7 +1814,7 @@ static StringRef getOutputFilename(Compilation &C,
                      EC.message());
       return {};
     }
-    C.addTemporaryFile(Buffer.str());
+    C.addTemporaryFile(Buffer.str(), ShouldPreserveOnSignal);
 
     return Buffer.str();
   }
@@ -2072,7 +2087,8 @@ Job *Driver::buildJobsForAction(Compilation &C, const JobAction *JA,
     }
   }
 
-  if (OI.ShouldGenerateFixitEdits && isa<CompileJobAction>(JA)) {
+  if (C.getArgs().hasArg(options::OPT_update_code) &&
+      isa<CompileJobAction>(JA)) {
     StringRef OFMFixitsOutputPath;
     if (OutputMap) {
       auto iter = OutputMap->find(types::TY_Remapping);
@@ -2114,6 +2130,34 @@ Job *Driver::buildJobsForAction(Compilation &C, const JobAction *JA,
     }
     if (C.getIncrementalBuildEnabled()) {
       addAuxiliaryOutput(C, *Output, types::TY_SwiftDeps, OI, OutputMap);
+    }
+
+    // The loaded-module-trace is the same for all compile jobs: all `import`
+    // statements are processed, even ones from non-primary files. Thus, only
+    // one of those jobs needs to emit the file, and we can get it to write
+    // straight to the desired final location.
+    auto tracePathEnvVar = getenv("SWIFT_LOADED_MODULE_TRACE_FILE");
+    auto shouldEmitTrace =
+        tracePathEnvVar ||
+        C.getArgs().hasArg(options::OPT_emit_loaded_module_trace,
+                           options::OPT_emit_loaded_module_trace_path);
+
+    if (shouldEmitTrace &&
+        C.requestPermissionForFrontendToEmitLoadedModuleTrace()) {
+      StringRef filename;
+      // Prefer the environment variable.
+      if (tracePathEnvVar)
+        filename = StringRef(tracePathEnvVar);
+      else {
+        // By treating this as a top-level output, the return value always
+        // exists.
+        filename = *getOutputFilenameFromPathArgOrAsTopLevel(
+            OI, C.getArgs(), options::OPT_emit_loaded_module_trace_path,
+            types::TY_ModuleTrace,
+            /*TreatAsTopLevelOutput=*/true, "trace.json", Buf);
+      }
+
+      Output->setAdditionalOutputForType(types::TY_ModuleTrace, filename);
     }
   }
 
@@ -2238,7 +2282,7 @@ static unsigned printActions(const Action *A,
   llvm::raw_string_ostream os(str);
 
   os << Action::getClassName(A->getKind()) << ", ";
-  if (const InputAction *IA = dyn_cast<InputAction>(A)) {
+  if (const auto *IA = dyn_cast<InputAction>(A)) {
     os << "\"" << IA->getInputArg().getValue() << "\"";
   } else {
     os << "{";

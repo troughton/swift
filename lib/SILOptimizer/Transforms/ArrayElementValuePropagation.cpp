@@ -82,7 +82,7 @@ public:
     SILValue Replacement;
   };
 
-  /// Specifies the set of elements with which a append-contentof call can be
+  /// Specifies the set of elements with which an append-contentof call can be
   /// replaced.
   struct AppendContentOfReplacement {
     ApplyInst *AppendContentOfCall;
@@ -287,10 +287,6 @@ class ArrayElementPropagation : public SILFunctionTransform {
 public:
   ArrayElementPropagation() {}
 
-  StringRef getName() override {
-    return "Array Element Propagation";
-  }
-
   bool replaceAppendCalls(
                   ArrayRef<ArrayAllocation::AppendContentOfReplacement> Repls) {
     auto &Fn = *getFunction();
@@ -303,15 +299,24 @@ public:
     DEBUG(llvm::dbgs() << "Array append contentsOf calls replaced in "
                        << Fn.getName() << " (" << Repls.size() << ")\n");
 
-    auto *AppendFnDecl = Ctx.getArrayAppendElementDecl();
+    FuncDecl *AppendFnDecl = Ctx.getArrayAppendElementDecl();
     if (!AppendFnDecl)
       return false;
 
+    FuncDecl *ReserveFnDecl = Ctx.getArrayReserveCapacityDecl();
+    if (!ReserveFnDecl)
+      return false;
+
     auto Mangled = SILDeclRef(AppendFnDecl, SILDeclRef::Kind::Func).mangle();
-    auto *AppendFn = M.findFunction(Mangled, SILLinkage::PublicExternal);
+    SILFunction *AppendFn = M.findFunction(Mangled, SILLinkage::PublicExternal);
     if (!AppendFn)
       return false;
     
+    Mangled = SILDeclRef(ReserveFnDecl, SILDeclRef::Kind::Func).mangle();
+    SILFunction *ReserveFn = M.findFunction(Mangled, SILLinkage::PublicExternal);
+    if (!ReserveFn)
+      return false;
+
     for (const ArrayAllocation::AppendContentOfReplacement &Repl : Repls) {
       ArraySemanticsCall AppendContentsOf(Repl.AppendContentOfCall);
       assert(AppendContentsOf && "Must be AppendContentsOf call");
@@ -326,7 +331,7 @@ public:
       SmallVector<Substitution, 4> Subs;
       Sig->getSubstitutions(ArraySubMap, Subs);
       
-      AppendContentsOf.replaceByAppendingValues(M, AppendFn,
+      AppendContentsOf.replaceByAppendingValues(M, AppendFn, ReserveFn,
                                                 Repl.ReplacementValues, Subs);
     }
     return true;

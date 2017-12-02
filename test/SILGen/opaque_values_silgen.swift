@@ -185,7 +185,8 @@ public func s020_______callVarArg() {
 // CHECK: bb0([[ARG0:%.*]] : $*T, [[ARG1:%.*]] : $T):
 // CHECK:   [[BORROWED_ARG1:%.*]] = begin_borrow [[ARG1]]
 // CHECK:   [[CPY:%.*]] = copy_value [[BORROWED_ARG1]] : $T
-// CHECK:   assign [[CPY]] to [[ARG0]] : $*T
+// CHECK:   [[READ:%.*]] = begin_access [modify] [unknown] [[ARG0]] : $*T
+// CHECK:   assign [[CPY]] to [[READ]] : $*T
 // CHECK:   end_borrow [[BORROWED_ARG1]] from [[ARG1]]
 // CHECK:   destroy_value [[ARG1]] : $T
 // CHECK:   return %{{.*}} : $()
@@ -252,7 +253,7 @@ public func s060__callMultiResult(i: Int) -> (Int, (Int, Int)) {
 // SILGen, prepareArchetypeCallee. Materialize a
 // non-class-constrainted self from a class-constrained archetype.
 // ---
-// CHECK-LABEL: sil hidden @_T020opaque_values_silgen21s070__materializeSelfyx1t_ts9AnyObjectRzAA3FooRzlF : $@convention(thin) <T where T : AnyObject, T : Foo> (@owned T) -> () {
+// CHECK-LABEL: sil hidden @_T020opaque_values_silgen21s070__materializeSelfyx1t_tRlzCAA3FooRzlF : $@convention(thin) <T where T : AnyObject, T : Foo> (@owned T) -> () {
 // CHECK: bb0([[ARG:%.*]] : $T):
 // CHECK: [[WITNESS_METHOD:%.*]] = witness_method $T, #Foo.foo!1 : <Self where Self : Foo> (Self) -> () -> () : $@convention(witness_method) <τ_0_0 where τ_0_0 : Foo> (@in_guaranteed τ_0_0) -> ()
 // CHECK: [[BORROWED_ARG:%.*]] = begin_borrow [[ARG]]
@@ -260,7 +261,7 @@ public func s060__callMultiResult(i: Int) -> (Int, (Int, Int)) {
 // CHECK: end_borrow [[BORROWED_ARG]] from [[ARG]]
 // CHECK: destroy_value [[ARG]] : $T
 // CHECK: return %{{[0-9]+}} : $()
-// CHECK-LABEL: } // end sil function '_T020opaque_values_silgen21s070__materializeSelfyx1t_ts9AnyObjectRzAA3FooRzlF'
+// CHECK-LABEL: } // end sil function '_T020opaque_values_silgen21s070__materializeSelfyx1t_tRlzCAA3FooRzlF'
 func s070__materializeSelf<T: Foo>(t: T) where T: AnyObject {
   t.foo()
 }
@@ -440,7 +441,8 @@ var foo_var : Foo = s180_______return_foo()
 // CHECK-LABEL: sil hidden @_T020opaque_values_silgen21s190___return_foo_varAA3Foo_pyF : $@convention(thin) () -> @out Foo {
 // CHECK: bb0:
 // CHECK:   [[GLOBAL:%.*]] = global_addr {{.*}} : $*Foo
-// CHECK:   [[LOAD_GLOBAL:%.*]] = load [copy] [[GLOBAL]] : $*Foo
+// CHECK:   [[READ:%.*]] = begin_access [read] [dynamic] [[GLOBAL]] : $*Foo
+// CHECK:   [[LOAD_GLOBAL:%.*]] = load [copy] [[READ]] : $*Foo
 // CHECK:   return [[LOAD_GLOBAL]] : $Foo
 // CHECK-LABEL: } // end sil function '_T020opaque_values_silgen21s190___return_foo_varAA3Foo_pyF'
 func s190___return_foo_var() -> Foo {
@@ -452,7 +454,8 @@ func s190___return_foo_var() -> Foo {
 // CHECK-LABEL: sil hidden @_T020opaque_values_silgen21s200______use_foo_varyyF : $@convention(thin) () -> () {
 // CHECK: bb0:
 // CHECK:   [[GLOBAL:%.*]] = global_addr {{.*}} : $*Foo
-// CHECK:   [[LOAD_GLOBAL:%.*]] = load [copy] [[GLOBAL]] : $*Foo
+// CHECK:   [[READ:%.*]] = begin_access [read] [dynamic] [[GLOBAL]] : $*Foo
+// CHECK:   [[LOAD_GLOBAL:%.*]] = load [copy] [[READ]] : $*Foo
 // CHECK:   [[OPEN_VAR:%.*]] = open_existential_opaque [[LOAD_GLOBAL]] : $Foo
 // CHECK:   [[WITNESS:%.*]] = witness_method $@opened
 // CHECK:   apply [[WITNESS]]
@@ -528,7 +531,8 @@ func s230______condFromAny(_ x: Any) {
 // CHECK:   [[COPY_ARG:%.*]] = copy_value [[BORROWED_ARG]]
 // CHECK:   store [[COPY_ARG]] to [init] [[PROJ_BOX]]
 // CHECK:   end_borrow [[BORROWED_ARG]] from [[ARG]]
-// CHECK:   [[LOAD_BOX:%.*]] = load [copy] [[PROJ_BOX]]
+// CHECK:   [[READ:%.*]] = begin_access [read] [unknown] [[PROJ_BOX]] : $*Error
+// CHECK:   [[LOAD_BOX:%.*]] = load [copy] [[READ]]
 // CHECK:   [[OPAQUE_ARG:%.*]] = open_existential_box [[LOAD_BOX]] : $Error to $*@opened({{.*}}) Error
 // CHECK:   [[LOAD_OPAQUE:%.*]] = load [copy] [[OPAQUE_ARG]]
 // CHECK:   [[ALLOC_OPEN:%.*]] = alloc_stack $@opened({{.*}}) Error
@@ -735,10 +739,12 @@ func s340_______captureBox() {
 // CHECK:   [[APPLY_FOR_BRANCH:%.*]] = apply %{{.*}}([[ARG]]) : $@convention(method) (Bool) -> Builtin.Int1
 // CHECK:   cond_br [[APPLY_FOR_BRANCH]], bb2, bb1
 // CHECK: bb1:
-// CHECK:   [[RETVAL1:%.*]] = load [copy] [[PROJ_BOX]] : $*EmptyP
+// CHECK:   [[READ:%.*]] = begin_access [read] [unknown] [[PROJ_BOX]] : $*EmptyP
+// CHECK:   [[RETVAL1:%.*]] = load [copy] [[READ]] : $*EmptyP
 // CHECK:   br bb3([[RETVAL1]] : $EmptyP)
 // CHECK: bb2:
-// CHECK:   [[RETVAL2:%.*]] = load [copy] [[PROJ_BOX]] : $*EmptyP
+// CHECK:   [[READ:%.*]] = begin_access [read] [unknown] [[PROJ_BOX]] : $*EmptyP
+// CHECK:   [[RETVAL2:%.*]] = load [copy] [[READ]] : $*EmptyP
 // CHECK:   br bb3([[RETVAL2]] : $EmptyP)
 // CHECK: bb3([[RETVAL:%.*]] : $EmptyP):
 // CHECK:   destroy_value [[ALLOC_OF_BOX]]
@@ -860,7 +866,8 @@ func s400______maybeCloneP(c: Clonable) {
 // CHECK-LABEL: sil hidden @_T020opaque_values_silgen21s410__globalRvalueGetS2iF : $@convention(thin) (Int) -> Int {
 // CHECK: bb0([[ARG:%.*]] : $Int):
 // CHECK:   [[GLOBAL_ADDR:%.*]] = global_addr @_T020opaque_values_silgen16subscriptableGetAA013SubscriptableE0_pv : $*SubscriptableGet
-// CHECK:   [[OPEN_ARG:%.*]] = open_existential_addr immutable_access [[GLOBAL_ADDR]] : $*SubscriptableGet to $*@opened
+// CHECK:   [[READ:%.*]] = begin_access [read] [dynamic] [[GLOBAL_ADDR]] : $*SubscriptableGet
+// CHECK:   [[OPEN_ARG:%.*]] = open_existential_addr immutable_access [[READ]] : $*SubscriptableGet to $*@opened
 // CHECK:   [[GET_OPAQUE:%.*]] = load [copy] [[OPEN_ARG]] : $*@opened
 // CHECK:   [[RETVAL:%.*]] = apply %{{.*}}<@opened({{.*}}) SubscriptableGet>([[ARG]], [[GET_OPAQUE]]) : $@convention(witness_method) <τ_0_0 where τ_0_0 : SubscriptableGet> (Int, @in_guaranteed τ_0_0) -> Int
 // CHECK:   destroy_value [[GET_OPAQUE]]
@@ -875,7 +882,8 @@ func s410__globalRvalueGet(_ i : Int) -> Int {
 // CHECK-LABEL: sil hidden @_T020opaque_values_silgen21s420__globalLvalueGetS2iF : $@convention(thin) (Int) -> Int {
 // CHECK: bb0([[ARG:%.*]] : $Int):
 // CHECK:   [[GLOBAL_ADDR:%.*]] = global_addr @_T020opaque_values_silgen19subscriptableGetSetAA013SubscriptableeF0_pv : $*SubscriptableGetSet
-// CHECK:   [[OPEN_ARG:%.*]] = open_existential_addr immutable_access [[GLOBAL_ADDR]] : $*SubscriptableGetSet to $*@opened
+// CHECK:   [[READ:%.*]] = begin_access [read] [dynamic] [[GLOBAL_ADDR]] : $*SubscriptableGetSet
+// CHECK:   [[OPEN_ARG:%.*]] = open_existential_addr immutable_access [[READ]] : $*SubscriptableGetSet to $*@opened
 // CHECK:   [[GET_OPAQUE:%.*]] = load [copy] [[OPEN_ARG]] : $*@opened
 // CHECK:   [[RETVAL:%.*]] = apply %{{.*}}<@opened({{.*}}) SubscriptableGetSet>([[ARG]], [[GET_OPAQUE]]) : $@convention(witness_method) <τ_0_0 where τ_0_0 : SubscriptableGetSet> (Int, @in_guaranteed τ_0_0) -> Int
 // CHECK:   destroy_value [[GET_OPAQUE]]
@@ -1052,17 +1060,18 @@ func s999_____condTFromAny<T>(_ x: Any, _ y: T) {
 // ---
 // CHECK-LABEL: sil @_T0s10DictionaryV20opaque_values_silgenE22inoutAccessOfSubscriptyq_3key_tF : $@convention(method) <Key, Value where Key : Hashable> (@in Value, @inout Dictionary<Key, Value>) -> () {
 // CHECK: bb0([[ARG0:%.*]] : $Value, [[ARG1:%.*]] : $*Dictionary<Key, Value>):
+// CHECK:   [[WRITE:%.*]] = begin_access [modify] [unknown] [[ARG1]] : $*Dictionary<Key, Value>
 // CHECK:   [[OPTIONAL_ALLOC:%.*]] = alloc_stack $Optional<Value>
 // CHECK:   switch_enum_addr [[OPTIONAL_ALLOC]] : $*Optional<Value>, case #Optional.some!enumelt.1: bb2, case #Optional.none!enumelt: bb1
 // CHECK: bb2:
 // CHECK:   [[OPTIONAL_LOAD:%.*]] = load [take] [[OPTIONAL_ALLOC]] : $*Optional<Value>
-// CHECK:   apply {{.*}}<Key, Value>([[OPTIONAL_LOAD]], {{.*}}, [[ARG1]]) : $@convention(method) <τ_0_0, τ_0_1 where τ_0_0 : Hashable> (@in Optional<τ_0_1>, @in τ_0_1, @inout Dictionary<τ_0_0, τ_0_1>) -> ()
+// CHECK:   apply {{.*}}<Key, Value>([[OPTIONAL_LOAD]], {{.*}}, [[WRITE]]) : $@convention(method) <τ_0_0, τ_0_1 where τ_0_0 : Hashable> (@in Optional<τ_0_1>, @in τ_0_1, @inout Dictionary<τ_0_0, τ_0_1>) -> ()
 // CHECK:   return %{{.*}} : $()
 // CHECK-LABEL: } // end sil function '_T0s10DictionaryV20opaque_values_silgenE22inoutAccessOfSubscriptyq_3key_tF'
 
 // Tests materializeForSet's createSetterCallback for opaque values
 // ---
-// CHECK-LABEL: sil [transparent] [serialized] @_T0s10DictionaryV20opaque_values_silgenE9subscriptq_Sgq_cfmytfU_ : $@convention(method) <Key, Value where Key : Hashable> (Builtin.RawPointer, @inout Builtin.UnsafeValueBuffer, @inout Dictionary<Key, Value>, @thick Dictionary<Key, Value>.Type) -> () {
+// CHECK-LABEL: sil private [transparent] [serialized] @_T0s10DictionaryV20opaque_values_silgenE9subscriptq_Sgq_cfmytfU_ : $@convention(method) <Key, Value where Key : Hashable> (Builtin.RawPointer, @inout Builtin.UnsafeValueBuffer, @inout Dictionary<Key, Value>, @thick Dictionary<Key, Value>.Type) -> () {
 // CHECK: bb0([[ARG0:%.*]] : $Builtin.RawPointer, [[ARG1:%.*]] : $*Builtin.UnsafeValueBuffer, [[ARG2:%.*]] : $*Dictionary<Key, Value>, [[ARG3:%.*]] : $@thick Dictionary<Key, Value>.Type):
 // CHECK:   [[PROJ_VAL1:%.*]] = project_value_buffer $Value in [[ARG1]] : $*Builtin.UnsafeValueBuffer
 // CHECK:   [[LOAD_VAL1:%.*]] = load [take] [[PROJ_VAL1]] : $*Value
