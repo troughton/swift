@@ -128,7 +128,7 @@ createVarWithPattern(ASTContext &cxt, DeclContext *dc, Identifier name, Type ty,
       /*IsStatic*/false,
       /*IsLet*/isLet,
       /*IsCaptureList*/false,
-      SourceLoc(), name, ty, dc);
+      SourceLoc(), name, dc->mapTypeIntoContext(ty), dc);
   if (isImplicit)
     var->setImplicit();
   var->setInterfaceType(ty);
@@ -3167,7 +3167,7 @@ namespace {
                        /*IsStatic*/false, /*IsLet*/ false,
                        /*IsCaptureList*/false,
                        Impl.importSourceLoc(decl->getLocStart()),
-                       name, type, dc);
+                       name, dc->mapTypeIntoContext(type), dc);
       result->setInterfaceType(type);
 
       // If this is a compatibility stub, mark is as such.
@@ -3388,7 +3388,7 @@ namespace {
                               /*IsStatic*/ false, /*IsLet*/ false,
                               /*IsCaptureList*/false,
                               Impl.importSourceLoc(decl->getLocation()),
-                              name, type, dc);
+                              name, dc->mapTypeIntoContext(type), dc);
       result->setInterfaceType(type);
 
       // Handle attributes.
@@ -3464,7 +3464,7 @@ namespace {
                        /*IsLet*/Impl.shouldImportGlobalAsLet(decl->getType()),
                        /*IsCaptureList*/false,
                        Impl.importSourceLoc(decl->getLocation()),
-                       name, type, dc);
+                       name, dc->mapTypeIntoContext(type), dc);
       result->setInterfaceType(type);
 
       // If imported as member, the member should be final.
@@ -3768,8 +3768,11 @@ namespace {
                                  methodTy->getExtInfo());
       }
 
-      // Add the 'self' parameter to the function type.
-      type = FunctionType::get(selfInterfaceType, type);
+      // Add the 'self' parameter to the function type. NB. a method's formal
+      // type should be (Type) -> (Args...) -> Ret, not Type -> (Args...) ->
+      // Ret.
+      auto parenSelfType = ParenType::get(Impl.SwiftContext, selfInterfaceType);
+      type = FunctionType::get(parenSelfType, type);
 
       auto interfaceType = getGenericMethodType(dc, type->castTo<AnyFunctionType>());
       result->setInterfaceType(interfaceType);
@@ -4321,7 +4324,6 @@ namespace {
                                          isInSystemModule(dc),
                                          /*isFullyBridgeable*/false);
         if (superclassType) {
-          superclassType = result->mapTypeOutOfContext(superclassType);
           assert(superclassType->is<ClassType>() ||
                  superclassType->is<BoundGenericClassType>());
           inheritedTypes.push_back(TypeLoc::withoutLoc(superclassType));
@@ -4536,8 +4538,8 @@ namespace {
           getOverridableAccessibility(dc),
           /*IsStatic*/decl->isClassProperty(), /*IsLet*/false,
           /*IsCaptureList*/false, Impl.importSourceLoc(decl->getLocation()),
-          name, type, dc);
-      result->setInterfaceType(dc->mapTypeOutOfContext(type));
+          name, dc->mapTypeIntoContext(type), dc);
+      result->setInterfaceType(type);
 
       // Turn this into a computed property.
       // FIXME: Fake locations for '{' and '}'?
@@ -4927,6 +4929,7 @@ SwiftDeclConverter::importSwiftNewtype(const clang::TypedefNameDecl *decl,
   auto storedUnderlyingType = Impl.importType(
       decl->getUnderlyingType(), ImportTypeKind::Value, isInSystemModule(dc),
       decl->getUnderlyingType()->isBlockPointerType(), OTK_None);
+
   if (auto objTy = storedUnderlyingType->getAnyOptionalObjectType())
     storedUnderlyingType = objTy;
 
@@ -5285,16 +5288,30 @@ Decl *SwiftDeclConverter::importGlobalAsMethod(
   auto &C = Impl.SwiftContext;
   SmallVector<ParameterList *, 2> bodyParams;
 
-  // There is an inout 'self' when we have an instance method of a
-  // value-semantic type whose 'self' parameter is a
-  // pointer-to-non-const.
+  // There is an inout 'self' when the parameter is a pointer to a non-const
+  // instance of the type we're importing onto. Importing this as a method means
+  // that the method should be treated as mutating in this situation.
   bool selfIsInOut = false;
   if (selfIdx && !dc->getDeclaredTypeOfContext()->hasReferenceSemantics()) {
     auto selfParam = decl->getParamDecl(*selfIdx);
     auto selfParamTy = selfParam->getType();
     if ((selfParamTy->isPointerType() || selfParamTy->isReferenceType()) &&
-        !selfParamTy->getPointeeType().isConstQualified())
+        !selfParamTy->getPointeeType().isConstQualified()) {
       selfIsInOut = true;
+
+      // If there's a swift_newtype, check the levels of indirection: self is
+      // only inout if this is a pointer to the typedef type (which itself is a
+      // pointer).
+      if (auto nominalTypeDecl =
+              dc->getAsNominalTypeOrNominalTypeExtensionContext()) {
+        if (auto clangDCTy = dyn_cast_or_null<clang::TypedefNameDecl>(
+                nominalTypeDecl->getClangDecl()))
+          if (auto newtypeAttr = getSwiftNewtypeAttr(clangDCTy, getVersion()))
+            if (clangDCTy->getUnderlyingType().getCanonicalType() !=
+                selfParamTy->getPointeeType().getCanonicalType())
+              selfIsInOut = false;
+      }
+    }
   }
 
   bodyParams.push_back(ParameterList::createWithoutLoc(ParamDecl::createSelf(
@@ -5471,7 +5488,8 @@ SwiftDeclConverter::getImplicitProperty(ImportedName importedName,
 
   auto property = Impl.createDeclWithClangNode<VarDecl>(
       getter, Accessibility::Public, /*IsStatic*/isStatic, /*isLet*/false,
-      /*IsCaptureList*/false, SourceLoc(), propertyName, swiftPropertyType, dc);
+      /*IsCaptureList*/false, SourceLoc(), propertyName,
+      dc->mapTypeIntoContext(swiftPropertyType), dc);
   property->setInterfaceType(swiftPropertyType);
 
   // Note that we've formed this property.
@@ -7689,11 +7707,11 @@ ClangImporter::Implementation::createConstant(Identifier name, DeclContext *dc,
     var = createDeclWithClangNode<VarDecl>(ClangN, Accessibility::Public,
                                            /*IsStatic*/isStatic, /*IsLet*/false,
                                            /*IsCaptureList*/false, SourceLoc(),
-                                           name, type, dc);
+                                           name, dc->mapTypeIntoContext(type), dc);
   } else {
     var = new (SwiftContext)
         VarDecl(/*IsStatic*/isStatic, /*IsLet*/false, /*IsCaptureList*/false,
-                SourceLoc(), name, type, dc);
+                SourceLoc(), name, dc->mapTypeIntoContext(type), dc);
   }
 
   var->setInterfaceType(type);

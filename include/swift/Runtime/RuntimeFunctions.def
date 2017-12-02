@@ -73,6 +73,11 @@ FUNCTION(ProjectBox, swift_projectBox, DefaultCC,
          ARGS(RefCountedPtrTy),
          ATTRS(NoUnwind, ReadNone))
 
+FUNCTION(AllocEmptyBox, swift_allocEmptyBox, DefaultCC,
+         RETURNS(RefCountedPtrTy),
+         ARGS(),
+         ATTRS(NoUnwind))
+
 // RefCounted *swift_allocObject(Metadata *type, size_t size, size_t alignMask);
 FUNCTION_WITH_GLOBAL_SYMBOL_AND_IMPL(AllocObject, swift_allocObject,
          _swift_allocObject, _swift_allocObject_, RegisterPreservingCC,
@@ -1215,14 +1220,6 @@ FUNCTION(TSanInoutAccess, __tsan_write1, C_CC,
 FUNCTION(GetKeyPath, swift_getKeyPath, C_CC,
          RETURNS(RefCountedPtrTy),
          ARGS(Int8PtrTy, Int8PtrTy),
-         ATTRS(NoUnwind))
-
-// func _registerClassNameForArchiving(_ nameOrNull: UnsafePointer<CChar>?,
-//                                     _ c: AnyClass)
-FUNCTION(RegisterClassNameForArchiving, swift_registerClassNameForArchiving,
-         SwiftCC,
-         RETURNS(VoidTy),
-         ARGS(Int8PtrTy, TypeMetadataPtrTy),
          ATTRS(NoUnwind))
 
 #if SWIFT_OBJC_INTEROP || !defined(SWIFT_RUNTIME_GENERATE_GLOBAL_SYMBOLS)

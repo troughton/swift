@@ -19,6 +19,7 @@
 #include "swift/AST/CanTypeVisitor.h"
 #include "swift/AST/ExistentialLayout.h"
 #include "swift/AST/Decl.h"
+#include "swift/AST/Attr.h"
 #include "swift/AST/IRGenOptions.h"
 #include "swift/AST/SubstitutionMap.h"
 #include "swift/AST/Types.h"
@@ -3350,6 +3351,14 @@ namespace {
         flags |= ClassFlags::UsesSwift1Refcounting;
       }
 
+      DeclAttributes attrs = Target->getAttrs();
+      if (auto objc = attrs.getAttribute<ObjCAttr>()) {
+        if (objc->getName())
+          flags |= ClassFlags::HasCustomObjCName;
+      }
+      if (attrs.hasAttribute<ObjCRuntimeNameAttr>())
+        flags |= ClassFlags::HasCustomObjCName;
+
       B.addInt32((uint32_t) flags);
     }
 
@@ -5529,6 +5538,7 @@ SpecialProtocol irgen::getSpecialProtocolID(ProtocolDecl *P) {
   case KnownProtocolKind::ExpressibleByImageLiteral:
   case KnownProtocolKind::ExpressibleByFileReferenceLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinBooleanLiteral:
+  case KnownProtocolKind::ExpressibleByBuiltinUTF16ExtendedGraphemeClusterLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinExtendedGraphemeClusterLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinFloatLiteral:
   case KnownProtocolKind::ExpressibleByBuiltinIntegerLiteral:

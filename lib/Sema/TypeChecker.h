@@ -829,6 +829,16 @@ private:
   /// Intended for debugging purposes only.
   unsigned WarnLongFunctionBodies = 0;
 
+  /// If non-zero, warn when type-chcking an expression takes longer
+  /// than this many milliseconds.
+  ///
+  /// Intended for debugging purposes only.
+  unsigned WarnLongExpressionTypeChecking = 0;
+
+  /// If non-zero, abort the expression type checker if it takes more
+  /// than this many seconds.
+  unsigned ExpressionTimeoutThreshold = 600;
+
   /// If true, the time it takes to type-check each function will be dumped
   /// to llvm::errs().
   bool DebugTimeFunctionBodies = false;
@@ -864,12 +874,46 @@ public:
     DebugTimeExpressions = true;
   }
 
+  bool getDebugTimeExpressions() {
+    return DebugTimeExpressions;
+  }
+
   /// If \p timeInMS is non-zero, warn when a function body takes longer than
   /// this many milliseconds to type-check.
   ///
   /// Intended for debugging purposes only.
   void setWarnLongFunctionBodies(unsigned timeInMS) {
     WarnLongFunctionBodies = timeInMS;
+  }
+
+  /// If \p timeInMS is non-zero, warn when type-checking an expression
+  /// takes longer than this many milliseconds.
+  ///
+  /// Intended for debugging purposes only.
+  void setWarnLongExpressionTypeChecking(unsigned timeInMS) {
+    WarnLongExpressionTypeChecking = timeInMS;
+  }
+
+  /// Return the current setting for the number of milliseconds
+  /// threshold we use to determine whether to warn about an
+  /// expression taking a long time.
+  unsigned getWarnLongExpressionTypeChecking() {
+    return WarnLongExpressionTypeChecking;
+  }
+
+  /// Set the threshold that determines the upper bound for the number
+  /// of seconds we'll let the expression type checker run before
+  /// considering an expression "too complex".
+  void setExpressionTimeoutThreshold(unsigned timeInSeconds) {
+    ExpressionTimeoutThreshold = timeInSeconds;
+  }
+
+  /// Return the current settting for the threshold that determines
+  /// the upper bound for the number of seconds we'll let the
+  /// expression type checker run before considering an expression
+  /// "too complex".
+  unsigned getExpressionTimeoutThresholdInSeconds() {
+    return ExpressionTimeoutThreshold;
   }
 
   bool getInImmediateMode() {
@@ -1533,6 +1577,12 @@ public:
                               FreeTypeVariableBinding::Disallow,
       ExprTypeCheckListener *listener = nullptr);
 
+  void getPossibleTypesOfExpressionWithoutApplying(
+      Expr *&expr, DeclContext *dc, SmallVectorImpl<Type> &types,
+      FreeTypeVariableBinding allowFreeTypeVariables =
+          FreeTypeVariableBinding::Disallow,
+      ExprTypeCheckListener *listener = nullptr);
+
   bool typeCheckCompletionSequence(Expr *&expr, DeclContext *DC);
 
   /// \brief Type check the given expression assuming that its children
@@ -1733,7 +1783,13 @@ public:
 
   /// \brief Coerce the given expression to materializable type, if it
   /// isn't already.
-  Expr *coerceToMaterializable(Expr *expr);
+  Expr *coerceToMaterializable(Expr *expr,
+                               llvm::function_ref<Type(Expr *)> getType
+                                 = [](Expr *expr) { return expr->getType(); },
+                               llvm::function_ref<void(Expr *, Type)> setType
+                                 = [](Expr *expr, Type type) {
+                                     expr->setType(type);
+                               });
 
   /// Require that the library intrinsics for working with Optional<T>
   /// exist.
@@ -1833,6 +1889,11 @@ public:
   conformsToProtocol(Type T, ProtocolDecl *Proto, DeclContext *DC,
                      ConformanceCheckOptions options, SourceLoc ComplainLoc,
                      UnsatisfiedDependency *unsatisfiedDependency);
+
+  /// Mark the given protocol conformance as "used" from the given declaration
+  /// context.
+  void markConformanceUsed(ProtocolConformanceRef conformance,
+                           DeclContext *dc);
 
   /// Functor class suitable for use as a \c LookupConformanceFn to look up a
   /// conformance through a particular declaration context using the given

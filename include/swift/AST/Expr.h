@@ -2858,9 +2858,11 @@ public:
                    SourceIsScalar_t isSourceScalar,
                    ConcreteDeclRef defaultArgsOwner,
                    ArrayRef<unsigned> VariadicArgs,
-                   MutableArrayRef<Expr *> CallerDefaultArgs, Type ty)
+                   Type VarargsArrayTy,
+                   MutableArrayRef<Expr *> CallerDefaultArgs,
+                   Type ty)
     : ImplicitConversionExpr(ExprKind::TupleShuffle, subExpr, ty),
-      ElementMapping(elementMapping), VarargsArrayTy(),
+      ElementMapping(elementMapping), VarargsArrayTy(VarargsArrayTy),
       DefaultArgsOwner(defaultArgsOwner), VariadicArgs(VariadicArgs),
       CallerDefaultArgs(CallerDefaultArgs)
   {
@@ -2876,8 +2878,6 @@ public:
   /// single-element tuple for the purposes of interpreting behavior.
   bool isSourceScalar() const { return TupleShuffleExprBits.IsSourceScalar; }
 
-  /// Set the varargs array type to use.
-  void setVarargsArrayType(Type T) { VarargsArrayTy = T; }
   Type getVarargsArrayType() const {
     assert(!VarargsArrayTy.isNull());
     return VarargsArrayTy;
@@ -3313,7 +3313,10 @@ public:
   }
 
   /// \brief Retrieve the result type of this closure.
-  Type getResultType() const;
+  Type getResultType(llvm::function_ref<Type(const Expr *)> getType =
+                         [](const Expr *E) -> Type {
+    return E->getType();
+  }) const;
 
   /// \brief Return whether this closure is throwing when fully applied.
   bool isBodyThrowing() const;

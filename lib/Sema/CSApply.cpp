@@ -259,18 +259,22 @@ void ConstraintSystem::propagateLValueAccessKind(Expr *E,
                                allowOverwrite);
 }
 
-bool ConstraintSystem::isTypeReference(Expr *E) {
+bool ConstraintSystem::isTypeReference(const Expr *E) {
   return E->isTypeReference([&](const Expr *E) -> Type { return getType(E); });
 }
 
-bool ConstraintSystem::isStaticallyDerivedMetatype(Expr *E) {
+bool ConstraintSystem::isStaticallyDerivedMetatype(const Expr *E) {
   return E->isStaticallyDerivedMetatype(
       [&](const Expr *E) -> Type { return getType(E); });
 }
 
-Type ConstraintSystem::getInstanceType(TypeExpr *E) {
+Type ConstraintSystem::getInstanceType(const TypeExpr *E) {
   return E->getInstanceType([&](const Expr *E) -> bool { return hasType(E); },
                             [&](const Expr *E) -> Type { return getType(E); });
+}
+
+Type ConstraintSystem::getResultType(const AbstractClosureExpr *E) {
+  return E->getResultType([&](const Expr *E) -> Type { return getType(E); });
 }
 
 static bool buildObjCKeyPathString(KeyPathExpr *E,
@@ -2154,6 +2158,26 @@ namespace {
             diag::extended_grapheme_cluster_literal_broken_proto;
         brokenBuiltinProtocolDiag =
             diag::builtin_extended_grapheme_cluster_literal_broken_proto;
+
+        auto *builtinUTF16ExtendedGraphemeClusterProtocol = tc.getProtocol(
+            expr->getLoc(),
+            KnownProtocolKind::ExpressibleByBuiltinUTF16ExtendedGraphemeClusterLiteral);
+        if (tc.conformsToProtocol(type,
+                                  builtinUTF16ExtendedGraphemeClusterProtocol,
+                                  cs.DC, ConformanceCheckFlags::InExpression)) {
+          builtinLiteralFuncName
+            = DeclName(tc.Context, tc.Context.Id_init,
+                       { tc.Context.Id_builtinExtendedGraphemeClusterLiteral,
+                         tc.Context.getIdentifier("utf16CodeUnitCount") });
+
+          builtinProtocol = builtinUTF16ExtendedGraphemeClusterProtocol;
+          brokenBuiltinProtocolDiag =
+            diag::builtin_utf16_extended_grapheme_cluster_literal_broken_proto;
+          if (stringLiteral)
+            stringLiteral->setEncoding(StringLiteralExpr::UTF16);
+          else
+            magicLiteral->setStringEncoding(StringLiteralExpr::UTF16);
+        }
       } else {
         // Otherwise, we should have just one Unicode scalar.
         literalType = tc.Context.Id_UnicodeScalarLiteralType;
@@ -4853,19 +4877,16 @@ Expr *ExprRewriter::coerceTupleToTuple(Expr *expr, TupleType *fromTuple,
   // Create the tuple shuffle.
   ArrayRef<int> mapping = tc.Context.AllocateCopy(sources);
   auto callerDefaultArgsCopy = tc.Context.AllocateCopy(callerDefaultArgs);
-  auto shuffle =
+  return
     cs.cacheType(new (tc.Context) TupleShuffleExpr(
                      expr, mapping,
                      TupleShuffleExpr::SourceIsTuple,
                      callee,
                      tc.Context.AllocateCopy(variadicArgs),
+                     arrayType,
                      callerDefaultArgsCopy,
                      toSugarType));
-  shuffle->setVarargsArrayType(arrayType);
-  return shuffle;
 }
-
-
 
 Expr *ExprRewriter::coerceScalarToTuple(Expr *expr, TupleType *toTuple,
                                         int toScalarIdx,
@@ -4951,13 +4972,13 @@ Expr *ExprRewriter::coerceScalarToTuple(Expr *expr, TupleType *toTuple,
 
   Type destSugarTy = hasInit? toTuple
                             : TupleType::get(sugarFields, tc.Context);
-
-  return cs.cacheType(
-      new (tc.Context) TupleShuffleExpr(expr,
+                            
+  return cs.cacheType(new (tc.Context) TupleShuffleExpr(expr,
                                         tc.Context.AllocateCopy(elements),
                                         TupleShuffleExpr::SourceIsScalar,
                                         callee,
                                         tc.Context.AllocateCopy(variadicArgs),
+                                        arrayType,
                                      tc.Context.AllocateCopy(callerDefaultArgs),
                                         destSugarTy));
 }
@@ -5585,16 +5606,15 @@ Expr *ExprRewriter::coerceCallArguments(
   // Create the tuple shuffle.
   ArrayRef<int> mapping = tc.Context.AllocateCopy(sources);
   auto callerDefaultArgsCopy = tc.Context.AllocateCopy(callerDefaultArgs);
-  auto *shuffle =
+  return
     cs.cacheType(new (tc.Context) TupleShuffleExpr(
                      arg, mapping,
                      isSourceScalar,
                      callee,
                      tc.Context.AllocateCopy(variadicArgs),
+                     sliceType,
                      callerDefaultArgsCopy,
                      paramType));
-  shuffle->setVarargsArrayType(sliceType);
-  return shuffle;
 }
 
 static ClosureExpr *getClosureLiteralExpr(Expr *expr) {
@@ -5867,6 +5887,8 @@ Expr *ExprRewriter::buildCollectionUpcastExpr(Expr *expr, Type toType,
 
 Expr *ExprRewriter::buildObjCBridgeExpr(Expr *expr, Type toType,
                                         ConstraintLocatorBuilder locator) {
+  auto &tc = cs.getTypeChecker();
+
   Type fromType = cs.getType(expr);
 
   // Bridged collection casts always succeed, so we treat them as
@@ -5888,6 +5910,20 @@ Expr *ExprRewriter::buildObjCBridgeExpr(Expr *expr, Type toType,
     Expr *objcExpr = bridgeToObjectiveC(expr);
     if (!objcExpr)
       return nullptr;
+
+    // We might have a coercion of a Swift type to a CF type toll-free
+    // bridged to Objective-C.
+    //
+    // FIXME: Ideally we would instead have already recorded a restriction
+    // when solving the constraint, and we wouldn't need to duplicate this
+    // part of coerceToType() here.
+    if (auto foreignClass = toType->getClassOrBoundGenericClass()) {
+      if (foreignClass->getForeignClassKind() ==
+            ClassDecl::ForeignKind::CFType) {
+        return cs.cacheType(
+          new (tc.Context) ForeignObjectConversionExpr(objcExpr, toType));
+      }
+    }
 
     return coerceToType(objcExpr, toType, locator);
   }
@@ -6784,6 +6820,9 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
   
   auto fn = apply->getFn();
 
+  bool hasTrailingClosure =
+    isa<CallExpr>(apply) && cast<CallExpr>(apply)->hasTrailingClosure();
+
   auto finishApplyOfDeclWithSpecialTypeCheckingSemantics
     = [&](ApplyExpr *apply,
           ValueDecl *decl,
@@ -6792,9 +6831,26 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
       case DeclTypeCheckingSemantics::TypeOf: {
         // Resolve into a DynamicTypeExpr.
         auto arg = apply->getArg();
+
+        SmallVector<Identifier, 2> argLabelsScratch;
+
+        auto fnType = cs.getType(fn)->getAs<FunctionType>();
+        arg = coerceCallArguments(arg, fnType->getInput(),
+                                  apply,
+                                  apply->getArgumentLabels(argLabelsScratch),
+                                  hasTrailingClosure,
+                                  locator.withPathElement(
+                                    ConstraintLocator::ApplyArgument));
+        if (!arg) {
+          return nullptr;
+        }
+
+        if (auto shuffle = dyn_cast<TupleShuffleExpr>(arg))
+          arg = shuffle->getSubExpr();
+
         if (auto tuple = dyn_cast<TupleExpr>(arg))
           arg = tuple->getElements()[0];
-        arg = cs.coerceToRValue(arg);
+
         auto replacement = new (tc.Context)
           DynamicTypeExpr(apply->getFn()->getLoc(),
                           apply->getArg()->getStartLoc(),
@@ -6958,8 +7014,6 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
   SmallVector<Identifier, 2> argLabelsScratch;
   if (auto fnType = cs.getType(fn)->getAs<FunctionType>()) {
     auto origArg = apply->getArg();
-    bool hasTrailingClosure =
-      isa<CallExpr>(apply) && cast<CallExpr>(apply)->hasTrailingClosure();
     Expr *arg = coerceCallArguments(origArg, fnType->getInput(),
                                     apply,
                                     apply->getArgumentLabels(argLabelsScratch),
@@ -7054,7 +7108,7 @@ Expr *ExprRewriter::finishApply(ApplyExpr *apply, Type openedType,
   if (!cs.isTypeReference(fn)) {
     bool isExistentialType = false;
     // If this is an attempt to initialize existential type.
-    if (auto metaType = fn->getType()->getAs<MetatypeType>()) {
+    if (auto metaType = cs.getType(fn)->getAs<MetatypeType>()) {
       auto instanceType = metaType->getInstanceType();
       isExistentialType = instanceType->isExistentialType();
     }
@@ -7353,32 +7407,15 @@ namespace {
 } // end anonymous namespace
 
 Expr *ConstraintSystem::coerceToRValue(Expr *expr) {
-  // Can't load from an inout value.
-  if (auto *iot = getType(expr)->getAs<InOutType>()) {
-    // Emit a fixit if we can find the & expression that turned this into an
-    // inout.
-    auto &tc = getTypeChecker();
-    if (auto addrOf =
-        dyn_cast<InOutExpr>(expr->getSemanticsProvidingExpr())) {
-      tc.diagnose(expr->getLoc(), diag::load_of_explicit_lvalue,
-                  iot->getObjectType())
-        .fixItRemove(SourceRange(addrOf->getLoc()));
-      return coerceToRValue(addrOf->getSubExpr());
-    } else {
-      tc.diagnose(expr->getLoc(), diag::load_of_explicit_lvalue,
-                  iot->getObjectType());
-      return expr;
-    }
-  }
-
-  // If we already have an rvalue, we're done, otherwise emit a load.
-  if (auto lvalueTy = getType(expr)->getAs<LValueType>()) {
-    propagateLValueAccessKind(expr, AccessKind::Read);
-    return cacheType(new (getASTContext())
-                         LoadExpr(expr, lvalueTy->getObjectType()));
-  }
-
-  return expr;
+  auto &tc = getTypeChecker();
+  return tc.coerceToMaterializable(expr,
+                                   [&](Expr *expr) {
+                                     return getType(expr);
+                                   },
+                                   [&](Expr *expr, Type type) {
+                                     expr->setType(type);
+                                     cacheType(expr);
+                                   });
 }
 
 /// Emit the fixes computed as part of the solution, returning true if we were
@@ -7597,6 +7634,10 @@ Expr *ConstraintSystem::applySolution(Solution &solution, Expr *expr,
     diagnoseFailureForExpr(expr);
     return nullptr;
   }
+
+  // Mark any normal conformances used in this solution as "used".
+  for (auto &e : solution.Conformances)
+    TC.markConformanceUsed(e.second, DC);
 
   ExprRewriter rewriter(*this, solution, suppressDiagnostics, skipClosures);
   ExprWalker walker(rewriter);

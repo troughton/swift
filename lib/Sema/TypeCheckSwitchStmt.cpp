@@ -76,6 +76,9 @@ namespace {
     private:
       SpaceKind Kind;
       llvm::PointerIntPair<Type, 1, bool> TypeAndVal;
+
+      // In type space, we reuse HEAD to help us print meaningful name, e.g.,
+      // tuple element name in fixits.
       Identifier Head;
       std::forward_list<Space> Spaces;
 
@@ -134,10 +137,15 @@ namespace {
       }
       
     public:
-      explicit Space(Type T)
-        : Kind(SpaceKind::Type), TypeAndVal(T, false), Head(Identifier()),
+      explicit Space(Type T, Identifier NameForPrinting)
+        : Kind(SpaceKind::Type), TypeAndVal(T, false), Head(NameForPrinting),
           Spaces({}){}
-      explicit Space(Type T, Identifier H, bool downgrade, SmallVectorImpl<Space> &SP)
+      explicit Space(Type T, Identifier H, bool downgrade,
+                     SmallVectorImpl<Space> &SP)
+        : Kind(SpaceKind::Constructor), TypeAndVal(T, downgrade), Head(H),
+          Spaces(SP.begin(), SP.end()) {}
+      explicit Space(Type T, Identifier H, bool downgrade,
+                     const std::forward_list<Space> &SP)
         : Kind(SpaceKind::Constructor), TypeAndVal(T, downgrade), Head(H),
           Spaces(SP.begin(), SP.end()) {}
       explicit Space(SmallVectorImpl<Space> &SP)
@@ -181,6 +189,12 @@ namespace {
       Identifier getHead() const {
         assert(getKind() == SpaceKind::Constructor
                && "Wrong kind of space tried to access head");
+        return Head;
+      }
+
+      Identifier getPrintingName() const {
+        assert(getKind() == SpaceKind::Type
+               && "Wrong kind of space tried to access printing name");
         return Head;
       }
 
@@ -317,26 +331,11 @@ namespace {
           if (this->Head.compare(other.Head) != 0) {
             return false;
           }
-
-          // Special Case: A constructor pattern may include the head but not
-          // the payload patterns.  In that case the space is covered.
-          // This also acts to short-circuit comparisons with payload-less
+          
+          // Special Case: Short-circuit comparisons with payload-less
           // constructors.
           if (other.getSpaces().empty()) {
             return true;
-          }
-
-          // If 'this' constructor pattern has no payload and the other space
-          // does, then 'this' covers more of the space only if the other
-          // constructor isn't the explicit form.
-          //
-          // .case <= .case(_, _, _, ...)
-          if (this->getSpaces().empty()) {
-            return std::accumulate(other.getSpaces().begin(),
-                                   other.getSpaces().end(),
-                                   true, [](bool acc, const Space sp){
-              return acc && sp.getKind() == SpaceKind::Type;
-            });
           }
 
           // H(a1, ..., an) <= H(b1, ..., bn) iff a1 <= b1 && ... && an <= bn
@@ -394,145 +393,144 @@ namespace {
         };
 
         switch (PairSwitch(getKind(), other.getKind())) {
-          PAIRCASE (SpaceKind::Empty, SpaceKind::Disjunct):
-          PAIRCASE (SpaceKind::Type, SpaceKind::Disjunct):
-          PAIRCASE (SpaceKind::Constructor, SpaceKind::Disjunct):
-          PAIRCASE (SpaceKind::Disjunct, SpaceKind::Disjunct):
-          PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Disjunct): {
-            // S & (S1 || ... || Sn) iff (S & S1) && ... && (S & Sn)
-            SmallVector<Space, 4> intersectedCases;
-            std::transform(other.getSpaces().begin(), other.getSpaces().end(),
-                           std::back_inserter(intersectedCases),
-                           [&](const Space &s) {
-              return this->intersect(s, TC);
-            });
-            // Optimization: Remove all empty spaces.
-            SmallVector<Space, 4> filteredCases;
-            std::copy_if(intersectedCases.begin(), intersectedCases.end(),
-                         std::back_inserter(filteredCases),
+        PAIRCASE (SpaceKind::Empty, SpaceKind::Disjunct):
+        PAIRCASE (SpaceKind::Type, SpaceKind::Disjunct):
+        PAIRCASE (SpaceKind::Constructor, SpaceKind::Disjunct):
+        PAIRCASE (SpaceKind::Disjunct, SpaceKind::Disjunct):
+        PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Disjunct): {
+          // S & (S1 || ... || Sn) iff (S & S1) && ... && (S & Sn)
+          SmallVector<Space, 4> intersectedCases;
+          std::transform(other.getSpaces().begin(), other.getSpaces().end(),
+                         std::back_inserter(intersectedCases),
                          [&](const Space &s) {
-              return !s.isEmpty();
-            });
-            return examineDecomp(filteredCases);
-          }
+            return this->intersect(s, TC);
+          });
+          // Optimization: Remove all empty spaces.
+          SmallVector<Space, 4> filteredCases;
+          std::copy_if(intersectedCases.begin(), intersectedCases.end(),
+                       std::back_inserter(filteredCases),
+                       [&](const Space &s) {
+            return !s.isEmpty();
+          });
+          return examineDecomp(filteredCases);
+        }
 
-          PAIRCASE (SpaceKind::Disjunct, SpaceKind::Empty):
-          PAIRCASE (SpaceKind::Disjunct, SpaceKind::Type):
-          PAIRCASE (SpaceKind::Disjunct, SpaceKind::Constructor):
-          PAIRCASE (SpaceKind::Disjunct, SpaceKind::BooleanConstant): {
-            // (S1 || ... || Sn) & S iff (S & S1) && ... && (S & Sn)
-            SmallVector<Space, 4> intersectedCases;
-            std::transform(this->getSpaces().begin(), this->getSpaces().end(),
-                           std::back_inserter(intersectedCases),
-                           [&](const Space &s) {
-              return s.intersect(other, TC);
-            });
-            // Optimization: Remove all empty spaces.
-            SmallVector<Space, 4> filteredCases;
-            std::copy_if(intersectedCases.begin(), intersectedCases.end(),
-                         std::back_inserter(filteredCases),
+        PAIRCASE (SpaceKind::Disjunct, SpaceKind::Empty):
+        PAIRCASE (SpaceKind::Disjunct, SpaceKind::Type):
+        PAIRCASE (SpaceKind::Disjunct, SpaceKind::Constructor):
+        PAIRCASE (SpaceKind::Disjunct, SpaceKind::BooleanConstant): {
+          // (S1 || ... || Sn) & S iff (S & S1) && ... && (S & Sn)
+          SmallVector<Space, 4> intersectedCases;
+          std::transform(this->getSpaces().begin(), this->getSpaces().end(),
+                         std::back_inserter(intersectedCases),
                          [&](const Space &s) {
-              return !s.isEmpty();
-            });
-            return examineDecomp(filteredCases);
+            return s.intersect(other, TC);
+          });
+          // Optimization: Remove all empty spaces.
+          SmallVector<Space, 4> filteredCases;
+          std::copy_if(intersectedCases.begin(), intersectedCases.end(),
+                       std::back_inserter(filteredCases),
+                       [&](const Space &s) {
+            return !s.isEmpty();
+          });
+          return examineDecomp(filteredCases);
+        }
+        PAIRCASE (SpaceKind::Type, SpaceKind::Type): {
+          // Optimization: The intersection of equal types is that type.
+          if (this->getType()->isEqual(other.getType())) {
+            return other;
+          } else if (canDecompose(this->getType())) {
+            SmallVector<Space, 4> spaces;
+            decompose(TC, this->getType(), spaces);
+            auto decomposition = examineDecomp(spaces);
+            return decomposition.intersect(other, TC);
+          } else if (canDecompose(other.getType())) {
+            SmallVector<Space, 4> spaces;
+            decompose(TC, other.getType(), spaces);
+            auto disjunctSp = examineDecomp(spaces);
+            return this->intersect(disjunctSp, TC);
+          } else {
+            return other;
           }
-          PAIRCASE (SpaceKind::Type, SpaceKind::Type): {
-            // Optimization: The intersection of equal types is that type.
-            if (this->getType()->isEqual(other.getType())) {
-              return other;
-            } else if (canDecompose(this->getType())) {
-              SmallVector<Space, 4> spaces;
-              decompose(TC, this->getType(), spaces);
-              auto decomposition = examineDecomp(spaces);
-              return decomposition.intersect(other, TC);
-            } else if (canDecompose(other.getType())) {
-              SmallVector<Space, 4> spaces;
-              decompose(TC, other.getType(), spaces);
-              auto disjunctSp = examineDecomp(spaces);
-              return this->intersect(disjunctSp, TC);
-            } else {
-              return other;
-            }
+        }
+        PAIRCASE (SpaceKind::Type, SpaceKind::Constructor): {
+          if (canDecompose(this->getType())) {
+            SmallVector<Space, 4> spaces;
+            decompose(TC, this->getType(), spaces);
+            auto decomposition = examineDecomp(spaces);
+            return decomposition.intersect(other, TC);
+          } else {
+            return other;
           }
-          PAIRCASE (SpaceKind::Type, SpaceKind::Constructor): {
-            if (canDecompose(this->getType())) {
-              SmallVector<Space, 4> spaces;
-              decompose(TC, this->getType(), spaces);
-              auto decomposition = examineDecomp(spaces);
-              return decomposition.intersect(other, TC);
-            } else {
-              return other;
-            }
-          }
-          PAIRCASE (SpaceKind::Constructor, SpaceKind::Type):
-            return *this;
+        }
+        PAIRCASE (SpaceKind::Constructor, SpaceKind::Type):
+          return *this;
             
-          PAIRCASE (SpaceKind::Constructor, SpaceKind::Constructor): {
-            // Optimization: If the heads don't match, the intersection of
-            // the constructor spaces is empty.
-            if (this->getHead().compare(other.Head) != 0) {
+        PAIRCASE (SpaceKind::Constructor, SpaceKind::Constructor): {
+          // Optimization: If the heads don't match, the intersection of
+          // the constructor spaces is empty.
+          if (this->getHead().compare(other.Head) != 0) {
+            return Space();
+          }
+          
+          // Special Case: Short circuit patterns without payloads.  Their
+          // intersection is the whole space.
+          if (other.getSpaces().empty()) {
+            return *this;
+          }
+
+          SmallVector<Space, 4> paramSpace;
+          auto i = this->getSpaces().begin();
+          auto j = other.getSpaces().begin();
+          for (; i != this->getSpaces().end() && j != other.getSpaces().end();
+               ++i, ++j) {
+            auto intersection = (*i).intersect(*j, TC);
+            if (intersection.simplify(TC).isEmpty()) {
               return Space();
             }
-
-            // Special Case: A constructor pattern may include the head but not
-            // the payload patterns.  In that case, the intersection is the
-            // whole original space.
-            if (other.getSpaces().empty()) {
-              return *this;
-            }
-
-            SmallVector<Space, 4> paramSpace;
-            auto i = this->getSpaces().begin();
-            auto j = other.getSpaces().begin();
-            for (; i != this->getSpaces().end() && j != other.getSpaces().end();
-                 ++i, ++j) {
-              auto intersection = (*i).intersect(*j, TC);
-              if (intersection.simplify(TC).isEmpty()) {
-                return Space();
-              }
-              paramSpace.push_back(intersection);
-            }
-
-            return examineDecomp(paramSpace);
+            paramSpace.push_back(intersection);
           }
 
-          PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::BooleanConstant):
-            return this->getBoolValue() == other.getBoolValue() ? *this : Space();
+          return examineDecomp(paramSpace);
+        }
 
-          PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Type): {
-            if (other.getType()->isBool()) {
-              return this->getKind() == SpaceKind::BooleanConstant ? *this : Space();
-            }
+        PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::BooleanConstant):
+          return this->getBoolValue() == other.getBoolValue() ? *this : Space();
 
-            if (canDecompose(other.getType())) {
-              SmallVector<Space, 4> spaces;
-              decompose(TC, other.getType(), spaces);
-              auto disjunctSp = examineDecomp(spaces);
-              return this->intersect(disjunctSp, TC);
-            }
-            return Space();
-          }
-          PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Empty):
-          PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Constructor):
-            return Space();
-
-          PAIRCASE (SpaceKind::Type, SpaceKind::BooleanConstant): {
-            if (canDecompose(this->getType())) {
-              SmallVector<Space, 4> spaces;
-              decompose(TC, this->getType(), spaces);
-              auto disjunctSp = examineDecomp(spaces);
-              return disjunctSp.intersect(other, TC);
-            } else {
-              return Space();
-            }
+        PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Type): {
+          if (other.getType()->isBool()) {
+            return this->getKind() == SpaceKind::BooleanConstant ? *this : Space();
           }
 
-          PAIRCASE (SpaceKind::Empty, SpaceKind::BooleanConstant):
-          PAIRCASE (SpaceKind::Constructor, SpaceKind::BooleanConstant):
-            return Space();
+          if (canDecompose(other.getType())) {
+            SmallVector<Space, 4> spaces;
+            decompose(TC, other.getType(), spaces);
+            auto disjunctSp = examineDecomp(spaces);
+            return this->intersect(disjunctSp, TC);
+          }
+          return Space();
+        }
+        PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Empty):
+        PAIRCASE (SpaceKind::BooleanConstant, SpaceKind::Constructor):
+          return Space();
 
-          default:
-            llvm_unreachable("Uncovered pair found while computing intersect?");
+        PAIRCASE (SpaceKind::Type, SpaceKind::BooleanConstant): {
+          if (canDecompose(this->getType())) {
+            SmallVector<Space, 4> spaces;
+            decompose(TC, this->getType(), spaces);
+            auto disjunctSp = examineDecomp(spaces);
+            return disjunctSp.intersect(other, TC);
+          } else {
+            return Space();
+          }
+        }
+
+        PAIRCASE (SpaceKind::Empty, SpaceKind::BooleanConstant):
+        PAIRCASE (SpaceKind::Constructor, SpaceKind::BooleanConstant):
+          return Space();
+
+        default:
+          llvm_unreachable("Uncovered pair found while computing intersect?");
         }
       }
 
@@ -621,13 +619,12 @@ namespace {
             return *this;
           }
 
-          // Special Case: A constructor pattern may include the head but not
-          // the payload patterns.  In that case, because the heads match, it
-          // covers the whole space.
+          // Special Case: Short circuit patterns without payloads.  Their
+          // difference is empty.
           if (other.getSpaces().empty()) {
             return Space();
           }
-
+          
           SmallVector<Space, 4> constrSpaces;
           bool foundBad = false;
           auto i = this->getSpaces().begin();
@@ -762,7 +759,11 @@ namespace {
           if (!forDisplay) {
             getType()->print(buffer);
           }
-          buffer << "_";
+          Identifier Name = getPrintingName();
+          if (Name.empty())
+            buffer << "_";
+          else
+            buffer << tok::kw_let << " " << Name.str();
           break;
         }
       }
@@ -877,10 +878,11 @@ namespace {
                                TTy->getElements().end(),
                                std::back_inserter(constElemSpaces),
                                [&](TupleTypeElt ty){
-                                 return Space(ty.getType());
+                                 return Space(ty.getType(), ty.getName());
                                });
               } else if (auto *TTy = dyn_cast<ParenType>(eedTy.getPointer())) {
-                constElemSpaces.push_back(Space(TTy->getUnderlyingType()));
+                constElemSpaces.push_back(Space(TTy->getUnderlyingType(),
+                                                Identifier()));
               }
             }
             return Space(tp, eed->getName(),
@@ -894,7 +896,7 @@ namespace {
           std::transform(TTy->getElements().begin(), TTy->getElements().end(),
                          std::back_inserter(constElemSpaces),
                          [&](TupleTypeElt ty){
-            return Space(ty.getType());
+            return Space(ty.getType(), ty.getName());
           });
           // Create an empty constructor head for the tuple space.
           arr.push_back(Space(tp, Identifier(), /*canDowngrade*/false,
@@ -918,10 +920,11 @@ namespace {
     void checkExhaustiveness(bool limitedChecking) {
       if (limitedChecking) {
         // Reject switch statements with empty blocks.
-        if (Switch->getCases().empty())
+        if (Switch->getCases().empty()) {
           SpaceEngine::diagnoseMissingCases(TC, Switch,
                                             /*justNeedsDefault*/true,
                                             SpaceEngine::Space());
+        }
         return;
       }
 
@@ -954,7 +957,7 @@ namespace {
         }
       }
       
-      Space totalSpace(Switch->getSubjectExpr()->getType());
+      Space totalSpace(Switch->getSubjectExpr()->getType(), Identifier());
       Space coveredSpace(spaces);
       size_t totalSpaceSize = totalSpace.getSize(TC);
       if (totalSpaceSize > Space::getMaximumSize()) {
@@ -1008,27 +1011,27 @@ namespace {
     // @_downgrade_exhaustivity_check.
     static bool shouldDowngradeToWarning(const Space &masterSpace) {
       switch (masterSpace.getKind()) {
-        case SpaceKind::Type:
-        case SpaceKind::BooleanConstant:
-        case SpaceKind::Empty:
-          return false;
-        // Traverse the constructor and its subspaces.
-        case SpaceKind::Constructor:
-          return masterSpace.canDowngrade()
-              || std::accumulate(masterSpace.getSpaces().begin(),
-                                 masterSpace.getSpaces().end(),
-                                false,
-                                [](bool acc, const Space &space) {
-            return acc || shouldDowngradeToWarning(space);
-          });
-        case SpaceKind::Disjunct:
-          // Traverse the disjunct's subspaces.
-          return std::accumulate(masterSpace.getSpaces().begin(),
-                                 masterSpace.getSpaces().end(),
-                                 false,
-                                 [](bool acc, const Space &space) {
-                                   return acc || shouldDowngradeToWarning(space);
-                                 });
+      case SpaceKind::Type:
+      case SpaceKind::BooleanConstant:
+      case SpaceKind::Empty:
+        return false;
+      // Traverse the constructor and its subspaces.
+      case SpaceKind::Constructor:
+        return masterSpace.canDowngrade()
+            || std::accumulate(masterSpace.getSpaces().begin(),
+                               masterSpace.getSpaces().end(),
+                              false,
+                              [](bool acc, const Space &space) {
+          return acc || shouldDowngradeToWarning(space);
+        });
+      case SpaceKind::Disjunct:
+        // Traverse the disjunct's subspaces.
+        return std::accumulate(masterSpace.getSpaces().begin(),
+                               masterSpace.getSpaces().end(),
+                               false,
+                               [](bool acc, const Space &space) {
+                                 return acc || shouldDowngradeToWarning(space);
+                               });
       }
     }
 
@@ -1104,7 +1107,6 @@ namespace {
         TC.diagnose(startLoc, diag::non_exhaustive_switch);
         TC.diagnose(startLoc, diag::missing_several_cases, false)
           .fixItInsert(endLoc, buffer.str());
-
       } else {
         TC.Context.Diags.diagnose(startLoc, mainDiagType);
 
@@ -1230,11 +1232,11 @@ namespace {
                                 bool &sawDowngradablePattern) {
       switch (item->getKind()) {
       case PatternKind::Any:
+        return Space(item->getType(), Identifier());
       case PatternKind::Named:
-        return Space(item->getType());
+        return Space(item->getType(), cast<NamedPattern>(item)->getBoundName());
       case PatternKind::Bool: {
-        auto *BP = cast<BoolPattern>(item);
-        return Space(BP->getValue());
+        return Space(cast<BoolPattern>(item)->getValue());
       }
       case PatternKind::Is: {
         auto *IP = cast<IsPattern>(item);
@@ -1244,7 +1246,7 @@ namespace {
           // These coercions are irrefutable.  Project with the original type
           // instead of the cast's target type to maintain consistency with the
           // scrutinee's type.
-          return Space(IP->getType());
+          return Space(IP->getType(), Identifier());
         case CheckedCastKind::Unresolved:
         case CheckedCastKind::ValueCast:
         case CheckedCastKind::ArrayDowncast:
@@ -1267,11 +1269,20 @@ namespace {
       }
       case PatternKind::OptionalSome: {
         auto *OSP = cast<OptionalSomePattern>(item);
+        auto subSpace = projectPattern(TC, OSP->getSubPattern(),
+                                       sawDowngradablePattern);
+        // To match patterns like (_, _, ...)?, we must rewrite the underlying
+        // tuple pattern to .some(_, _, ...) first.
+        if (subSpace.getKind() == SpaceKind::Constructor
+            && subSpace.getHead().empty()) {
+          return Space(item->getType(), TC.Context.getIdentifier("some"),
+                       /*canDowngrade*/false, subSpace.getSpaces());
+        }
         SmallVector<Space, 1> payload = {
           projectPattern(TC, OSP->getSubPattern(), sawDowngradablePattern)
         };
-        return Space(item->getType(), TC.Context.getIdentifier("some"), /*canDowngrade*/false,
-                     payload);
+        return Space(item->getType(), TC.Context.getIdentifier("some"),
+                     /*canDowngrade*/false, payload);
       }
       case PatternKind::EnumElement: {
         auto *VP = cast<EnumElementPattern>(item);
@@ -1313,12 +1324,14 @@ namespace {
           // Special Case: A constructor pattern may have all of its payload
           // matched by a single var pattern.  Project it like the tuple it
           // really is.
+          //
+          // FIXME: SE-0155 makes this case unreachable.
           if (SP->getKind() == PatternKind::Named
               || SP->getKind() == PatternKind::Any
               || SP->getKind() == PatternKind::Tuple) {
             if (auto *TTy = SP->getType()->getAs<TupleType>()) {
               for (auto ty : TTy->getElements()) {
-                conArgSpace.push_back(Space(ty.getType()));
+                conArgSpace.push_back(Space(ty.getType(), ty.getName()));
               }
             } else {
               conArgSpace.push_back(projectPattern(TC, SP,

@@ -13,6 +13,10 @@
 import Foundation
 @_exported import UIKit
 
+#if os(iOS) || os(tvOS)
+import _SwiftUIKitOverlayShims
+#endif
+
 //===----------------------------------------------------------------------===//
 // UIGeometry
 //===----------------------------------------------------------------------===//
@@ -233,3 +237,61 @@ extension UIImage : _ExpressibleByImageLiteral {
 }
 
 public typealias _ImageLiteralType = UIImage
+
+extension UIFontTextStyle {
+    @available(iOS 11.0, watchOS 4.0, tvOS 11.0, *)
+    public var metrics: UIFontMetrics {
+        return UIFontMetrics(forTextStyle: self)
+    }
+}
+
+#if !os(watchOS) // UIContentSizeCategory not available on watchOS
+extension UIContentSizeCategory {
+    @available(iOS 11.0, tvOS 11.0,  *)
+    public var isAccessibilityCategory: Bool {
+        return __UIContentSizeCategoryIsAccessibilityCategory(self)
+    }
+    
+    @available(iOS 11.0, tvOS 11.0, *)
+    public static func < (left: UIContentSizeCategory, right: UIContentSizeCategory) -> Bool {
+        return __UIContentSizeCategoryCompareToCategory(left, right) == .orderedAscending
+    }
+    
+    @available(iOS 11.0, tvOS 11.0, *)
+    public static func <= (left: UIContentSizeCategory, right: UIContentSizeCategory) -> Bool {
+        return __UIContentSizeCategoryCompareToCategory(left, right) != .orderedDescending
+    }
+    
+    @available(iOS 11.0, tvOS 11.0, *)
+    public static func > (left: UIContentSizeCategory, right: UIContentSizeCategory) -> Bool {
+        return __UIContentSizeCategoryCompareToCategory(left, right) == .orderedDescending
+    }
+    
+    @available(iOS 11.0, tvOS 11.0, *)
+    public static func >= (left: UIContentSizeCategory, right: UIContentSizeCategory) -> Bool {
+        return __UIContentSizeCategoryCompareToCategory(left, right) != .orderedAscending
+    }
+}
+#endif
+
+//===----------------------------------------------------------------------===//
+// Focus
+//===----------------------------------------------------------------------===//
+
+#if os(iOS) || os(tvOS)
+@available(iOS 11.0, tvOS 11.0, *)
+extension UIFocusEnvironment {
+  @available(iOS 11.0, tvOS 11.0, *)
+  public func contains(_ environment: UIFocusEnvironment) -> Bool {
+    return _swift_UIKit_UIFocusEnvironmentContainsEnvironment(self, environment)
+  }
+}
+
+@available(iOS 11.0, tvOS 11.0, *)
+extension UIFocusItem {
+  @available(iOS 11.0, tvOS 11.0, *)
+  public var isFocused: Bool {
+    return self === UIScreen.main.focusedItem
+  }
+}
+#endif

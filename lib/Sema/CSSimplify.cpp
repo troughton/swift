@@ -1042,11 +1042,28 @@ ConstraintSystem::matchFunctionTypes(FunctionType *func1, FunctionType *func2,
 
   increaseScore(ScoreKind::SK_FunctionConversion);
 
+  // Add a very narrow exception to SE-0110 by allowing functions that
+  // take multiple arguments to be passed as an argument in places
+  // that expect a function that takes a single tuple (of the same
+  // arity).
+  auto func1Input = func1->getInput();
+  auto func2Input = func2->getInput();
+  if (!getASTContext().isSwiftVersion3()) {
+    if (auto elt = locator.last()) {
+      if (elt->getKind() == ConstraintLocator::ApplyArgToParam) {
+        if (auto *paren2 = dyn_cast<ParenType>(func2Input.getPointer())) {
+          func2Input = paren2->getUnderlyingType();
+          if (auto *paren1 = dyn_cast<ParenType>(func1Input.getPointer()))
+            func1Input = paren1->getUnderlyingType();
+        }
+      }
+    }
+  }
+
   // Input types can be contravariant (or equal).
-  SolutionKind result = matchTypes(func2->getInput(), func1->getInput(),
-                                   subKind, subflags,
-                                   locator.withPathElement(
-                                     ConstraintLocator::FunctionArgument));
+  SolutionKind result =
+      matchTypes(func2Input, func1Input, subKind, subflags,
+                 locator.withPathElement(ConstraintLocator::FunctionArgument));
   if (result == SolutionKind::Error)
     return SolutionKind::Error;
 
@@ -1355,7 +1372,9 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
     typeVar2 = dyn_cast<TypeVariableType>(type2.getPointer());
 
     // If the types are obviously equivalent, we're done.
-    if (type1.getPointer() == type2.getPointer())
+    if (isa<ParenType>(type1.getPointer()) ==
+          isa<ParenType>(type2.getPointer()) &&
+        type1->isEqual(type2))
       return SolutionKind::Solved;
   } else {
     typeVar1 = desugar1->getAs<TypeVariableType>();
@@ -2473,17 +2492,27 @@ ConstraintSystem::SolutionKind ConstraintSystem::simplifyConformsToConstraint(
   // separately.
   switch (kind) {
   case ConstraintKind::SelfObjectOfProtocol:
-    if (TC.containsProtocol(type, protocol, DC,
-                            ConformanceCheckFlags::InExpression))
+    if (auto conformance =
+          TC.containsProtocol(type, protocol, DC,
+                              ConformanceCheckFlags::InExpression)) {
+      CheckedConformances.push_back({getConstraintLocator(locator),
+                                     *conformance});
       return SolutionKind::Solved;
+    }
     break;
   case ConstraintKind::ConformsTo:
-  case ConstraintKind::LiteralConformsTo:
+  case ConstraintKind::LiteralConformsTo: {
     // Check whether this type conforms to the protocol.
-    if (TC.conformsToProtocol(type, protocol, DC,
-                              ConformanceCheckFlags::InExpression))
+    if (auto conformance =
+          TC.conformsToProtocol(type, protocol, DC,
+                                ConformanceCheckFlags::InExpression)) {
+      CheckedConformances.push_back({getConstraintLocator(locator),
+                                     *conformance});
       return SolutionKind::Solved;
+    }
     break;
+  }
+
   default:
     llvm_unreachable("bad constraint kind");
   }
@@ -2980,8 +3009,8 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
           }
         }
       }
-      
-      // If the invocation's argument expression has a favored constraint,
+
+      // If the invocation's argument expression has a favored type,
       // use that information to determine whether a specific overload for
       // the initializer should be favored.
       if (favoredType && result.FavoredChoice == ~0U) {
@@ -2996,7 +3025,8 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
             argType = ctor.Decl->getInnermostDeclContext()
                 ->mapTypeIntoContext(argType);
             if (argType->isEqual(favoredType))
-              result.FavoredChoice = result.ViableCandidates.size();
+              if (!ctor->getAttrs().isUnavailable(getASTContext()))
+                result.FavoredChoice = result.ViableCandidates.size();
           }
         }
       }

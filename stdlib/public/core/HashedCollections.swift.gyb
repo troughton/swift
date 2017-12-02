@@ -440,8 +440,6 @@ internal struct _UnmanagedAnyObjectArray {
 /// unspecified. The instances of `NSSet` and `Set` share buffer using the
 /// same copy-on-write optimization that is used when two instances of `Set`
 /// share buffer.
-///
-/// - SeeAlso: `Hashable`
 @_fixed_layout
 public struct Set<Element : Hashable> :
   SetAlgebra, Hashable, Collection, ExpressibleByArrayLiteral {
@@ -1676,8 +1674,6 @@ public func _setBridgeFromObjectiveCConditional<
 /// `NSDictionary` and `Dictionary` share buffer using the same copy-on-write
 /// optimization that is used when two instances of `Dictionary` share
 /// buffer.
-///
-/// - SeeAlso: `Hashable`
 @_fixed_layout
 public struct Dictionary<Key : Hashable, Value> :
   Collection, ExpressibleByDictionaryLiteral {
@@ -1730,13 +1726,13 @@ public struct Dictionary<Key : Hashable, Value> :
   ///     print(wordToValue)
   ///     // Prints "["three": 3, "four": 4, "five": 5, "one": 1, "two": 2]"
   ///
-  /// - Parameter keysAndValues: A sequence of `(Key, Value)` tuples to use for
+  /// - Parameter keysAndValues: A sequence of key-value pairs to use for
   ///   the new dictionary. Every key in `keysAndValues` must be unique.
   /// - Returns: A new dictionary initialized with the elements of
   ///   `keysAndValues`.
   public init<S: Sequence>(
     uniqueKeysWithValues keysAndValues: S
-  ) where S.Iterator.Element == (Key, Value) {
+  ) where S.Element == (Key, Value) {
     if let d = keysAndValues as? Dictionary<Key, Value> {
       self = d
     } else {
@@ -1756,8 +1752,9 @@ public struct Dictionary<Key : Hashable, Value> :
   /// of key-value tuples that might have duplicate keys. As the dictionary is
   /// built, the initializer calls the `combine` closure with the current and
   /// new values for any duplicate keys. Pass a closure as `combine` that
-  /// selects which value to use in the returned dictionary, or to combine the
-  /// values as the dictionary is initialized.
+  /// returns the value to use in the resulting dictionary: The closure can
+  /// choose between the two values, combine them to produce a new value, or
+  /// even throw an error.
   ///
   /// The following example shows how to choose the first and last values for
   /// any duplicate keys:
@@ -1773,7 +1770,7 @@ public struct Dictionary<Key : Hashable, Value> :
   ///     // ["b": 4, "a": 3]
   ///
   /// - Parameters:
-  ///   - keysAndValues: A sequence of `(Key, Value)` tuples to use for the new
+  ///   - keysAndValues: A sequence of key-value pairs to use for the new
   ///     dictionary.
   ///   - combine: A closure that is called with the values for any duplicate
   ///     keys that are encountered. The closure returns the desired value for
@@ -1781,21 +1778,21 @@ public struct Dictionary<Key : Hashable, Value> :
   public init<S: Sequence>(
     _ keysAndValues: S,
     uniquingKeysWith combine: (Value, Value) throws -> Value
-  ) rethrows where S.Iterator.Element == (Key, Value) {
+  ) rethrows where S.Element == (Key, Value) {
     self = Dictionary(minimumCapacity: keysAndValues.underestimatedCount)
     try _variantBuffer.merge(keysAndValues, uniquingKeysWith: combine)
   }
 
-  /// Creates a new dictionary where the keys are the groupings returned by the
-  /// given closure and the values are arrays of the elements that returned
-  /// each specific key.
+  /// Creates a new dictionary whose keys are the groupings returned by the
+  /// given closure and whose values are arrays of the elements that returned
+  /// each key.
   ///
   /// The arrays in the "values" position of the new dictionary each contain at
   /// least one element, with the elements in the same order as the source
   /// sequence.
   ///
   /// The following example declares an array of names, and then creates a
-  /// dictionary from that array by grouping the names by their first letter:
+  /// dictionary from that array by grouping the names by first letter:
   ///
   ///     let students = ["Kofi", "Abena", "Efua", "Kweku", "Akosua"]
   ///     let studentsByLetter = Dictionary(grouping: students, by: { $0.first! })
@@ -1810,12 +1807,10 @@ public struct Dictionary<Key : Hashable, Value> :
   ///     `values`.
   public init<S: Sequence>(
     grouping values: S,
-    by keyForValue: (S.Iterator.Element) throws -> Key
-  ) rethrows where Value == [S.Iterator.Element] {
+    by keyForValue: (S.Element) throws -> Key
+  ) rethrows where Value == [S.Element] {
     self = [:]
-    for value in values {
-      self[try keyForValue(value), default: []].append(value)
-    }
+    try _variantBuffer.nativeGroup(values, by: keyForValue)
   }
 
   internal init(_nativeBuffer: _NativeDictionaryBuffer<Key, Value>) {
@@ -2081,7 +2076,7 @@ public struct Dictionary<Key : Hashable, Value> :
   /// Merges the key-value pairs in the given sequence into the dictionary,
   /// using a combining closure to determine the value for any duplicate keys.
   ///
-  /// Use the `combine` closure to select which value to use in the updated
+  /// Use the `combine` closure to select a value to use in the updated
   /// dictionary, or to combine existing and new values. As the key-value
   /// pairs are merged with the dictionary, the `combine` closure is called
   /// with the current and new values for any duplicate keys that are
@@ -2093,32 +2088,65 @@ public struct Dictionary<Key : Hashable, Value> :
   ///     var dictionary = ["a": 1, "b": 2]
   ///
   ///     // Keeping existing value for key "a":
-  ///     dictionary.merge(["a": 3, "c": 4])
-  ///           { (current, _) in current }
+  ///     dictionary.merge(zip(["a", "c"], [3, 4])) { (current, _) in current }
   ///     // ["b": 2, "a": 1, "c": 4]
   ///
   ///     // Taking the new value for key "a":
-  ///     dictionary.merge(["a": 5, "d": 6])
-  ///           { (_, new) in new }
+  ///     dictionary.merge(zip(["a", "d"], [5, 6])) { (_, new) in new }
   ///     // ["b": 2, "a": 5, "c": 4, "d": 6]
   ///
   /// - Parameters:
-  ///   - other:  A sequence of `(Key, Value)` tuples.
+  ///   - other:  A sequence of key-value pairs.
   ///   - combine: A closure that takes the current and new values for any
   ///     duplicate keys. The closure returns the desired value for the final
   ///     dictionary.
   public mutating func merge<S: Sequence>(
     _ other: S,
     uniquingKeysWith combine: (Value, Value) throws -> Value
-  ) rethrows where S.Iterator.Element == (Key, Value) {
+  ) rethrows where S.Element == (Key, Value) {
     try _variantBuffer.merge(other, uniquingKeysWith: combine)
   }
 
-  /// Returns a new dictionary created by merging the key-value pairs in the
-  /// given sequence into the dictionary, using a combining closure to
-  /// determine the value for any duplicate keys.
+  /// Merges the given dictionary into this dictionary, using a combining
+  /// closure to determine the value for any duplicate keys.
   ///
-  /// Use the `combine` closure to select which value to use in the returned
+  /// Use the `combine` closure to select a value to use in the updated
+  /// dictionary, or to combine existing and new values. As the key-values
+  /// pairs in `other` are merged with this dictionary, the `combine` closure
+  /// is called with the current and new values for any duplicate keys that
+  /// are encountered.
+  ///
+  /// This example shows how to choose the current or new values for any
+  /// duplicate keys:
+  ///
+  ///     var dictionary = ["a": 1, "b": 2]
+  ///
+  ///     // Keeping existing value for key "a":
+  ///     dictionary.merge(["a": 3, "c": 4]) { (current, _) in current }
+  ///     // ["b": 2, "a": 1, "c": 4]
+  ///
+  ///     // Taking the new value for key "a":
+  ///     dictionary.merge(["a": 5, "d": 6]) { (_, new) in new }
+  ///     // ["b": 2, "a": 5, "c": 4, "d": 6]
+  ///
+  /// - Parameters:
+  ///   - other:  A dictionary to merge.
+  ///   - combine: A closure that takes the current and new values for any
+  ///     duplicate keys. The closure returns the desired value for the final
+  ///     dictionary.
+  public mutating func merge(
+    _ other: [Key: Value],
+    uniquingKeysWith combine: (Value, Value) throws -> Value) rethrows
+  {
+    try _variantBuffer.merge(
+      other.lazy.map { ($0, $1) }, uniquingKeysWith: combine)
+  }
+
+  /// Creates a dictionary by merging key-value pairs in a sequence into the
+  /// dictionary, using a combining closure to determine the value for
+  /// duplicate keys.
+  ///
+  /// Use the `combine` closure to select a value to use in the returned
   /// dictionary, or to combine existing and new values. As the key-value
   /// pairs are merged with the dictionary, the `combine` closure is called
   /// with the current and new values for any duplicate keys that are
@@ -2128,16 +2156,15 @@ public struct Dictionary<Key : Hashable, Value> :
   /// duplicate keys:
   ///
   ///     let dictionary = ["a": 1, "b": 2]
-  ///     let otherDictionary = ["a": 3, "b": 4]
-  ///     let keepingCurrent = dictionary.merging(otherDictionary)
-  ///           { (current, _) in current }
+  ///     let newKeyValues = zip(["a", "b"], [3, 4])
+  ///
+  ///     let keepingCurrent = dictionary.merging(newKeyValues) { (current, _) in current }
   ///     // ["b": 2, "a": 1]
-  ///     let replacingCurrent = dictionary.merging(otherDictionary)
-  ///           { (_, new) in new }
+  ///     let replacingCurrent = dictionary.merging(newKeyValues) { (_, new) in new }
   ///     // ["b": 4, "a": 3]
   ///
   /// - Parameters:
-  ///   - other:  A sequence of `(Key, Value)` tuples.
+  ///   - other:  A sequence of key-value pairs.
   ///   - combine: A closure that takes the current and new values for any
   ///     duplicate keys. The closure returns the desired value for the final
   ///     dictionary.
@@ -2146,7 +2173,46 @@ public struct Dictionary<Key : Hashable, Value> :
   public func merging<S: Sequence>(
     _ other: S,
     uniquingKeysWith combine: (Value, Value) throws -> Value
-  ) rethrows -> [Key: Value] where S.Iterator.Element == (Key, Value) {
+  ) rethrows -> [Key: Value] where S.Element == (Key, Value) {
+    var result = self
+    try result._variantBuffer.merge(other, uniquingKeysWith: combine)
+    return result
+  }
+
+  /// Creates a dictionary by merging the given dictionary into this
+  /// dictionary, using a combining closure to determine the value for
+  /// duplicate keys.
+  ///
+  /// Use the `combine` closure to select a value to use in the returned
+  /// dictionary, or to combine existing and new values. As the key-value
+  /// pairs in `other` are merged with this dictionary, the `combine` closure
+  /// is called with the current and new values for any duplicate keys that
+  /// are encountered.
+  ///
+  /// This example shows how to choose the current or new values for any
+  /// duplicate keys:
+  ///
+  ///     let dictionary = ["a": 1, "b": 2]
+  ///     let otherDictionary = ["a": 3, "b": 4]
+  ///
+  ///     let keepingCurrent = dictionary.merging(otherDictionary)
+  ///           { (current, _) in current }
+  ///     // ["b": 2, "a": 1]
+  ///     let replacingCurrent = dictionary.merging(otherDictionary)
+  ///           { (_, new) in new }
+  ///     // ["b": 4, "a": 3]
+  ///
+  /// - Parameters:
+  ///   - other:  A dictionary to merge.
+  ///   - combine: A closure that takes the current and new values for any
+  ///     duplicate keys. The closure returns the desired value for the final
+  ///     dictionary.
+  /// - Returns: A new dictionary with the combined keys and values of this
+  ///   dictionary and `other`.
+  public func merging(
+    _ other: [Key: Value],
+    uniquingKeysWith combine: (Value, Value) throws -> Value
+  ) rethrows -> [Key: Value] {
     var result = self
     try result.merge(other, uniquingKeysWith: combine)
     return result
@@ -2274,8 +2340,6 @@ public struct Dictionary<Key : Hashable, Value> :
   ///
   /// - Parameter elements: The key-value pairs that will make up the new
   ///   dictionary. Each key in `elements` must be unique.
-  ///
-  /// - SeeAlso: `ExpressibleByDictionaryLiteral`
   @effects(readonly)
   public init(dictionaryLiteral elements: (Key, Value)...) {
     self.init(_nativeBuffer: _NativeDictionaryBuffer.fromArray(elements))
@@ -4938,7 +5002,7 @@ internal enum _Variant${Self}Buffer<${TypeParametersDecl}> : _HashBuffer {
   internal mutating func nativeMerge<S: Sequence>(
     _ keysAndValues: S,
     uniquingKeysWith combine: (Value, Value) throws -> Value
-  ) rethrows where S.Iterator.Element == (Key, Value) {
+  ) rethrows where S.Element == (Key, Value) {
     for (key, value) in keysAndValues {
       var (i, found) = asNative._find(key, startBucket: asNative._bucket(key))
 
@@ -4969,7 +5033,7 @@ internal enum _Variant${Self}Buffer<${TypeParametersDecl}> : _HashBuffer {
   internal mutating func merge<S: Sequence>(
     _ keysAndValues: S,
     uniquingKeysWith combine: (Value, Value) throws -> Value
-  ) rethrows where S.Iterator.Element == (Key, Value) {
+  ) rethrows where S.Element == (Key, Value) {
     if _fastPath(guaranteedNative) {
       try nativeMerge(keysAndValues, uniquingKeysWith: combine)
       return
@@ -4985,6 +5049,32 @@ internal enum _Variant${Self}Buffer<${TypeParametersDecl}> : _HashBuffer {
 #else
       _sanityCheckFailure("internal error: unexpected cocoa ${Self}")
 #endif
+    }
+  }
+
+  internal mutating func nativeGroup<S: Sequence>(
+    _ values: S,
+    by keyForValue: (S.Element) throws -> Key
+  ) rethrows where Value == [S.Element] {
+    defer { _fixLifetime(asNative) }
+    for value in values {
+      let key = try keyForValue(value)
+      var (i, found) = asNative._find(key, startBucket: asNative._bucket(key))
+      if found {
+        asNative.values[i.offset].append(value)
+      } else {
+        let minCapacity = NativeBuffer.minimumCapacity(
+          minimumCount: asNative.count + 1,
+          maxLoadFactorInverse: _hashContainerDefaultMaxLoadFactorInverse)
+
+        let (_, capacityChanged) = ensureUniqueNativeBuffer(minCapacity)
+        if capacityChanged {
+          i = asNative._find(key, startBucket: asNative._bucket(key)).pos
+        }
+
+        asNative.initializeKey(key, value: [value], at: i.offset)
+        asNative.count += 1
+      }
     }
   }
 %end
@@ -5368,11 +5458,10 @@ extension ${Self} {
 %{
 if Self == 'Set':
   SubscriptingWithIndexDoc = """\
-/// Used to access the members in an instance of `Set<Element>`."""
+/// The position of an element in a set."""
 elif Self == 'Dictionary':
   SubscriptingWithIndexDoc = """\
-/// Used to access the key-value pairs in an instance of
-/// `Dictionary<Key, Value>`.
+/// The position of a key-value pair in a dictionary.
 ///
 /// Dictionary has two subscripting interfaces:
 ///

@@ -621,7 +621,9 @@ void swift::typeCheckExternalDefinitions(SourceFile &SF) {
 void swift::performTypeChecking(SourceFile &SF, TopLevelContext &TLC,
                                 OptionSet<TypeCheckingFlags> Options,
                                 unsigned StartElem,
-                                unsigned WarnLongFunctionBodies) {
+                                unsigned WarnLongFunctionBodies,
+                                unsigned WarnLongExpressionTypeChecking,
+                                unsigned ExpressionTimeoutThreshold) {
   if (SF.ASTStage == SourceFile::TypeChecked)
     return;
 
@@ -646,6 +648,10 @@ void swift::performTypeChecking(SourceFile &SF, TopLevelContext &TLC,
 
     if (MyTC) {
       MyTC->setWarnLongFunctionBodies(WarnLongFunctionBodies);
+      MyTC->setWarnLongExpressionTypeChecking(WarnLongExpressionTypeChecking);
+      if (ExpressionTimeoutThreshold != 0)
+        MyTC->setExpressionTimeoutThreshold(ExpressionTimeoutThreshold);
+
       if (Options.contains(TypeCheckingFlags::DebugTimeFunctionBodies))
         MyTC->enableDebugTimeFunctionBodies();
 

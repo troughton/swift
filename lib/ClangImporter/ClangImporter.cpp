@@ -572,24 +572,6 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
     }
   }
 
-  if (triple.isOSDarwin()) {
-    std::string minVersionBuf;
-    llvm::raw_string_ostream minVersionOpt{minVersionBuf};
-    minVersionOpt << getMinVersionOptNameForDarwinTriple(triple);
-
-    unsigned major, minor, micro;
-    if (triple.isiOS()) {
-      triple.getiOSVersion(major, minor, micro);
-    } else if (triple.isWatchOS()) {
-      triple.getWatchOSVersion(major, minor, micro);
-    } else {
-      assert(triple.isMacOSX());
-      triple.getMacOSXVersion(major, minor, micro);
-    }
-    minVersionOpt << clang::VersionTuple(major, minor, micro);
-    invocationArgStrs.push_back(std::move(minVersionOpt.str()));
-  }
-
   if (searchPathOpts.SDKPath.empty()) {
     invocationArgStrs.push_back("-Xclang");
     invocationArgStrs.push_back("-nostdsysteminc");
@@ -629,6 +611,23 @@ getNormalInvocationArguments(std::vector<std::string> &invocationArgStrs,
       "-Xclang", "-fmodule-format=obj",
     });
   }
+
+  // Enable API notes alongside headers/in frameworks.
+  invocationArgStrs.push_back("-fapinotes-modules");
+
+  // Add API notes paths.
+  for (const auto &searchPath : searchPathOpts.ImportSearchPaths) {
+    invocationArgStrs.push_back("-iapinotes-modules");
+    invocationArgStrs.push_back(searchPath);
+  }
+  invocationArgStrs.push_back("-iapinotes-modules");
+  invocationArgStrs.push_back(searchPathOpts.RuntimeLibraryImportPath);
+
+  // Map the Swift major version into the API notes version for Swift. This
+  // has the effect of allowing API notes to effect changes only on Swift
+  // major versions, not minor versions.
+  invocationArgStrs.push_back("-fapinotes-swift-version=" +
+                              llvm::itostr(languageVersion[0]));
 }
 
 static void
@@ -656,6 +655,24 @@ addCommonInvocationArguments(std::vector<std::string> &invocationArgStrs,
 
   invocationArgStrs.push_back("-target");
   invocationArgStrs.push_back(triple.str());
+
+  if (triple.isOSDarwin()) {
+    std::string minVersionBuf;
+    llvm::raw_string_ostream minVersionOpt{minVersionBuf};
+    minVersionOpt << getMinVersionOptNameForDarwinTriple(triple);
+
+    unsigned major, minor, micro;
+    if (triple.isiOS()) {
+      triple.getiOSVersion(major, minor, micro);
+    } else if (triple.isWatchOS()) {
+      triple.getWatchOSVersion(major, minor, micro);
+    } else {
+      assert(triple.isMacOSX());
+      triple.getMacOSXVersion(major, minor, micro);
+    }
+    minVersionOpt << clang::VersionTuple(major, minor, micro);
+    invocationArgStrs.push_back(std::move(minVersionOpt.str()));
+  }
 
   invocationArgStrs.push_back(ImporterImpl::moduleImportBufferName);
 
@@ -700,23 +717,6 @@ addCommonInvocationArguments(std::vector<std::string> &invocationArgStrs,
   for (auto extraArg : importerOpts.ExtraArgs) {
     invocationArgStrs.push_back(extraArg);
   }
-
-  // Enable API notes alongside headers/in frameworks.
-  invocationArgStrs.push_back("-fapinotes-modules");
-
-  // Add API notes paths.
-  for (const auto &searchPath : searchPathOpts.ImportSearchPaths) {
-    invocationArgStrs.push_back("-iapinotes-modules");
-    invocationArgStrs.push_back(searchPath);
-  }
-  invocationArgStrs.push_back("-iapinotes-modules");
-  invocationArgStrs.push_back(searchPathOpts.RuntimeLibraryImportPath);
-
-  // Map the Swift major version into the API notes version for Swift. This
-  // has the effect of allowing API notes to effect changes only on Swift
-  // major versions, not minor versions.
-  invocationArgStrs.push_back("-fapinotes-swift-version=" +
-    llvm::itostr(ctx.LangOpts.EffectiveLanguageVersion[0]));
 }
 
 bool ClangImporter::canReadPCH(StringRef PCHFilename) {

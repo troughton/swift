@@ -32,9 +32,11 @@ add_swift_library(swiftFoundation ${SWIFT_SDK_OVERLAY_LIBRARY_BUILD_TYPES} IS_SD
   NSGeometry.swift
   NSIndexSet.swift
   NSNumber.swift
+  NSObject.swift
   NSPredicate.swift
   NSRange.swift
   NSSet.swift
+  NSSortDescriptor.swift
   NSString.swift
   NSStringAPI.swift
   NSStringEncodings.swift
@@ -44,6 +46,7 @@ add_swift_library(swiftFoundation ${SWIFT_SDK_OVERLAY_LIBRARY_BUILD_TYPES} IS_SD
   NSValue.swift.gyb
   PersonNameComponents.swift
   PlistEncoder.swift
+  Progress.swift
   ReferenceConvertible.swift
   String.swift
   TimeZone.swift
@@ -51,6 +54,7 @@ add_swift_library(swiftFoundation ${SWIFT_SDK_OVERLAY_LIBRARY_BUILD_TYPES} IS_SD
   URLComponents.swift
   URLRequest.swift
   UUID.swift
+  CheckClass.mm
 
   SWIFT_COMPILE_FLAGS "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}" "-Xllvm" "-sil-inline-generics" "-Xllvm" "-sil-partial-specialization"
   LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"

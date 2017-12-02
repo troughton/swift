@@ -3233,15 +3233,33 @@ public extension RawRepresentable where RawValue == String, Self : Decodable {
 }
 
 //===----------------------------------------------------------------------===//
-// Optional Conformance
+// Optional/Collection Type Conformances
 //===----------------------------------------------------------------------===//
+
+fileprivate func assertTypeIsEncodable<T>(_ type: T.Type, in wrappingType: Any.Type) {
+    guard T.self is Encodable.Type else {
+        if T.self == Encodable.self || T.self == Codable.self {
+            preconditionFailure("\(wrappingType) does not conform to Encodable because Encodable does not conform to itself. You must use a concrete type to encode or decode.")
+        } else {
+            preconditionFailure("\(wrappingType) does not conform to Encodable because \(T.self) does not conform to Encodable.")
+        }
+    }
+}
+
+fileprivate func assertTypeIsDecodable<T>(_ type: T.Type, in wrappingType: Any.Type) {
+    guard T.self is Decodable.Type else {
+        if T.self == Decodable.self || T.self == Codable.self {
+            preconditionFailure("\(wrappingType) does not conform to Decodable because Decodable does not conform to itself. You must use a concrete type to encode or decode.")
+        } else {
+            preconditionFailure("\(wrappingType) does not conform to Decodable because \(T.self) does not conform to Decodable.")
+        }
+    }
+}
 
 // FIXME: Uncomment when conditional conformance is available.
 extension Optional : Encodable /* where Wrapped : Encodable */ {
     public func encode(to encoder: Encoder) throws {
-        guard Wrapped.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Encodable because \(Wrapped.self) does not conform to Encodable.")
-        }
+        assertTypeIsEncodable(Wrapped.self, in: type(of: self))
 
         var container = encoder.singleValueContainer()
         switch self {
@@ -3253,12 +3271,9 @@ extension Optional : Encodable /* where Wrapped : Encodable */ {
 
 extension Optional : Decodable /* where Wrapped : Decodable */ {
     public init(from decoder: Decoder) throws {
-        // Initialize self here so we can print type(of: self).
+        // Initialize self here so we can get type(of: self).
         self = .none
-
-        guard Wrapped.self is Decodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Decodable because \(Wrapped.self) does not conform to Decodable.")
-        }
+        assertTypeIsDecodable(Wrapped.self, in: type(of: self))
 
         let container = try decoder.singleValueContainer()
         if !container.decodeNil() {
@@ -3269,16 +3284,10 @@ extension Optional : Decodable /* where Wrapped : Decodable */ {
     }
 }
 
-//===----------------------------------------------------------------------===//
-// Collection Conformances
-//===----------------------------------------------------------------------===//
-
 // FIXME: Uncomment when conditional conformance is available.
 extension Array : Encodable /* where Element : Encodable */ {
     public func encode(to encoder: Encoder) throws {
-        guard Element.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Encodable because \(Element.self) does not conform to Encodable.")
-        }
+        assertTypeIsEncodable(Element.self, in: type(of: self))
 
         var container = encoder.unkeyedContainer()
         for element in self {
@@ -3292,12 +3301,9 @@ extension Array : Encodable /* where Element : Encodable */ {
 
 extension Array : Decodable /* where Element : Decodable */ {
     public init(from decoder: Decoder) throws {
-        // Initialize self here so we can print type(of: self).
+        // Initialize self here so we can get type(of: self).
         self.init()
-
-        guard Element.self is Decodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Decodable because \(Element.self) does not conform to Decodable.")
-        }
+        assertTypeIsDecodable(Element.self, in: type(of: self))
 
         let metaType = (Element.self as! Decodable.Type)
         var container = try decoder.unkeyedContainer()
@@ -3313,9 +3319,7 @@ extension Array : Decodable /* where Element : Decodable */ {
 
 extension Set : Encodable /* where Element : Encodable */ {
     public func encode(to encoder: Encoder) throws {
-        guard Element.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Encodable because \(Element.self) does not conform to Encodable.")
-        }
+        assertTypeIsEncodable(Element.self, in: type(of: self))
 
         var container = encoder.unkeyedContainer()
         for element in self {
@@ -3329,12 +3333,9 @@ extension Set : Encodable /* where Element : Encodable */ {
 
 extension Set : Decodable /* where Element : Decodable */ {
     public init(from decoder: Decoder) throws {
-        // Initialize self here so we can print type(of: self).
+        // Initialize self here so we can get type(of: self).
         self.init()
-
-        guard Element.self is Decodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Decodable because \(Element.self) does not conform to Decodable.")
-        }
+        assertTypeIsDecodable(Element.self, in: type(of: self))
 
         let metaType = (Element.self as! Decodable.Type)
         var container = try decoder.unkeyedContainer()
@@ -3366,13 +3367,8 @@ internal struct _DictionaryCodingKey : CodingKey {
 
 extension Dictionary : Encodable /* where Key : Encodable, Value : Encodable */ {
     public func encode(to encoder: Encoder) throws {
-        guard Key.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Encodable because \(Key.self) does not conform to Encodable.")
-        }
-
-        guard Value.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Encodable because \(Value.self) does not conform to Encodable.")
-        }
+        assertTypeIsEncodable(Key.self, in: type(of: self))
+        assertTypeIsEncodable(Value.self, in: type(of: self))
 
         if Key.self == String.self {
             // Since the keys are already Strings, we can use them as keys directly.
@@ -3411,14 +3407,8 @@ extension Dictionary : Decodable /* where Key : Decodable, Value : Decodable */ 
     public init(from decoder: Decoder) throws {
         // Initialize self here so we can print type(of: self).
         self.init()
-
-        guard Key.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Decodable because \(Key.self) does not conform to Decodable.")
-        }
-
-        guard Value.self is Encodable.Type else {
-            preconditionFailure("\(type(of: self)) does not conform to Decodable because \(Value.self) does not conform to Decodable.")
-        }
+        assertTypeIsDecodable(Key.self, in: type(of: self))
+        assertTypeIsDecodable(Value.self, in: type(of: self))
 
         if Key.self == String.self {
             // The keys are Strings, so we should be able to expect a keyed container.
@@ -3574,213 +3564,138 @@ public extension KeyedEncodingContainerProtocol {
 
 // Default implementations for decode(_:forKey:) in terms of decodeIfPresent(_:forKey:)
 public extension KeyedDecodingContainerProtocol {
-    public func decode(_ type: Bool.Type, forKey key: Key) throws -> Bool {
-        if let value = try decodeIfPresent(Bool.self, forKey: key) {
-            return value
-        } else if contains(key) {
+    @_semantics("optimize.sil.specialize.generic.never")
+    @_semantics("optimize.sil.specialize.generic.partial.never")
+    @inline(never)
+    internal func _errorInDecoding<T: Decodable>(_ type: T.Type, forKey key: Key) -> DecodingError {
+        if contains(key) {
             var path = codingPath
             path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
+            return DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
             var path = codingPath
             path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            return DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+        }
+    }
+
+    public func decode(_ type: Bool.Type, forKey key: Key) throws -> Bool {
+        if let value = try decodeIfPresent(Bool.self, forKey: key) {
+            return value
+        } else {
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Int.Type, forKey key: Key) throws -> Int {
         if let value = try decodeIfPresent(Int.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Int8.Type, forKey key: Key) throws -> Int8 {
         if let value = try decodeIfPresent(Int8.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Int16.Type, forKey key: Key) throws -> Int16 {
         if let value = try decodeIfPresent(Int16.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Int32.Type, forKey key: Key) throws -> Int32 {
         if let value = try decodeIfPresent(Int32.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Int64.Type, forKey key: Key) throws -> Int64 {
         if let value = try decodeIfPresent(Int64.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: UInt.Type, forKey key: Key) throws -> UInt {
         if let value = try decodeIfPresent(UInt.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: UInt8.Type, forKey key: Key) throws -> UInt8 {
         if let value = try decodeIfPresent(UInt8.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: UInt16.Type, forKey key: Key) throws -> UInt16 {
         if let value = try decodeIfPresent(UInt16.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: UInt32.Type, forKey key: Key) throws -> UInt32 {
         if let value = try decodeIfPresent(UInt32.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: UInt64.Type, forKey key: Key) throws -> UInt64 {
         if let value = try decodeIfPresent(UInt64.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Float.Type, forKey key: Key) throws -> Float {
         if let value = try decodeIfPresent(Float.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: Double.Type, forKey key: Key) throws -> Double {
         if let value = try decodeIfPresent(Double.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode(_ type: String.Type, forKey key: Key) throws -> String {
         if let value = try decodeIfPresent(String.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 
     public func decode<T : Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
         if let value = try decodeIfPresent(T.self, forKey: key) {
             return value
-        } else if contains(key) {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: path, debugDescription: "Found null value when expecting non-optional type \(type) for coding key \"\(key)\""))
         } else {
-            var path = codingPath
-            path.append(key)
-            throw DecodingError.keyNotFound(key, DecodingError.Context(codingPath: path, debugDescription: "Key not found when expecting non-optional type \(type) for coding key \"\(key)\""))
+            throw _errorInDecoding(type, forKey: key)
         }
     }
 }
@@ -3884,153 +3799,134 @@ public extension UnkeyedEncodingContainer {
 
 // Default implementations for decode(_:) in terms of decodeIfPresent(_:)
 public extension UnkeyedDecodingContainer {
+    @_semantics("optimize.sil.specialize.generic.never")
+    @_semantics("optimize.sil.specialize.generic.partial.never")
+    @inline(never)
+    internal func _errorInDecoding<T: Decodable>(_ type: T.Type) -> DecodingError {
+        if !isAtEnd {
+            return DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
+        } else {
+            return DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+        }
+    }
+
     mutating func decode(_ type: Bool.Type) throws -> Bool {
         if let value = try decodeIfPresent(Bool.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Int.Type) throws -> Int {
         if let value = try decodeIfPresent(Int.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Int8.Type) throws -> Int8 {
         if let value = try decodeIfPresent(Int8.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Int16.Type) throws -> Int16 {
         if let value = try decodeIfPresent(Int16.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Int32.Type) throws -> Int32 {
         if let value = try decodeIfPresent(Int32.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Int64.Type) throws -> Int64 {
         if let value = try decodeIfPresent(Int64.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: UInt.Type) throws -> UInt {
         if let value = try decodeIfPresent(UInt.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: UInt8.Type) throws -> UInt8 {
         if let value = try decodeIfPresent(UInt8.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: UInt16.Type) throws -> UInt16 {
         if let value = try decodeIfPresent(UInt16.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: UInt32.Type) throws -> UInt32 {
         if let value = try decodeIfPresent(UInt32.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: UInt64.Type) throws -> UInt64 {
         if let value = try decodeIfPresent(UInt64.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Float.Type) throws -> Float {
         if let value = try decodeIfPresent(Float.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: Double.Type) throws -> Double {
         if let value = try decodeIfPresent(Double.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode(_ type: String.Type) throws -> String {
         if let value = try decodeIfPresent(String.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 
     mutating func decode<T : Decodable>(_ type: T.Type) throws -> T {
         if let value = try decodeIfPresent(T.self) {
             return value
-        } else if !isAtEnd {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "Found null value when expecting non-optional type \(type)"))
         } else {
-            throw DecodingError.valueNotFound(type, DecodingError.Context(codingPath: codingPath, debugDescription: "No remaining elements when expecting non-optional type \(type)"))
+            throw _errorInDecoding(type)
         }
     }
 }

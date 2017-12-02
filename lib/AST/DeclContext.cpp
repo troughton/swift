@@ -61,17 +61,10 @@ DeclContext::getAsTypeOrTypeExtensionContext() const {
     auto ED = cast<ExtensionDecl>(this);
     auto type = ED->getExtendedType();
 
-    if (type.isNull() || type->hasError())
+    if (!type)
       return nullptr;
 
-    if (auto ND = type->getNominalOrBoundGenericNominal())
-      return ND;
-
-    if (auto unbound = dyn_cast<UnboundGenericType>(type.getPointer())) {
-      return unbound->getDecl();
-    }
-
-    return nullptr;
+    return type->getAnyNominal();
   }
 
   case DeclContextKind::GenericTypeDecl:
@@ -544,7 +537,8 @@ ResilienceExpansion DeclContext::getResilienceExpansion() const {
 
       // If the function is not externally visible, we will not be serializing
       // its body.
-      if (AFD->getEffectiveAccess() < Accessibility::Public)
+      if (!AFD->getFormalAccessScope(/*useDC=*/nullptr,
+                                     /*respectVersionedAttr=*/true).isPublic())
         break;
 
       // Bodies of public transparent and always-inline functions are
@@ -654,6 +648,30 @@ DeclContext::isCascadingContextForLookup(bool functionsAreNonCascading) const {
   }
 
   return getParent()->isCascadingContextForLookup(true);
+}
+
+unsigned DeclContext::getSyntacticDepth() const {
+  // Module scope == depth 0.
+  if (isModuleScopeContext())
+    return 0;
+
+  return 1 + getParent()->getSyntacticDepth();
+}
+
+unsigned DeclContext::getSemanticDepth() const {
+  // For extensions, count the depth of the nominal type being extended.
+  if (auto ext = dyn_cast<ExtensionDecl>(this)) {
+    if (auto nominal = getAsNominalTypeOrNominalTypeExtensionContext())
+      return nominal->getSemanticDepth();
+
+    return 1;
+  }
+
+  // Module scope == depth 0.
+  if (isModuleScopeContext())
+    return 0;
+
+  return 1 + getParent()->getSemanticDepth();
 }
 
 bool DeclContext::walkContext(ASTWalker &Walker) {

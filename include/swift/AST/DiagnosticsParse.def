@@ -182,6 +182,9 @@ ERROR(expected_decl,none,
       "expected declaration", ())
 ERROR(expected_identifier_in_decl,none,
       "expected identifier in %0 declaration", (StringRef))
+ERROR(number_cant_start_decl_name,none,
+      "%0 name can only start with a letter or underscore, not a number",
+      (StringRef))
 ERROR(expected_identifier_after_case_comma,none,
       "expected identifier after comma in enum 'case' declaration", ())
 ERROR(decl_redefinition,none,
@@ -1317,6 +1320,11 @@ ERROR(attr_objc_expected_rparen,none,
       "expected ')' after name for @objc", ())
 ERROR(attr_objc_empty_name,none,
       "expected name within parentheses of @objc attribute", ())
+ERROR(attr_nskeyedarchiverclassname_removed, none,
+      "@NSKeyedArchiverClassName has been removed; use @objc instead", ())
+ERROR(attr_nskeyedarchiverencodenongenericsubclassesonly_removed, none,
+      "@NSKeyedArchiverEncodeNonGenericSubclassesOnly is no longer necessary",
+      ())
 
 // opened
 ERROR(opened_attribute_expected_lparen,none,

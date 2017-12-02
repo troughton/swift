@@ -117,10 +117,10 @@ extension String {
   ///     // Prints "this happened, more or less."
   ///
   /// - Parameter body: A closure that takes a character view as its argument.
-  ///   The `CharacterView` argument is valid only for the duration of the
-  ///   closure's execution.
-  /// - Returns: The return value of the `body` closure, if any, is the return
-  ///   value of this method.
+  ///   If `body` has a return value, that value is also used as the return
+  ///   value for the `withMutableCharacters(_:)` method. The `CharacterView`
+  ///   argument is valid only for the duration of the closure's execution.
+  /// - Returns: The return value, if any, of the `body` closure parameter.
   public mutating func withMutableCharacters<R>(
     _ body: (inout CharacterView) -> R
   ) -> R {
@@ -702,13 +702,11 @@ extension String.CharacterView : RangeReplaceableCollection {
   ///
   /// - Parameter c: The character to append to the character view.
   public mutating func append(_ c: Character) {
-    switch c._representation {
-    case .small(let _63bits):
-      let bytes = Character._smallValue(_63bits)
-      _core.append(contentsOf: Character._SmallUTF16(bytes))
-    case .large(_):
-      _core.append(String(c)._core)
+    if let c0 = c._smallUTF16 {
+      _core.append(contentsOf: c0)
+      return
     }
+    _core.append(c._largeUTF16!)
   }
 
   /// Appends the characters in the given sequence to the character view.
