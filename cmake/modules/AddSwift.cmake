@@ -721,6 +721,7 @@ function(_add_swift_library_single target name)
     swift_windows_generate_sdk_vfs_overlay(SWIFTLIB_SINGLE_VFS_OVERLAY_FLAGS)
     foreach(flag ${SWIFTLIB_SINGLE_VFS_OVERLAY_FLAGS})
       list(APPEND SWIFTLIB_SINGLE_SWIFT_COMPILE_FLAGS -Xcc;${flag})
+      list(APPEND SWIFTLIB_SINGLE_C_COMPILE_FLAGS ${flag})
     endforeach()
     foreach(directory ${SWIFTLIB_INCLUDE})
       list(APPEND SWIFTLIB_SINGLE_SWIFT_COMPILE_FLAGS -Xfrontend;-I${directory})
@@ -1151,6 +1152,10 @@ function(_add_swift_library_single target name)
   # import library targets when the library was added.  Use that to adjust the
   # link libraries.
   if("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS")
+    # We need to set the C++ standard from C++11 to C++14 on Windows
+    # for compilers using the GCC driver.
+    set_property(TARGET "${target}" PROPERTY CXX_STANDARD 14)
+
     foreach(library_list LINK_LIBRARIES INTERFACE_LINK_LIBRARIES PRIVATE_LINK_LIBRARIES)
       set(import_libraries)
       foreach(library ${SWIFTLIB_SINGLE_${library_list}})
@@ -1453,6 +1458,11 @@ function(add_swift_library name)
         continue()
       endif()
 
+      # TODO Support SwiftPrivate on Windows (SR-6489)
+      if ("${sdk}" STREQUAL "WINDOWS" AND "${name}" MATCHES "SwiftPrivate")
+        continue()
+      endif()
+
       set(THIN_INPUT_TARGETS)
 
       # For each architecture supported by this SDK
@@ -1590,6 +1600,12 @@ function(add_swift_library name)
            message("DISABLING AUTOLINK FOR swiftMediaPlayer")
            list(APPEND swiftlib_link_flags_all "-Xlinker" "-ignore_auto_link")
          endif()
+       endif()
+
+       if(NOT "${sdk}" STREQUAL "WINDOWS" AND NOT "${name}" STREQUAL "swiftRemoteMirror")
+          # Add back the flags we removed from the call to HandleLLVMOptions 
+          # in SwiftSharedCMakeConfig.cmake.
+          list(APPEND swiftlib_link_flags_all "-Wl,-z,defs")
        endif()
 
         # Add this library variant.

@@ -81,7 +81,19 @@ macro(swift_common_standalone_build_config_llvm product is_cross_compiling)
   # HACK: this ugly tweaking is to prevent the propagation of the flag from LLVM
   # into swift.  The use of this flag pollutes all targets, and we are not able
   # to remove it on a per-target basis which breaks cross-compilation.
+  # Therefore, we always remove it here and then selectively re-add it to the
+  # link flags.
   string(REGEX REPLACE "-Wl,-z,defs" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+
+  if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
+    # HACK: We need to set the C++ standard from C++11 to C++14 on Windows
+    # cross-compilation targets only. We remove the -std flag here and add
+    # it back as a target property in AddSwift.cmake.
+    string(REPLACE "-std=c++11" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_STANDARD 11)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+  endif()
 
   set(PACKAGE_VERSION "${LLVM_PACKAGE_VERSION}")
   string(REGEX REPLACE "([0-9]+)\\.[0-9]+(\\.[0-9]+)?" "\\1" PACKAGE_VERSION_MAJOR
