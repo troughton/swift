@@ -1141,7 +1141,7 @@ getSanitizerRuntimeLibNameForWindows(StringRef Sanitizer,
   return (Twine("clang_rt.")
       + Sanitizer + "-"
       + Triple.getArchName()
-      + (shared ? ".dll" : ".lib")).str();
+      + ".lib").str();
 }
 
 static std::string
@@ -1212,12 +1212,8 @@ static void
 addLinkRuntimeLibForWindows(const ArgList &Args, ArgStringList &Arguments,
                            StringRef WindowsLibName, 
                            const ToolChain &TC) {
-  SmallString<128> Dir;
-  getRuntimeLibraryPath(Dir, Args, TC);
-  // Remove platform name.
-  llvm::sys::path::remove_filename(Dir);
-  llvm::sys::path::append(Dir, "clang", "lib", "windows");
-  SmallString<128> P(Dir);
+  SmallString<128> P;
+  getClangLibraryPathOnWindows(P);
   llvm::sys::path::append(P, WindowsLibName);
   Arguments.push_back(Args.MakeArgString(P));
 }
@@ -1226,12 +1222,8 @@ static void
 addLinkRuntimeLibForLinux(const ArgList &Args, ArgStringList &Arguments,
                            StringRef LinuxLibName,
                            const ToolChain &TC) {
-  SmallString<128> Dir;
-  getRuntimeLibraryPath(Dir, Args, TC);
-  // Remove platform name.
-  llvm::sys::path::remove_filename(Dir);
-  llvm::sys::path::append(Dir, "clang", "lib", "linux");
-  SmallString<128> P(Dir);
+  SmallString<128> P;
+  getClangLibraryPathOnLinux(P);
   llvm::sys::path::append(P, LinuxLibName);
   Arguments.push_back(Args.MakeArgString(P));
 }
@@ -1263,9 +1255,6 @@ addLinkSanitizerLibArgsForWindows(const ArgList &Args,
                                  ) {
   // Sanitizer runtime libraries requires C++.
   Arguments.push_back("-lc++");
-  // Add explicit dependency on -lc++abi, as -lc++ doesn't re-export
-  // all RTTI-related symbols that are used.
-  Arguments.push_back("-lc++abi");
 
   addLinkRuntimeLibForWindows(Args, Arguments,
       getSanitizerRuntimeLibNameForWindows(Sanitizer, TC.getTriple(), shared), TC);
@@ -1557,31 +1546,7 @@ toolchains::Windows::constructInvocation(const InterpretJobAction &job,
                                              const JobContext &context) const {
   InvocationInfo II = ToolChain::constructInvocation(job, context);
 
-  SmallString<128> runtimeLibraryPath;
-  getRuntimeLibraryPath(runtimeLibraryPath, context.Args, *this);
-
-  addPathEnvironmentVariableIfNeeded(II.ExtraEnvironment, "PATH",
-                                     ":", options::OPT_L, context.Args,
-                                     runtimeLibraryPath);                                            
-
   return II;
-}
-
-
-ToolChain::InvocationInfo
-toolchains::Windows::constructInvocation(const AutolinkExtractJobAction &job,
-                                             const JobContext &context) const {
-  assert(context.Output.getPrimaryOutputType() == types::TY_AutolinkFile);
-
-  ArgStringList Arguments;
-  addPrimaryInputsOfType(Arguments, context.Inputs, types::TY_Object);
-  addInputsOfType(Arguments, context.InputActions, types::TY_Object);
-
-  Arguments.push_back("-o");
-  Arguments.push_back(
-      context.Args.MakeArgString(context.Output.getPrimaryOutputFilename()));
-
-  return {"swift-autolink-extract", Arguments};
 }
 
 ToolChain::InvocationInfo
@@ -1622,15 +1587,6 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
     if (auto toolchainClang = llvm::sys::findProgramByName("clang++", {toolchainPath})) {
       Clang = context.Args.MakeArgString(toolchainClang.get());
     }
-
-    // Look for binutils in the toolchain folder.
-    Arguments.push_back("-B");
-    Arguments.push_back(context.Args.MakeArgString(A->getValue()));
-  }
-
-  if (getTriple().getOS() == llvm::Triple::Linux &&
-      job.getKind() == LinkKind::Executable) {
-    Arguments.push_back("-pie");
   }
 
   std::string Target = getTriple().str();
@@ -1661,10 +1617,8 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   // Add the runtime library link path, which is platform-specific and found
   // relative to the compiler.
   if (!(staticExecutable || staticStdlib)) {
-    // FIXME: We probably shouldn't be adding a libpath here unless we know
-    //        ahead of time the standard library won't be copied.
-    Arguments.push_back("-Xlinker");
-    Arguments.push_back(context.Args.MakeArgString("/LIBPATH:" + SharedRuntimeLibPath + "/"
+    Arguments.push_back("-L");
+    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/"
                           + getTriple().getArchName()));
   }
 
@@ -1697,8 +1651,8 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   StringRef VCToolsDir(VCToolsInstallDir);
 
   if (!VCToolsDir.empty()) {
-    Arguments.push_back("-Xlinker");
-    Arguments.push_back(context.Args.MakeArgString("/LIBPATH:" + llvm::Twine(VCToolsInstallDir) 
+    Arguments.push_back("-L");
+    Arguments.push_back(context.Args.MakeArgString(llvm::Twine(VCToolsInstallDir) 
         + "/Lib/" + tripleWinArchName));
   }
 
@@ -1706,11 +1660,11 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   StringRef UCRTVer(UCRTVersion);
 
   if (!UCRTDir.empty() && !UCRTVer.empty()) {
-      Arguments.push_back("-Xlinker");
-      Arguments.push_back(context.Args.MakeArgString("/LIBPATH:" + llvm::Twine(UCRTDir) 
+      Arguments.push_back("-L");
+      Arguments.push_back(context.Args.MakeArgString(llvm::Twine(UCRTDir) 
           + "/Lib/" + llvm::Twine(UCRTVer) + "/ucrt/" + tripleWinArchName));
-      Arguments.push_back("-Xlinker");
-      Arguments.push_back(context.Args.MakeArgString("/LIBPATH:" + llvm::Twine(UCRTDir) 
+      Arguments.push_back("-L");
+      Arguments.push_back(context.Args.MakeArgString(llvm::Twine(UCRTDir) 
           + "/Lib/" + llvm::Twine(UCRTVer) + "/um/" + tripleWinArchName));
   }
 
@@ -1729,14 +1683,6 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   if (!context.OI.SDKPath.empty()) {
     Arguments.push_back("--sysroot");
     Arguments.push_back(context.Args.MakeArgString(context.OI.SDKPath));
-  }
-
-  // Add any autolinking scripts to the arguments
-  for (const Job *Cmd : context.Inputs) {
-    auto &OutputInfo = Cmd->getOutput();
-    if (OutputInfo.getPrimaryOutputType() == types::TY_AutolinkFile)
-      Arguments.push_back(context.Args.MakeArgString(
-        Twine("@") + OutputInfo.getPrimaryOutputFilename()));
   }
 
   // Link the standard library.
@@ -2027,8 +1973,7 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
     }
   }
   else {
-    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath));
-    Arguments.push_back("-lswiftCore");
+    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/swiftCore.lib"));
   }
   
   // Explicitly pass the target to the linker
