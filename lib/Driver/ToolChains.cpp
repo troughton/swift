@@ -1714,8 +1714,7 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
     }
   }
   else {
-    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath));
-    Arguments.push_back("-lswiftCore");
+    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/swiftCore.lib"));
   }
   
   // Explicitly pass the target to the driver
@@ -1973,7 +1972,8 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
     }
   }
   else {
-    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/swiftCore.lib"));
+    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath));
+    Arguments.push_back("-lswiftCore");
   }
   
   // Explicitly pass the target to the driver
