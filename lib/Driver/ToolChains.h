@@ -38,6 +38,23 @@ public:
       const override;
 };
 
+class LLVM_LIBRARY_VISIBILITY Windows : public ToolChain {
+protected:
+  InvocationInfo constructInvocation(const InterpretJobAction &job,
+                                     const JobContext &context) const override;
+  InvocationInfo constructInvocation(const AutolinkExtractJobAction &job,
+                                     const JobContext &context) const override;
+  InvocationInfo constructInvocation(const LinkJobAction &job,
+                                     const JobContext &context) const override;
+
+public:
+  Windows(const Driver &D, const llvm::Triple &Triple) : ToolChain(D, Triple) {}
+  ~Windows() = default;
+  bool sanitizerRuntimeLibExists(const llvm::opt::ArgList &args,
+                                 StringRef sanitizerLibName)
+      const override;
+};
+
 class LLVM_LIBRARY_VISIBILITY GenericUnix : public ToolChain {
 protected:
   InvocationInfo constructInvocation(const InterpretJobAction &job,

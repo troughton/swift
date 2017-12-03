@@ -223,8 +223,12 @@ Driver::buildToolChain(const llvm::opt::InputArgList &ArgList) {
   case llvm::Triple::FreeBSD:
     return llvm::make_unique<toolchains::GenericUnix>(*this, target);
     break;
-  case llvm::Triple::Win32:
-    return llvm::make_unique<toolchains::Cygwin>(*this, target);
+  case llvm::Triple::Win32: 
+    if (target.isWindowsCygwinEnvironment()) {
+      return llvm::make_unique<toolchains::Cygwin>(driver, target);
+    } else {
+      return llvm::make_unique<toolchains::Windows>(driver, target);
+    }
     break;
   case llvm::Triple::Haiku:
     return llvm::make_unique<toolchains::GenericUnix>(*this, target);
