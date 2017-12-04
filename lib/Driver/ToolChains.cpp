@@ -1631,21 +1631,21 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
 
   StringRef tripleWinArchName;
   switch (getTriple().getArch()) {
-    case llvm::Triple::x86:
-      tripleWinArchName = "x86";
-      break;
-    case llvm::Triple::x86_64:
-      tripleWinArchName = "x64";
-      break;
-    case llvm::Triple::arm:
-      tripleWinArchName = "arm";
-      break;
-    case llvm::Triple::aarch64:
-      tripleWinArchName = "arm64";
-      break;
-    default:
-      tripleWinArchName = getTriple().getArchName();
-      break;
+  case llvm::Triple::x86:
+    tripleWinArchName = "x86";
+    break;
+  case llvm::Triple::x86_64:
+    tripleWinArchName = "x64";
+    break;
+  case llvm::Triple::arm:
+    tripleWinArchName = "arm";
+    break;
+  case llvm::Triple::aarch64:
+    tripleWinArchName = "arm64";
+    break;
+  default:
+    tripleWinArchName = getTriple().getArchName();
+    break;
   }
 
   StringRef VCToolsDir(VCToolsInstallDir);
@@ -1660,12 +1660,12 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   StringRef UCRTVer(UCRTVersion);
 
   if (!UCRTDir.empty() && !UCRTVer.empty()) {
-      Arguments.push_back("-L");
-      Arguments.push_back(context.Args.MakeArgString(llvm::Twine(UCRTDir) 
-          + "/Lib/" + llvm::Twine(UCRTVer) + "/ucrt/" + tripleWinArchName));
-      Arguments.push_back("-L");
-      Arguments.push_back(context.Args.MakeArgString(llvm::Twine(UCRTDir) 
-          + "/Lib/" + llvm::Twine(UCRTVer) + "/um/" + tripleWinArchName));
+    Arguments.push_back("-L");
+    Arguments.push_back(context.Args.MakeArgString(llvm::Twine(UCRTDir)
+        + "/Lib/" + llvm::Twine(UCRTVer) + "/ucrt/" + tripleWinArchName));
+    Arguments.push_back("-L");
+    Arguments.push_back(context.Args.MakeArgString(llvm::Twine(UCRTDir)
+        + "/Lib/" + llvm::Twine(UCRTVer) + "/um/" + tripleWinArchName));
   }
 
   addPrimaryInputsOfType(Arguments, context.Inputs, types::TY_Object);
@@ -1716,9 +1716,6 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   else {
     Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/swiftCore.lib"));
   }
-  
-  // Explicitly pass the target to the linker
-  Arguments.push_back(context.Args.MakeArgString("--target=" + getTriple().str()));
 
   if (job.getKind() == LinkKind::Executable) {
     if (context.OI.SelectedSanitizers & SanitizerKind::Address)
