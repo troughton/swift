@@ -212,21 +212,19 @@ makeToolChain(Driver &driver, const llvm::Triple &target) {
     return llvm::make_unique<toolchains::Darwin>(driver, target);
     break;
   case llvm::Triple::Linux:
-    if (target.isAndroid()) {
+    if (target.isAndroid())
       return llvm::make_unique<toolchains::Android>(driver, target);
-    } else {
+    else
       return llvm::make_unique<toolchains::GenericUnix>(driver, target);
-    }
     break;
   case llvm::Triple::FreeBSD:
     return llvm::make_unique<toolchains::GenericUnix>(driver, target);
     break;
   case llvm::Triple::Win32: 
-    if (target.isWindowsCygwinEnvironment()) {
+    if (target.isWindowsCygwinEnvironment())
       return llvm::make_unique<toolchains::Cygwin>(driver, target);
-    } else {
+    else
       return llvm::make_unique<toolchains::Windows>(driver, target);
-    }
     break;
   case llvm::Triple::Haiku:
     return llvm::make_unique<toolchains::GenericUnix>(driver, target);
