@@ -1135,7 +1135,7 @@ getSanitizerRuntimeLibNameForDarwin(StringRef Sanitizer,
 }
 
 static std::string getSanitizerRuntimeLibNameForWindows(
-    StringRef Sanitizer, const llvm::Triple &Triple, bool shared = true) {
+    StringRef Sanitizer, const llvm::Triple &Triple) {
   return (Twine("clang_rt.") + Sanitizer + "-" + Triple.getArchName() + ".lib")
       .str();
 }
@@ -1246,14 +1246,10 @@ addLinkSanitizerLibArgsForDarwin(const ArgList &Args,
 static void addLinkSanitizerLibArgsForWindows(const ArgList &Args,
                                               ArgStringList &Arguments,
                                               StringRef Sanitizer,
-                                              const ToolChain &TC,
-                                              bool shared = true) {
-  // Sanitizer runtime libraries requires C++.
-  Arguments.push_back("-lc++");
-
+                                              const ToolChain &TC) {
   addLinkRuntimeLibForWindows(
       Args, Arguments,
-      getSanitizerRuntimeLibNameForWindows(Sanitizer, TC.getTriple(), shared),
+      getSanitizerRuntimeLibNameForWindows(Sanitizer, TC.getTriple()),
       TC);
 }
 
@@ -1593,16 +1589,10 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
     Arguments.push_back(context.Args.MakeArgString(Target));
   }
 
-  bool staticExecutable = false;
-  bool staticStdlib = false;
-
-  if (context.Args.hasFlag(options::OPT_static_executable,
-                           options::OPT_no_static_executable, false)) {
-    staticExecutable = true;
-  } else if (context.Args.hasFlag(options::OPT_static_stdlib,
-                                  options::OPT_no_static_stdlib, false)) {
-    staticStdlib = true;
-  }
+  bool staticExecutable = context.Args.hasFlag(
+      options::OPT_static_executable, options::OPT_no_static_executable, false);
+  bool staticStdlib = context.Args.hasFlag(
+      options::OPT_static_stdlib, options::OPT_no_static_stdlib, false);
 
   SmallString<128> SharedRuntimeLibPath;
   getRuntimeLibraryPath(SharedRuntimeLibPath, context.Args, *this);
