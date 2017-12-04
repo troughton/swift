@@ -1169,8 +1169,8 @@ bool toolchains::GenericUnix::sanitizerRuntimeLibExists(
     const ArgList &args, StringRef sanitizer) const {
   SmallString<128> sanitizerLibPath;
   getClangLibraryPathOnLinux(sanitizerLibPath, args, *this);
-  llvm::sys::path::append(sanitizerLibPath, getSanitizerRuntimeLibNameForLinux(
-                                                sanitizer, this->getTriple()));
+  llvm::sys::path::append(sanitizerLibPath,
+      getSanitizerRuntimeLibNameForLinux(sanitizer, this->getTriple()));
   return llvm::sys::fs::exists(sanitizerLibPath.str());
 }
 
