@@ -231,9 +231,9 @@ extension Unicode.UTF8 : UnicodeCodec {
     case .valid(let s):
       return (
         result: UTF8.decode(s).value,
-        length: UInt8(extendingOrTruncating: s.count))
+        length: UInt8(truncatingIfNeeded: s.count))
     case .error(let l):
-      return (result: nil, length: UInt8(extendingOrTruncating: l))
+      return (result: nil, length: UInt8(truncatingIfNeeded: l))
     case .emptyInput: Builtin.unreachable()
     }
   }
@@ -260,16 +260,16 @@ extension Unicode.UTF8 : UnicodeCodec {
     into processCodeUnit: (CodeUnit) -> Void
   ) {
     var s = encode(input)!._biasedBits
-    processCodeUnit(UInt8(extendingOrTruncating: s) &- 0x01)
+    processCodeUnit(UInt8(truncatingIfNeeded: s) &- 0x01)
     s &>>= 8
     if _fastPath(s == 0) { return }
-    processCodeUnit(UInt8(extendingOrTruncating: s) &- 0x01)
+    processCodeUnit(UInt8(truncatingIfNeeded: s) &- 0x01)
     s &>>= 8
     if _fastPath(s == 0) { return }
-    processCodeUnit(UInt8(extendingOrTruncating: s) &- 0x01)
+    processCodeUnit(UInt8(truncatingIfNeeded: s) &- 0x01)
     s &>>= 8
     if _fastPath(s == 0) { return }
-    processCodeUnit(UInt8(extendingOrTruncating: s) &- 0x01)
+    processCodeUnit(UInt8(truncatingIfNeeded: s) &- 0x01)
   }
 
   /// Returns a Boolean value indicating whether the specified code unit is a
@@ -411,10 +411,10 @@ extension Unicode.UTF16 : UnicodeCodec {
     into processCodeUnit: (CodeUnit) -> Void
   ) {
     var s = encode(input)!._storage
-    processCodeUnit(UInt16(extendingOrTruncating: s))
+    processCodeUnit(UInt16(truncatingIfNeeded: s))
     s &>>= 16
     if _fastPath(s == 0) { return }
-    processCodeUnit(UInt16(extendingOrTruncating: s))
+    processCodeUnit(UInt16(truncatingIfNeeded: s))
   }
 }
 // @available(swift, obsoleted: 4.0, renamed: "Unicode.UTF16")
@@ -585,99 +585,6 @@ public func transcode<
   }
 }
 
-/// Transcode UTF-16 to UTF-8, replacing ill-formed sequences with U+FFFD.
-///
-/// Returns the index of the first unhandled code unit and the UTF-8 data
-/// that was encoded.
-internal func _transcodeSomeUTF16AsUTF8<Input : Collection>(
-  _ input: Input, _ startIndex: Input.Index
-) -> (Input.Index, _StringCore._UTF8Chunk)
-  where Input.Element == UInt16 {
-
-  typealias _UTF8Chunk = _StringCore._UTF8Chunk
-
-  let endIndex = input.endIndex
-  let utf8Max = MemoryLayout<_UTF8Chunk>.size
-  var result: _UTF8Chunk = 0
-  var utf8Count = 0
-  var nextIndex = startIndex
-  while nextIndex != input.endIndex && utf8Count != utf8Max {
-    let u = UInt(input[nextIndex])
-    let shift = _UTF8Chunk(utf8Count * 8)
-    var utf16Length: Input.IndexDistance = 1
-
-    if _fastPath(u <= 0x7f) {
-      result |= _UTF8Chunk(u) &<< shift
-      utf8Count += 1
-    } else {
-      var scalarUtf8Length: Int
-      var r: UInt
-      if _fastPath((u &>> 11) != 0b1101_1) {
-        // Neither high-surrogate, nor low-surrogate -- well-formed sequence
-        // of 1 code unit, decoding is trivial.
-        if u < 0x800 {
-          r = 0b10__00_0000__110__0_0000
-          r |= u &>> 6
-          r |= (u & 0b11_1111) &<< 8
-          scalarUtf8Length = 2
-        }
-        else {
-          r = 0b10__00_0000__10__00_0000__1110__0000
-          r |= u &>> 12
-          r |= ((u &>> 6) & 0b11_1111) &<< 8
-          r |= (u         & 0b11_1111) &<< 16
-          scalarUtf8Length = 3
-        }
-      } else {
-        let unit0 = u
-        if _slowPath((unit0 &>> 10) == 0b1101_11) {
-          // `unit0` is a low-surrogate.  We have an ill-formed sequence.
-          // Replace it with U+FFFD.
-          r = 0xbdbfef
-          scalarUtf8Length = 3
-        } else if _slowPath(input.index(nextIndex, offsetBy: 1) == endIndex) {
-          // We have seen a high-surrogate and EOF, so we have an ill-formed
-          // sequence.  Replace it with U+FFFD.
-          r = 0xbdbfef
-          scalarUtf8Length = 3
-        } else {
-          let unit1 = UInt(input[input.index(nextIndex, offsetBy: 1)])
-          if _fastPath((unit1 &>> 10) == 0b1101_11) {
-            // `unit1` is a low-surrogate.  We have a well-formed surrogate
-            // pair.
-            let v = 0x10000 + (((unit0 & 0x03ff) &<< 10) | (unit1 & 0x03ff))
-
-            r = 0b10__00_0000__10__00_0000__10__00_0000__1111_0__000
-            r |= v &>> 18
-            r |= ((v &>> 12) & 0b11_1111) &<< 8
-            r |= ((v &>> 6)  & 0b11_1111) &<< 16
-            r |= (v          & 0b11_1111) &<< 24
-            scalarUtf8Length = 4
-            utf16Length = 2
-          } else {
-            // Otherwise, we have an ill-formed sequence.  Replace it with
-            // U+FFFD.
-            r = 0xbdbfef
-            scalarUtf8Length = 3
-          }
-        }
-      }
-      // Don't overrun the buffer
-      if utf8Count + scalarUtf8Length > utf8Max {
-        break
-      }
-      result |= numericCast(r) &<< shift
-      utf8Count += scalarUtf8Length
-    }
-    nextIndex = input.index(nextIndex, offsetBy: utf16Length)
-  }
-  // FIXME: Annoying check, courtesy of <rdar://problem/16740169>
-  if utf8Count < MemoryLayout.size(ofValue: result) {
-    result |= ~0 &<< numericCast(utf8Count * 8)
-  }
-  return (nextIndex, result)
-}
-
 /// Instances of conforming types are used in internal `String`
 /// representation.
 public // @testable
@@ -704,14 +611,14 @@ extension UTF8.CodeUnit : _StringElement {
   public // @testable
   static func _toUTF16CodeUnit(_ x: UTF8.CodeUnit) -> UTF16.CodeUnit {
     _sanityCheck(x <= 0x7f, "should only be doing this with ASCII")
-    return UTF16.CodeUnit(extendingOrTruncating: x)
+    return UTF16.CodeUnit(truncatingIfNeeded: x)
   }
   public // @testable
   static func _fromUTF16CodeUnit(
     _ utf16: UTF16.CodeUnit
   ) -> UTF8.CodeUnit {
     _sanityCheck(utf16 <= 0x7f, "should only be doing this with ASCII")
-    return UTF8.CodeUnit(extendingOrTruncating: utf16)
+    return UTF8.CodeUnit(truncatingIfNeeded: utf16)
   }
 }
 
@@ -762,7 +669,7 @@ extension UTF16 {
   /// - Returns: The leading surrogate code unit of `x` when encoded in UTF-16.
   public static func leadSurrogate(_ x: Unicode.Scalar) -> UTF16.CodeUnit {
     _precondition(width(x) == 2)
-    return 0xD800 + UTF16.CodeUnit(extendingOrTruncating:
+    return 0xD800 + UTF16.CodeUnit(truncatingIfNeeded:
       (x.value - 0x1_0000) &>> (10 as UInt32))
   }
 
@@ -785,7 +692,7 @@ extension UTF16 {
   /// - Returns: The trailing surrogate code unit of `x` when encoded in UTF-16.
   public static func trailSurrogate(_ x: Unicode.Scalar) -> UTF16.CodeUnit {
     _precondition(width(x) == 2)
-    return 0xDC00 + UTF16.CodeUnit(extendingOrTruncating:
+    return 0xDC00 + UTF16.CodeUnit(truncatingIfNeeded:
       (x.value - 0x1_0000) & (((1 as UInt32) &<< 10) - 1))
   }
 

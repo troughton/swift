@@ -29,18 +29,7 @@ public func _log(_ message: @autoclosure () -> String) {
   // print(message())
 }
 
-extension FixedWidthInteger {
-  @discardableResult
-  // @_transparent
-  public mutating func replaceUWord(_ n: Int, with newBits: UInt) -> Bool {
-    let flippedBits = _word(at: n) ^ newBits
-    self ^= Self(_truncatingBits: flippedBits) << (${word_bits} * n)
-    if _word(at: n) != newBits {
-      _log("###### overflow replacing word \(n) with \(newBits.hex)")
-    }
-    return _word(at: n) == newBits
-  }
-
+extension FixedWidthInteger where Words : Collection {
   /// a hex representation of every bit in the number
   func hexBits(_ bitWidth: Int) -> String {
     let hexDigits: [Unicode.Scalar] = [
@@ -54,12 +43,11 @@ extension FixedWidthInteger {
       if nibbles % 4 == 0 && nibbles != 0 {
         result.insert("_", at: result.startIndex)
       }
-      let lowUWord = x._word(at: 0)
+      let lowUWord = x.words.first ?? 0
       result.insert(
         hexDigits[Int(lowUWord._value) & 0xF],
         at: result.startIndex
       )
-      x.replaceUWord(0, with: lowUWord & ~0xF)
       x /= 16
       nibbles += 1
     }
@@ -84,7 +72,7 @@ func expectEqual<T : FixedWidthInteger>(
   stackTrace: SourceLocStack = SourceLocStack(),
   showFrame: Bool = true,
   file: String = #file, line: UInt = #line
-) {
+) where T.Words : Collection {
   if expected != actual {
     expectationFailure(
       "expected: \(String(reflecting: expected))"
@@ -99,7 +87,7 @@ func expectEqual<T : FixedWidthInteger>(
 }
 
 func expectEqual<T : FixedWidthInteger>(
-  _ expected: (T, ArithmeticOverflow), _ actual: (T, ArithmeticOverflow),
+  _ expected: (T, Bool), _ actual: (T, Bool),
   _ message: @autoclosure () -> String = "",
   stackTrace: SourceLocStack = SourceLocStack(),
   showFrame: Bool = true,
@@ -334,46 +322,56 @@ tests.test("ConversionDWordToWordC") {
   _ = UWord(tooLarge)
 }
 
-tests.test("extendingOrTruncating") {
+tests.test("truncatingIfNeeded") {
 
-  expectEqual(-2, Int8(extendingOrTruncating: UInt8.max - 1))
-  expectEqual(3, Int8(extendingOrTruncating: 3 as UInt8))
-  expectEqual(UInt8.max - 1, UInt8(extendingOrTruncating: -2 as Int8))
-  expectEqual(3, UInt8(extendingOrTruncating: 3 as Int8))
+  expectEqual(-2, Int8(truncatingIfNeeded: UInt8.max - 1))
+  expectEqual(3, Int8(truncatingIfNeeded: 3 as UInt8))
+  expectEqual(UInt8.max - 1, UInt8(truncatingIfNeeded: -2 as Int8))
+  expectEqual(3, UInt8(truncatingIfNeeded: 3 as Int8))
 
-  expectEqual(-2, DWord(extendingOrTruncating: UDWord.max - 1))
-  expectEqual(3, DWord(extendingOrTruncating: 3 as UDWord))
-  expectEqual(UDWord.max - 1, UDWord(extendingOrTruncating: -2 as DWord))
-  expectEqual(3, UDWord(extendingOrTruncating: 3 as DWord))
+  expectEqual(-2, DWord(truncatingIfNeeded: UDWord.max - 1))
+  expectEqual(3, DWord(truncatingIfNeeded: 3 as UDWord))
+  expectEqual(UDWord.max - 1, UDWord(truncatingIfNeeded: -2 as DWord))
+  expectEqual(3, UDWord(truncatingIfNeeded: 3 as DWord))
 
-  expectEqual(-2, Int32(extendingOrTruncating: -2 as Int8))
-  expectEqual(3, Int32(extendingOrTruncating: 3 as Int8))
-  expectEqual(127, Int32(extendingOrTruncating: 127 as UInt8))
-  expectEqual(129, Int32(extendingOrTruncating: 129 as UInt8))
-  expectEqual((1 << 31 - 1) << 1, UInt32(extendingOrTruncating: -2 as Int8))
-  expectEqual(3, UInt32(extendingOrTruncating: 3 as Int8))
-  expectEqual(128, UInt32(extendingOrTruncating: 128 as UInt8))
-  expectEqual(129, UInt32(extendingOrTruncating: 129 as UInt8))
+  expectEqual(-2, Int32(truncatingIfNeeded: -2 as Int8))
+  expectEqual(3, Int32(truncatingIfNeeded: 3 as Int8))
+  expectEqual(127, Int32(truncatingIfNeeded: 127 as UInt8))
+  expectEqual(129, Int32(truncatingIfNeeded: 129 as UInt8))
+  expectEqual((1 << 31 - 1) << 1, UInt32(truncatingIfNeeded: -2 as Int8))
+  expectEqual(3, UInt32(truncatingIfNeeded: 3 as Int8))
+  expectEqual(128, UInt32(truncatingIfNeeded: 128 as UInt8))
+  expectEqual(129, UInt32(truncatingIfNeeded: 129 as UInt8))
 
-  expectEqual(-2, DWord(extendingOrTruncating: -2 as Int8))
-  expectEqual(3, DWord(extendingOrTruncating: 3 as Int8))
-  expectEqual(127, DWord(extendingOrTruncating: 127 as UInt8))
-  expectEqual(129, DWord(extendingOrTruncating: 129 as UInt8))
+  expectEqual(-2, DWord(truncatingIfNeeded: -2 as Int8))
+  expectEqual(3, DWord(truncatingIfNeeded: 3 as Int8))
+  expectEqual(127, DWord(truncatingIfNeeded: 127 as UInt8))
+  expectEqual(129, DWord(truncatingIfNeeded: 129 as UInt8))
   expectEqual(
     (1 << ${word_bits*2-1} - 1) << 1,
-    UDWord(extendingOrTruncating: -2 as Int8))
-  expectEqual(3, UDWord(extendingOrTruncating: 3 as Int8))
-  expectEqual(128, UDWord(extendingOrTruncating: 128 as UInt8))
-  expectEqual(129, UDWord(extendingOrTruncating: 129 as UInt8))
+    UDWord(truncatingIfNeeded: -2 as Int8))
+  expectEqual(3, UDWord(truncatingIfNeeded: 3 as Int8))
+  expectEqual(128, UDWord(truncatingIfNeeded: 128 as UInt8))
+  expectEqual(129, UDWord(truncatingIfNeeded: 129 as UInt8))
 
-  expectEqual(-2, Int8(extendingOrTruncating: -2 as DWord))
-  expectEqual(-2, Int8(extendingOrTruncating: -1 << 67 - 2 as DWord))
-  expectEqual(127, Int8(extendingOrTruncating: 127 as UDWord))
-  expectEqual(-127, Int8(extendingOrTruncating: 129 as UDWord))
-  expectEqual(0b1111_1100, UInt8(extendingOrTruncating: -4 as DWord))
-  expectEqual(0b1111_1100, UInt8(extendingOrTruncating: -1 << 67 - 4 as DWord))
-  expectEqual(128, UInt8(extendingOrTruncating: 128 + 1024 as UDWord))
-  expectEqual(129, UInt8(extendingOrTruncating: 129 + 1024 as UDWord))
+  expectEqual(-2, Int8(truncatingIfNeeded: -2 as DWord))
+  expectEqual(-2, Int8(truncatingIfNeeded: -1 << 67 - 2 as DWord))
+  expectEqual(127, Int8(truncatingIfNeeded: 127 as UDWord))
+  expectEqual(-127, Int8(truncatingIfNeeded: 129 as UDWord))
+  expectEqual(0b1111_1100, UInt8(truncatingIfNeeded: -4 as DWord))
+  expectEqual(0b1111_1100, UInt8(truncatingIfNeeded: -1 << 67 - 4 as DWord))
+  expectEqual(128, UInt8(truncatingIfNeeded: 128 + 1024 as UDWord))
+  expectEqual(129, UInt8(truncatingIfNeeded: 129 + 1024 as UDWord))
+}
+
+tests.test("Parsing/LosslessStringConvertible") {
+  func _toArray<T: LosslessStringConvertible>(_ text: String) -> [T] {
+    return text.split(separator: " ").map { T(String($0)) }.flatMap { $0 }
+  }
+
+  expectEqualSequence([1, 2, 3], _toArray("1 2 3") as [Int])
+  expectEqualSequence(
+    [Int](), _toArray("21-50 ff6600 10000000000000000000000000") as [Int])
 }
 
 tests.test("HeterogeneousEquality") {
@@ -493,26 +491,45 @@ tests.test("Basics") {
   expectEqual(32, Int32.bitWidth)
 }
 
-tests.test("word") {
-  let x = UDWord(Int.max)
-  expectEqual(Int.max._lowUWord, x._word(at: 0))
-  expectEqual(0, x._word(at: 1))
-
-  let y = DWord(Int.min)
-  expectEqual(Int.min._lowUWord, y._word(at: 0))
-  expectEqual(~0, y._word(at: 1))
-
-  let z = UInt(~Int.min) + 1
-  expectEqual(Int.min._lowUWord, z._word(at: 0))
-  expectEqual(0, z._word(at: 1))
-}
-
 tests.test("words") {
+  expectEqualSequence([UInt.max], UInt.max.words)
+  expectEqualSequence([0xFF as UInt], UInt8.max.words)
+  expectEqualSequence([0xFFFF as UInt], UInt16.max.words)
+  expectEqualSequence([0xFFFFFFFF as UInt], UInt32.max.words)
+
+  expectEqualSequence([0 as UInt], UInt.min.words)
+  expectEqualSequence([0 as UInt], UInt8.min.words)
+  expectEqualSequence([0 as UInt], UInt16.min.words)
+  expectEqualSequence([0 as UInt], UInt32.min.words)
+
+  expectEqualSequence([UInt.max >> 1], Int.max.words)
+  expectEqualSequence([0x7F as UInt], Int8.max.words)
+  expectEqualSequence([0x7FFF as UInt], Int16.max.words)
+  expectEqualSequence([0x7FFFFFFF as UInt], Int32.max.words)
+
+  expectEqualSequence([UInt.max << (Int.bitWidth - 1)], Int.min.words)
+  expectEqualSequence([UInt.max << 7], Int8.min.words)
+  expectEqualSequence([UInt.max << 15], Int16.min.words)
+  expectEqualSequence([UInt.max << 31], Int32.min.words)
+  
   expectEqualSequence([UInt.max], (-1 as Int).words)
   expectEqualSequence([UInt.max], (-1 as Int8).words)
   expectEqualSequence([UInt.max], (-1 as Int16).words)
   expectEqualSequence([UInt.max], (-1 as Int32).words)
+
+% if int(WORD_BITS) == 64:
+  expectEqualSequence([UInt.max], UInt64.max.words)
+  expectEqualSequence([0 as UInt], UInt64.min.words)
+  expectEqualSequence([UInt.max >> 1], Int64.max.words)
+  expectEqualSequence([(1 as UInt) << 63], Int64.min.words)
   expectEqualSequence([UInt.max], (-1 as Int64).words)
+% else:
+  expectEqualSequence([UInt.max, UInt.max], Int64.max.words)
+  expectEqualSequence([0 as UInt, 0], UInt64.min.words)
+  expectEqualSequence([UInt.max, UInt.max >> 1], Int64.max.words)
+  expectEqualSequence([0 as UInt, 1 << 31], Int64.min.words)
+  expectEqualSequence([UInt.max, UInt.max], (-1 as Int64).words)
+% end
 
   expectEqualSequence([1], 1.words)
   expectEqualSequence([0], 0.words)
@@ -613,6 +630,5 @@ tests.test("signum/concrete") {
 %   end
 % end
 }
-
 
 runAllTests()

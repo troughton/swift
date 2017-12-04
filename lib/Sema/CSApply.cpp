@@ -1312,6 +1312,7 @@ namespace {
       
       // Apply a key path if we have one.
       if (choice.getKind() == OverloadChoiceKind::KeyPathApplication) {
+        index = cs.coerceToRValue(index);
         // The index argument should be (keyPath: KeyPath<Root, Value>).
         auto keyPathTTy = cs.getType(index)->castTo<TupleType>()
           ->getElementType(0);
@@ -3711,7 +3712,9 @@ namespace {
     }
 
     Expr *visitKeyPathApplicationExpr(KeyPathApplicationExpr *expr){
-      llvm_unreachable("Already type-checked");
+      // This should already be type-checked, but we may have had to re-
+      // check it for failure diagnosis.
+      return simplifyExprType(expr);
     }
     
     Expr *visitEnumIsCaseExpr(EnumIsCaseExpr *expr) {
@@ -4023,7 +4026,12 @@ namespace {
       E->setMethod(method);
       return E;
     }
-
+    
+  private:
+    // Key path components we need to
+    SmallVector<std::pair<KeyPathExpr *, unsigned>, 4>
+      KeyPathSubscriptComponents;
+  public:
     Expr *visitKeyPathExpr(KeyPathExpr *E) {
       if (E->isObjC()) {
         cs.setType(E, cs.getType(E->getObjCStringLiteralExpr()));
@@ -4095,6 +4103,26 @@ namespace {
                              diag::expr_keypath_mutating_getter,
                              property->getFullName());
             }
+            
+            // Key paths don't currently support static members.
+            if (varDecl->isStatic()) {
+              cs.TC.diagnose(origComponent.getLoc(),
+                             diag::expr_keypath_static_member,
+                             property->getFullName());
+            }
+          }
+          
+          // Unwrap if we needed to look through an IUO to find the
+          // property.
+          if (auto objTy = cs.lookThroughImplicitlyUnwrappedOptionalType(
+                              baseTy->getRValueType())) {
+            if (baseTy->is<LValueType>())
+              baseTy = LValueType::get(objTy);
+            else
+              baseTy = objTy;
+
+            resolvedComponents.push_back(
+                 KeyPathExpr::Component::forOptionalForce(baseTy, SourceLoc()));
           }
           
           auto dc = property->getInnermostDeclContext();
@@ -4128,12 +4156,30 @@ namespace {
                            diag::expr_keypath_mutating_getter,
                            subscript->getFullName());
           }
+
+          // Unwrap if we needed to look through an IUO to find the
+          // subscript.
+          if (auto objTy = cs.lookThroughImplicitlyUnwrappedOptionalType(
+                              baseTy->getRValueType())) {
+            if (baseTy->is<LValueType>())
+              baseTy = LValueType::get(objTy);
+            else
+              baseTy = objTy;
+
+            resolvedComponents.push_back(
+                 KeyPathExpr::Component::forOptionalForce(baseTy, SourceLoc()));
+          }
           
           auto dc = subscript->getInnermostDeclContext();
           SmallVector<Substitution, 4> subs;
+          SubstitutionMap subMap;
+          auto indexType = subscript->getIndicesInterfaceType();
+
           if (auto sig = dc->getGenericSignatureOfContext()) {
             // Compute substitutions to refer to the member.
             solution.computeSubstitutions(sig, locator, subs);
+            subMap = sig->getSubstitutionMap(subs);
+            indexType = indexType.subst(subMap);
           }
           
           auto resolvedTy = foundDecl->openedType->castTo<AnyFunctionType>()
@@ -4141,11 +4187,21 @@ namespace {
           resolvedTy = simplifyType(resolvedTy);
           
           auto ref = ConcreteDeclRef(cs.getASTContext(), subscript, subs);
+          
+          // Coerce the indices to the type the subscript expects.
+          auto indexExpr = coerceToType(origComponent.getIndexExpr(),
+                                        indexType,
+                                        locator);
+          
           component = KeyPathExpr::Component
-            ::forSubscriptWithPrebuiltIndexExpr(ref,
-                                                origComponent.getIndexExpr(),
-                                                resolvedTy,
-                                                origComponent.getLoc());
+            ::forSubscriptWithPrebuiltIndexExpr(ref, indexExpr,
+                                            origComponent.getSubscriptLabels(),
+                                            resolvedTy,
+                                            origComponent.getLoc(),
+                                            {});
+          // Save a reference to the component so we can do a post-pass to check
+          // the Hashable conformance of the indexes.
+          KeyPathSubscriptComponents.push_back({E, resolvedComponents.size()});
           break;
         }
         case KeyPathExpr::Component::Kind::OptionalChain: {
@@ -4202,7 +4258,8 @@ namespace {
           baseTy &&
           !baseTy->hasUnresolvedType() &&
           !baseTy->isEqual(leafTy)) {
-        assert(leafTy->getAnyOptionalObjectType()->isEqual(baseTy));
+        assert(leafTy->getAnyOptionalObjectType()
+                     ->isEqual(baseTy->getLValueOrInOutObjectType()));
         auto component = KeyPathExpr::Component::forOptionalWrap(leafTy);
         resolvedComponents.push_back(component);
         baseTy = leafTy;
@@ -4285,6 +4342,46 @@ namespace {
         tc.diagnose(cast->getStartLoc(), diag::silence_inject_forced_downcast)
           .fixItInsert(cast->getStartLoc(), "(")
           .fixItInsertAfter(cast->getEndLoc(), ")");
+      }
+      
+      // Look at key path subscript components to verify that they're hashable.
+      for (auto componentRef : KeyPathSubscriptComponents) {
+        auto &component = componentRef.first
+                                  ->getMutableComponents()[componentRef.second];
+        // We need to be able to hash the captured index values in order for
+        // KeyPath itself to be hashable, so check that all of the subscript
+        // index components are hashable and collect their conformances here.
+        SmallVector<ProtocolConformanceRef, 2> hashables;
+        bool allIndexesHashable = true;
+        ArrayRef<TupleTypeElt> indexTypes;
+        TupleTypeElt singleIndexTypeBuf;
+        if (auto tup = component.getIndexExpr()->getType()
+                                               ->getAs<TupleType>()) {
+          indexTypes = tup->getElements();
+        } else {
+          singleIndexTypeBuf = component.getIndexExpr()->getType();
+          indexTypes = singleIndexTypeBuf;
+        }
+      
+        auto hashable =
+          cs.getASTContext().getProtocol(KnownProtocolKind::Hashable);
+        for (auto indexType : indexTypes) {
+          auto conformance =
+            cs.TC.conformsToProtocol(indexType.getType(), hashable,
+                                     cs.DC, ConformanceCheckFlags::Used);
+          if (!conformance) {
+            cs.TC.diagnose(component.getIndexExpr()->getLoc(),
+                           diag::expr_keypath_subscript_index_not_hashable,
+                           indexType.getType());
+            allIndexesHashable = false;
+            continue;
+          }
+          hashables.push_back(*conformance);
+        }
+
+        if (allIndexesHashable) {
+          component.setSubscriptIndexHashableConformances(hashables);
+        }
       }
 
       // Set the final types on the expression.
@@ -7860,11 +7957,15 @@ Expr *TypeChecker::callWitness(Expr *base, DeclContext *dc,
 
 Expr *
 Solution::convertBooleanTypeToBuiltinI1(Expr *expr, ConstraintLocator *locator) const {
-  // FIXME: Cache name.
   auto &cs = getConstraintSystem();
+
+  // Load lvalues here.
+  expr = cs.coerceToRValue(expr);
+
   auto &tc = cs.getTypeChecker();
   auto &ctx = tc.Context;
-  auto type = cs.getType(expr)->getRValueType();
+
+  auto type = cs.getType(expr);
 
   // Member accesses are permitted to implicitly look through
   // ImplicitlyUnwrappedOptional<T>.

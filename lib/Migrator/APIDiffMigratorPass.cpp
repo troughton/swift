@@ -12,6 +12,7 @@
 
 #include "swift/AST/USRGeneration.h"
 #include "swift/AST/ASTVisitor.h"
+#include "swift/Basic/StringExtras.h"
 #include "swift/Frontend/Frontend.h"
 #include "swift/IDE/Utils.h"
 #include "swift/Index/Utils.h"
@@ -367,20 +368,26 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
   }
 
   bool handleQualifiedReplacement(Expr* Call) {
-    if (auto *DSC = dyn_cast<DotSyntaxCallExpr>(Call)) {
-      if (auto FD = DSC->getFn()->getReferencedDecl().getDecl()) {
-        for (auto *I :getRelatedDiffItems(FD)) {
-          if (auto *Item = dyn_cast<TypeMemberDiffItem>(I)) {
-            if (Item->Subkind == TypeMemberDiffItemSubKind::
-                QualifiedReplacement) {
-              Editor.replace(Call->getSourceRange(),
-                (llvm::Twine(Item->newTypeName) + "." +
-                  Item->getNewName().base()).str());
-              return true;
-            }
+    auto handleDecl = [&](ValueDecl *VD, SourceRange ToReplace) {
+      for (auto *I: getRelatedDiffItems(VD)) {
+        if (auto *Item = dyn_cast<TypeMemberDiffItem>(I)) {
+          if (Item->Subkind == TypeMemberDiffItemSubKind::QualifiedReplacement) {
+            Editor.replace(ToReplace, (llvm::Twine(Item->newTypeName) + "." +
+              Item->getNewName().base()).str());
+            return true;
           }
         }
       }
+      return false;
+    };
+    if (auto *DSC = dyn_cast<DotSyntaxCallExpr>(Call)) {
+      if (auto FD = DSC->getFn()->getReferencedDecl().getDecl()) {
+        if (handleDecl(FD, Call->getSourceRange()))
+          return true;
+      }
+    } else if (auto MRE = dyn_cast<MemberRefExpr>(Call)) {
+      if (handleDecl(MRE->getReferencedDecl().getDecl(), MRE->getSourceRange()))
+        return true;
     }
     return false;
   }
@@ -605,8 +612,12 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
                                           Arg->getStartLoc().getAdvancedLoc(1));
 
           // Replace "x.getY(" with "x.Y =".
-          Editor.replace(ReplaceRange, (llvm::Twine(Walker.Result.str().
-                                                   substr(3)) + " = ").str());
+          auto Replacement = (llvm::Twine(Walker.Result.str()
+                                          .substr(3)) + " = ").str();
+          SmallString<64> Scratch;
+          Editor.replace(ReplaceRange,
+                         camel_case::toLowercaseInitialisms(Replacement, Scratch));
+
           // Remove ")"
           Editor.remove(CharSourceRange(SM, Arg->getEndLoc(), Arg->getEndLoc().
                                         getAdvancedLoc(1)));
@@ -673,14 +684,19 @@ struct APIDiffMigratorPass : public ASTMigratorPass, public SourceEntityWalker {
           StringRef NewArg = View.args()[Index++];
           auto ArgLoc = PD->getArgumentNameLoc();
 
+          // Represent empty label with underscore.
+          if (NewArg.empty())
+            NewArg = "_";
+
           // If the argument name is not specified, add the argument name before
           // the parameter name.
           if (ArgLoc.isInvalid())
             Editor.insertBefore(PD->getNameLoc(),
                                 (llvm::Twine(NewArg) + " ").str());
-          else
+          else {
             // Otherwise, replace the argument name directly.
             Editor.replaceToken(ArgLoc, NewArg);
+          }
         }
       }
     }

@@ -153,19 +153,17 @@ ${Suite}.test("${ArrayType}/filter") {
     let arr: ${ArrayType}<Int> = [ 0, 30, 10, 90 ]
     let result = arr.filter() { (x: Int) -> Bool in true }
     expectEqual([ 0, 30, 10, 90 ], result)
-    expectGE(2 * result.count, result.capacity)
   }
   do {
     let arr: ${ArrayType}<Int> = [ 0, 30, 10, 90 ]
     let result = arr.filter() { (x: Int) -> Bool in false }
     expectEqual([], result)
-    expectGE(2 * result.count, result.capacity)
+    expectEqual(0, result.capacity)
   }
   do {
     let arr: ${ArrayType}<Int> = [ 0, 30, 10, 90 ]
     let result = arr.filter() { $0 % 3 == 0 }
     expectEqual([ 0, 30, 90 ], result)
-    expectGE(2 * result.count, result.capacity)
   }
 }
 
@@ -372,6 +370,23 @@ ${Suite}.test(
 //===----------------------------------------------------------------------===//
 // Special cases and one-off tests.
 //===----------------------------------------------------------------------===//
+
+${Suite}.test(
+  "${ArrayType}/subscriptSelfAssignDifferentRanges") {
+  var arr: ${ArrayType}<Int> = [ 1010, 1020, 1030 ]
+  arr[0..<0] = arr[...]
+  expectEqual([ 1010, 1020, 1030, 1010, 1020, 1030 ], arr)
+  arr[1..<1] = arr[1..<2]
+  expectEqual([ 1010, 1020, 1020, 1030, 1010, 1020, 1030 ], arr)
+  arr[1..<1] = arr[1..<2]
+  expectEqual([ 1010, 1020, 1020, 1020, 1030, 1010, 1020, 1030 ], arr)
+  arr[1..<2] = arr[0..<1]
+  expectEqual([ 1010, 1010, 1020, 1020, 1030, 1010, 1020, 1030 ], arr)
+  arr[0..<5] = arr.dropFirst(5)
+  expectEqual([ 1010, 1020, 1030, 1010, 1020, 1030 ], arr)
+  arr[...] = arr[0..<0]
+  expectEqual([  ], arr)
+}
 
 ${Suite}.test("${ArrayType}<Void>/map") {
   // This code used to crash because it generated an array of Void with

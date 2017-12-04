@@ -1865,6 +1865,23 @@ applyPropertyOwnership(VarDecl *prop,
   }
 }
 
+/// Does this name refer to a method that might shadow Swift.print?
+///
+/// As a heuristic, methods that have a base name of 'print' but more than
+/// one argument are left alone. These can still shadow Swift.print but are
+/// less likely to be confused for it, at least.
+static bool isPrintLikeMethod(DeclName name, const DeclContext *dc) {
+  if (!name || name.isSpecial() || name.isSimpleName())
+    return false;
+  if (name.getBaseIdentifier().str() != "print")
+    return false;
+  if (!dc->isTypeContext())
+    return false;
+  if (name.getArgumentNames().size() > 1)
+    return false;
+  return true;
+}
+
 using MirroredMethodEntry =
   std::pair<const clang::ObjCMethodDecl*, ProtocolDecl*>;
 
@@ -3671,6 +3688,14 @@ namespace {
       if (forceClassMethod && decl->hasRelatedResultType())
         return nullptr;
 
+      // Hack: avoid importing methods named "print" that aren't available in
+      // the current version of Swift. We'd rather just let the user use
+      // Swift.print in that case.
+      if (!isActiveSwiftVersion() &&
+          isPrintLikeMethod(importedName.getDeclName(), dc)) {
+        return nullptr;
+      }
+
       // Add the implicit 'self' parameter patterns.
       bool isInstance = decl->isInstanceMethod() && !forceClassMethod;
       SmallVector<ParameterList *, 4> bodyParams;
@@ -4159,12 +4184,12 @@ namespace {
       result->setInherited(Impl.SwiftContext.AllocateCopy(inheritedTypes));
       result->setCheckedInheritanceClause();
 
-      auto *env = Impl.buildGenericEnvironment(result->getGenericParams(), dc);
-      result->setGenericEnvironment(env);
-
       // Compute the requirement signature.
       if (!result->isRequirementSignatureComputed())
         result->computeRequirementSignature();
+
+      auto *env = Impl.buildGenericEnvironment(result->getGenericParams(), dc);
+      result->setGenericEnvironment(env);
 
       result->setMemberLoader(&Impl, 0);
 
@@ -4316,9 +4341,10 @@ namespace {
       SmallVector<TypeLoc, 4> inheritedTypes;
       Type superclassType;
       if (decl->getSuperClass()) {
-        auto clangSuperclassType =
-          Impl.getClangASTContext().getObjCObjectPointerType(
-              clang::QualType(decl->getSuperClassType(), 0));
+        clang::QualType clangSuperclassType =
+          decl->getSuperClassType()->stripObjCKindOfTypeAndQuals(clangCtx);
+        clangSuperclassType =
+          clangCtx.getObjCObjectPointerType(clangSuperclassType);
         superclassType = Impl.importType(clangSuperclassType,
                                          ImportTypeKind::Abstract,
                                          isInSystemModule(dc),
@@ -6348,7 +6374,8 @@ void SwiftDeclConverter::addObjCProtocolConformances(
     auto conformance = ctx.getConformance(dc->getDeclaredTypeInContext(),
                                           protocols[i], SourceLoc(), dc,
                                           ProtocolConformanceState::Incomplete);
-    Impl.scheduleFinishProtocolConformance(conformance);
+    conformance->setLazyLoader(&Impl, /*context*/0);
+    conformance->setState(ProtocolConformanceState::Complete);
     conformances.push_back(conformance);
   }
 
@@ -7016,6 +7043,41 @@ void ClangImporter::Implementation::importAttributes(
                                           PlatformAgnostic, /*Implicit=*/false);
 
       MappedDecl->getAttrs().add(AvAttr);
+
+      // For enum cases introduced in the 2017 SDKs, add
+      // @_downgrade_exhaustivity_check in Swift 3.
+      if (C.LangOpts.isSwiftVersion3() && isa<EnumElementDecl>(MappedDecl)) {
+        bool downgradeExhaustivity = false;
+        switch (*platformK) {
+        case PlatformKind::OSX:
+        case PlatformKind::OSXApplicationExtension:
+          downgradeExhaustivity = (introduced.getMajor() == 10 &&
+                                   introduced.getMinor() &&
+                                   *introduced.getMinor() == 13);
+          break;
+
+        case PlatformKind::iOS:
+        case PlatformKind::iOSApplicationExtension:
+        case PlatformKind::tvOS:
+        case PlatformKind::tvOSApplicationExtension:
+          downgradeExhaustivity = (introduced.getMajor() == 11);
+          break;
+
+        case PlatformKind::watchOS:
+        case PlatformKind::watchOSApplicationExtension:
+          downgradeExhaustivity = (introduced.getMajor() == 4);
+          break;
+
+        case PlatformKind::none:
+          break;
+        }
+
+        if (downgradeExhaustivity) {
+          auto attr =
+            new (C) DowngradeExhaustivityCheckAttr(/*isImplicit=*/true);
+          MappedDecl->getAttrs().add(attr);
+        }
+      }
     }
   }
 
@@ -7031,8 +7093,13 @@ void ClangImporter::Implementation::importAttributes(
       return;
     }
 
-    // Map Clang's swift_objc_members attribute to @objcMembers.
-    if (ID->hasAttr<clang::SwiftObjCMembersAttr>()) {
+    // Map Clang's swift_objc_members attribute to @objcMembers. Also handle
+    // inheritance of @objcMembers by looking at the superclass.
+    if (ID->hasAttr<clang::SwiftObjCMembersAttr>() ||
+        (isa<ClassDecl>(MappedDecl) &&
+         cast<ClassDecl>(MappedDecl)->hasSuperclass() &&
+         cast<ClassDecl>(MappedDecl)->getSuperclassDecl()
+           ->getAttrs().hasAttribute<ObjCMembersAttr>())) {
       if (!MappedDecl->getAttrs().hasAttribute<ObjCMembersAttr>()) {
         auto attr = new (C) ObjCMembersAttr(/*IsImplicit=*/true);
         MappedDecl->getAttrs().add(attr);
@@ -7067,15 +7134,10 @@ void ClangImporter::Implementation::importAttributes(
   // Hack: mark any method named "print" with less than two parameters as
   // warn_unqualified_access.
   if (auto MD = dyn_cast<FuncDecl>(MappedDecl)) {
-    if (!MD->getName().empty() && MD->getName().str() == "print" &&
-        MD->getDeclContext()->isTypeContext()) {
-      auto *formalParams = MD->getParameterList(1);
-      if (formalParams->size() <= 1) {
-        // Use a non-implicit attribute so it shows up in the generated
-        // interface.
-        MD->getAttrs().add(
-            new (C) WarnUnqualifiedAccessAttr(/*implicit*/false));
-      }
+    if (isPrintLikeMethod(MD->getFullName(), MD->getDeclContext())) {
+      // Use a non-implicit attribute so it shows up in the generated
+      // interface.
+      MD->getAttrs().add(new (C) WarnUnqualifiedAccessAttr(/*implicit*/false));
     }
   }
 
@@ -7251,6 +7313,9 @@ void ClangImporter::Implementation::finishedImportingEntity() {
 
 void ClangImporter::Implementation::finishPendingActions() {
   while (true) {
+    // The odd shape of this loop comes from previously having more than one
+    // possible kind of pending action. It's left this way to make it easy to
+    // add another one back in an `else if` clause.
     if (!RegisteredExternalDecls.empty()) {
       if (hasFinishedTypeChecking()) {
         RegisteredExternalDecls.clear();
@@ -7262,21 +7327,21 @@ void ClangImporter::Implementation::finishPendingActions() {
             if (!nominal->hasDelayedMembers())
               typeResolver->resolveExternalDeclImplicitMembers(nominal);
       }
-    } else if (!DelayedProtocolConformances.empty()) {
-      NormalProtocolConformance *conformance =
-          DelayedProtocolConformances.pop_back_val();
-      finishProtocolConformance(conformance);
     } else {
       break;
     }
   }
 }
 
-/// Finish the given protocol conformance (for an imported type)
-/// by filling in any missing witnesses.
-void ClangImporter::Implementation::finishProtocolConformance(
-    NormalProtocolConformance *conformance) {
+void ClangImporter::Implementation::finishNormalConformance(
+    NormalProtocolConformance *conformance,
+    uint64_t unused) {
+  (void)unused;
   const ProtocolDecl *proto = conformance->getProtocol();
+
+  PrettyStackTraceType trace(SwiftContext, "completing conformance for",
+                             conformance->getType());
+  PrettyStackTraceDecl traceTo("... to", proto);
 
   // Create witnesses for requirements not already met.
   for (auto req : proto->getMembers()) {
@@ -7341,7 +7406,7 @@ void ClangImporter::Implementation::finishProtocolConformance(
 
   // Collect conformances for the requirement signature.
   SmallVector<ProtocolConformanceRef, 4> reqConformances;
-  for (auto req : proto->getRequirementSignature()->getRequirements()) {
+  for (const auto &req : proto->getRequirementSignature()) {
     if (req.getKind() != RequirementKind::Conformance)
       continue;
 
@@ -7872,8 +7937,9 @@ ClangImporter::Implementation::loadAllMembers(Decl *D, uint64_t extra) {
     for (auto entry : table->lookupGlobalsAsMembers(effectiveClangContext)) {
       auto decl = entry.get<clang::NamedDecl *>();
 
-      // Only continue members in the same submodule as this extension.
-      if (decl->getImportedOwningModule() != submodule) continue;
+      // Only include members in the same submodule as this extension.
+      if (getClangSubmoduleForDecl(decl) != submodule)
+        continue;
 
       forEachDistinctName(decl, [&](ImportedName newName,
                                     ImportNameVersion nameVersion) {
@@ -7885,8 +7951,18 @@ ClangImporter::Implementation::loadAllMembers(Decl *D, uint64_t extra) {
 
         // Then try to import the decl under the specified name.
         auto *member = importDecl(decl, nameVersion);
-        if (!member || member->getDeclContext() != ext)
-          return;
+        if (!member) return;
+
+        // Find the member that will land in an extension context.
+        while (!isa<ExtensionDecl>(member->getDeclContext())) {
+          auto nominal = dyn_cast<NominalTypeDecl>(member->getDeclContext());
+          if (!nominal) return;
+
+          member = nominal;
+          if (member->hasClangNode()) return;
+        }
+
+        if (member->getDeclContext() != ext) return;
         ext->addMember(member);
         
         for (auto alternate : getAlternateDecls(member)) {
@@ -7941,8 +8017,10 @@ ClangImporter::Implementation::loadAllMembers(Decl *D, uint64_t extra) {
   llvm::SmallPtrSet<Decl *, 4> knownAlternateMembers;
   for (const clang::Decl *m : objcContainer->decls()) {
     auto nd = dyn_cast<clang::NamedDecl>(m);
-    if (!nd || nd != nd->getCanonicalDecl())
+    if (!nd || nd != nd->getCanonicalDecl() ||
+        nd->getDeclContext() != objcContainer) {
       continue;
+    }
 
     forEachDistinctName(nd,
                         [&](ImportedName name, ImportNameVersion nameVersion) {

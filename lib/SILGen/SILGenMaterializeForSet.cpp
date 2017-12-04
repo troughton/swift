@@ -467,7 +467,8 @@ public:
       WitnessStorage->getAccessStrategy(TheAccessSemantics, accessKind);
 
     // Drill down to the member storage.
-    lv.addMemberComponent(gen, loc, WitnessStorage, WitnessSubs, IsSuper,
+    lv.addMemberComponent(gen, loc, WitnessStorage, WitnessSubs,
+                          LValueOptions(), IsSuper,
                           accessKind, TheAccessSemantics, strategy,
                           SubstStorageType, std::move(indices));
 
@@ -681,12 +682,12 @@ SILFunction *MaterializeForSetEmitter::createCallback(SILFunction &F,
   // the actual materializeForSet function), and so we only need to make sure we
   // don't break things in cases when there may be multiple definitions.
   auto callbackLinkage =
-      hasSharedVisibility(Linkage) ? SILLinkage::Shared : SILLinkage::Private;
+      F.isSerialized() ? SILLinkage::Shared : SILLinkage::Private;
 
   auto callback = SGM.M.createFunction(
       callbackLinkage, CallbackName, callbackType, genericEnv,
-      SILLocation(Witness), IsBare, F.isTransparent(), F.isSerialized(),
-      IsNotThunk, SubclassScope::NotApplicable,
+      SILLocation(Witness), IsBare, F.isTransparent(), F.isSerialized(), IsNotThunk,
+      SubclassScope::NotApplicable,
       /*inlineStrategy=*/InlineDefault,
       /*EK=*/EffectsKind::Unspecified,
       /*InsertBefore=*/&F);

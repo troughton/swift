@@ -1340,6 +1340,9 @@ void Serializer::writeNormalConformance(
     return false;
   });
 
+  unsigned numSignatureConformances =
+      conformance->getSignatureConformances().size();
+
   unsigned abbrCode
     = DeclTypeAbbrCodes[NormalProtocolConformanceLayout::Code];
   auto ownerID = addDeclContextRef(conformance->getDeclContext());
@@ -1347,6 +1350,7 @@ void Serializer::writeNormalConformance(
                                               addDeclRef(protocol), ownerID,
                                               numValueWitnesses,
                                               numTypeWitnesses,
+                                              numSignatureConformances,
                                               data);
 
   // Write requirement signature conformances.
@@ -1957,6 +1961,7 @@ void Serializer::writeDeclAttribute(const DeclAttribute *DA) {
   case DAK_SynthesizedProtocol:
   case DAK_Implements:
   case DAK_ObjCRuntimeName:
+  case DAK_RestatedObjCConformance:
     llvm_unreachable("cannot serialize attribute");
 
   case DAK_Count:
@@ -2807,7 +2812,7 @@ void Serializer::writeDecl(const Decl *D) {
 
     writeGenericParams(proto->getGenericParams());
     writeGenericRequirements(
-        proto->getRequirementSignature()->getRequirements(), DeclTypeAbbrCodes);
+      proto->getRequirementSignature(), DeclTypeAbbrCodes);
     writeMembers(proto->getMembers(), true);
     writeDefaultWitnessTable(proto, DeclTypeAbbrCodes);
     break;

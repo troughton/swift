@@ -51,6 +51,7 @@ public:
     None,
     Debug,
     Optimize,
+    OptimizeForSize,
     OptimizeUnchecked
   };
 
@@ -151,6 +152,17 @@ public:
 
   /// \brief Enable large loadable types IRGen pass.
   bool EnableLargeLoadableTypes = false;
+
+  /// Enables the "fully fragile" resilience strategy.
+  ///
+  /// \see ResilienceStrategy::Fragile
+  bool SILSerializeAll = false;
+
+  /// If set, SIL witness tables will be serialized.
+  ///
+  /// It is supposed to be used only for compiling overlays.
+  /// User code should never be compiled with this flag set.
+  bool SILSerializeWitnessTables = false;
 
   SILOptions() : Sanitize(SanitizerKind::None) {}
 

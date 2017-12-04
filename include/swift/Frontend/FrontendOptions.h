@@ -119,6 +119,9 @@ public:
   /// The path to which we should output a loaded module trace file.
   std::string LoadedModuleTracePath;
 
+  /// The path to which we should output a TBD file.
+  std::string TBDPath;
+
   /// Arguments which should be passed in immediate mode.
   std::vector<std::string> ImmediateArgv;
 
@@ -131,6 +134,12 @@ public:
 
   /// The path to collect the group information for the compiled source files.
   std::string GroupInfoPath;
+
+  /// The path to which we should store indexing data, if any.
+  std::string IndexStorePath;
+
+  /// Emit index data for imported serialized swift system modules.
+  bool IndexSystemModules = false;
 
   /// If non-zero, warn when a function body takes longer than this many
   /// milliseconds to type-check.
@@ -164,7 +173,6 @@ public:
     /// Parse, type-check, and dump type refinement context hierarchy
     DumpTypeRefinementContexts,
 
-    EmitTBD, ///< Emit a TBD file for this module
     EmitImportedModules, ///< Emit the modules that this one imports
     EmitPCH, ///< Emit PCH of imported bridging header
 
@@ -245,11 +253,6 @@ public:
   /// by the Clang importer as part of semantic analysis.
   bool SerializeBridgingHeader = false;
 
-  /// Enables the "fully fragile" resilience strategy.
-  ///
-  /// \see ResilienceStrategy::Fragile
-  bool SILSerializeAll = false;
-
   /// Indicates whether or not the frontend should print statistics upon
   /// termination.
   bool PrintStats = false;
@@ -291,6 +294,9 @@ public:
 
   /// Compare the symbols in the IR against the TBD file we would generate.
   TBDValidationMode ValidateTBDAgainstIR = TBDValidationMode::None;
+
+  /// The install_name to use in the TBD file.
+  std::string TBDInstallName;
 
   /// An enum with different modes for automatically crashing at defined times.
   enum class DebugCrashMode {

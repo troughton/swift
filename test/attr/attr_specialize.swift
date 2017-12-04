@@ -87,7 +87,7 @@ struct FloatElement : HasElt {
   typealias Element = Float
 }
 @_specialize(where T == FloatElement)
-@_specialize(where T == IntElement) // expected-error{{associated type 'T.Element' cannot be equal to both 'Float' and 'Int'}}
+@_specialize(where T == IntElement) // expected-error{{'T.Element' cannot be equal to both 'IntElement.Element' (aka 'Int') and 'Float'}}
 func sameTypeRequirement<T : HasElt>(_ t: T) where T.Element == Float {}
 
 @_specialize(where T == Sub)
@@ -151,10 +151,10 @@ public func anotherFuncWithTwoGenericParameters<X: P, Y>(x: X, y: Y) {
 
 @_specialize(where T: P) // expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
 @_specialize(where T: Int) // expected-error{{Only conformances to protocol types are supported by '_specialize' attribute}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
-// expected-error@-1{{type 'T' constrained to non-protocol type 'Int'}}
+// expected-error@-1{{type 'T' constrained to non-protocol, non-class type 'Int'}}
 
 @_specialize(where T: S1) // expected-error{{Only conformances to protocol types are supported by '_specialize' attribute}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
-// expected-error@-1{{type 'T' constrained to non-protocol type 'S1'}}
+// expected-error@-1{{type 'T' constrained to non-protocol, non-class type 'S1'}}
 @_specialize(where T: C1) // expected-error{{Only conformances to protocol types are supported by '_specialize' attribute}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}}
 @_specialize(where Int: P) // expected-error{{type 'Int' in conformance requirement does not refer to a generic parameter or associated type}} expected-error{{Only same-type and layout requirements are supported by '_specialize' attribute}} expected-error{{too few type parameters are specified in '_specialize' attribute (got 0, but expected 1)}} expected-error{{Missing constraint for 'T' in '_specialize' attribute}}
 func funcWithForbiddenSpecializeRequirement<T>(_ t: T) {

@@ -161,7 +161,7 @@ static void validateArgs(DiagnosticEngine &diags, const ArgList &Args) {
     diags.diagnose(SourceLoc(), diag::error_conflicting_options,
                    "-warnings-as-errors", "-suppress-warnings");
   }
-  
+
   // Check for missing debug option when verifying debug info.
   if (Args.hasArg(options::OPT_verify_debug_info)) {
     bool hasDebugOption = true;
@@ -171,6 +171,18 @@ static void validateArgs(DiagnosticEngine &diags, const ArgList &Args) {
     if (!hasDebugOption)
       diags.diagnose(SourceLoc(),
                      diag::verify_debug_info_requires_debug_option);
+  }
+
+  for (const Arg *A : make_range(Args.filtered_begin(options::OPT_D),
+                                 Args.filtered_end())) {
+    StringRef name = A->getValue();
+    if (name.find('=') != StringRef::npos)
+      diags.diagnose(SourceLoc(),
+                     diag::cannot_assign_value_to_conditional_compilation_flag,
+                     name);
+    else if (!Lexer::isIdentifier(name))
+      diags.diagnose(SourceLoc(), diag::invalid_conditional_compilation_flag,
+                     name);
   }
 }
 
@@ -563,8 +575,21 @@ std::unique_ptr<Compilation> Driver::buildCompilation(
   std::unique_ptr<UnifiedStatsReporter> StatsReporter;
   if (const Arg *A =
       ArgList->getLastArgNoClaim(options::OPT_stats_output_dir)) {
+    StringRef OptType;
+    if (const Arg *OptA = ArgList->getLastArgNoClaim(options::OPT_O_Group)) {
+      OptType = OptA->getSpelling();
+    }
+    StringRef InputName;
+    if (Inputs.size() == 1) {
+      InputName = Inputs[0].second->getSpelling();
+    }
+    StringRef OutputType = types::getTypeTempSuffix(OI.CompilerOutputType);
     StatsReporter = llvm::make_unique<UnifiedStatsReporter>("swift-driver",
                                                             OI.ModuleName,
+                                                            InputName,
+                                                            DefaultTargetTriple,
+                                                            OutputType,
+                                                            OptType,
                                                             A->getValue());
   }
 
@@ -1137,13 +1162,17 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
       OI.CompilerMode = OutputInfo::Mode::SingleCompile;
       break;
 
-    case options::OPT_emit_tbd:
-      OI.CompilerOutputType = types::TY_TBD;
-      // We want the symbols from the whole module, so let's do it in one
-      // invocation.
+    // BEGIN APPLE-ONLY OUTPUT ACTIONS
+    case options::OPT_index_file:
       OI.CompilerMode = OutputInfo::Mode::SingleCompile;
+      OI.CompilerOutputType = types::TY_IndexData;
       break;
+    // END APPLE-ONLY OUTPUT ACTIONS
 
+    case options::OPT_update_code:
+      OI.CompilerOutputType = types::TY_Remapping;
+      OI.LinkAction = LinkKind::None;
+      break;
     case options::OPT_parse:
     case options::OPT_typecheck:
     case options::OPT_dump_parse:
@@ -1316,6 +1345,27 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
                                          OI.SelectedSanitizer);
 }
 
+static void
+currentDependsOnPCHIfPresent(JobAction *PCH,
+                             std::unique_ptr<Action> &Current,
+                             ActionList &Actions) {
+  if (PCH) {
+    // FIXME: When we have a PCH job, it's officially owned by the Actions
+    // array; but it's also a secondary input to each of the current
+    // JobActions, which means that we need to flip the "owns inputs" bit
+    // on the JobActions so they don't try to free it. That in turn means
+    // we need to transfer ownership of all the JobActions' existing
+    // inputs to the Actions array, since the JobActions either own or
+    // don't own _all_ of their inputs. Ownership can't vary
+    // input-by-input.
+    auto *job = cast<JobAction>(Current.get());
+    auto inputs = job->getInputs();
+    Actions.append(inputs.begin(), inputs.end());
+    job->setOwnsInputs(false);
+    job->addInput(PCH);
+  }
+}
+
 void Driver::buildActions(const ToolChain &TC,
                           const DerivedArgList &Args,
                           const InputFileList &Inputs,
@@ -1380,6 +1430,7 @@ void Driver::buildActions(const ToolChain &TC,
           Current.reset(new CompileJobAction(Current.release(),
                                              types::TY_LLVM_BC,
                                              previousBuildState));
+          currentDependsOnPCHIfPresent(PCH, Current, Actions);
           AllModuleInputs.push_back(Current.get());
           Current.reset(new BackendJobAction(Current.release(),
                                              OI.CompilerOutputType, 0));
@@ -1387,22 +1438,8 @@ void Driver::buildActions(const ToolChain &TC,
           Current.reset(new CompileJobAction(Current.release(),
                                              OI.CompilerOutputType,
                                              previousBuildState));
+          currentDependsOnPCHIfPresent(PCH, Current, Actions);
           AllModuleInputs.push_back(Current.get());
-        }
-        if (PCH) {
-          // FIXME: When we have a PCH job, it's officially owned by the Actions
-          // array; but it's also a secondary input to each of the current
-          // JobActions, which means that we need to flip the "owns inputs" bit
-          // on the JobActions so they don't try to free it. That in turn means
-          // we need to transfer ownership of all the JobActions' existing
-          // inputs to the Actions array, since the JobActions either own or
-          // don't own _all_ of their inputs. Ownership can't vary
-          // input-by-input.
-          auto *job = cast<JobAction>(Current.get());
-          auto inputs = job->getInputs();
-          Actions.append(inputs.begin(), inputs.end());
-          job->setOwnsInputs(false);
-          job->addInput(PCH);
         }
         AllLinkerInputs.push_back(Current.release());
         break;
@@ -1436,6 +1473,7 @@ void Driver::buildActions(const ToolChain &TC,
       case types::TY_ClangModuleFile:
       case types::TY_SwiftDeps:
       case types::TY_Remapping:
+      case types::TY_IndexData:
       case types::TY_PCH:
       case types::TY_ImportedModules:
       case types::TY_TBD:
@@ -2071,8 +2109,7 @@ Job *Driver::buildJobsForAction(Compilation &C, const JobAction *JA,
   }
 
   // Choose the swiftmodule output path.
-  if (OI.ShouldGenerateModule && isa<CompileJobAction>(JA) &&
-      Output->getPrimaryOutputType() != types::TY_SwiftModuleFile) {
+  if (OI.ShouldGenerateModule && isa<CompileJobAction>(JA)) {
     StringRef OFMModuleOutputPath;
     if (OutputMap) {
       auto iter = OutputMap->find(types::TY_SwiftModuleFile);
@@ -2224,6 +2261,20 @@ Job *Driver::buildJobsForAction(Compilation &C, const JobAction *JA,
       }
 
       Output->setAdditionalOutputForType(types::TY_ModuleTrace, filename);
+    }
+
+    if (C.getArgs().hasArg(options::OPT_emit_tbd, options::OPT_emit_tbd_path)) {
+      if (OI.CompilerMode != OutputInfo::Mode::SingleCompile) {
+        llvm::outs() << "TBD emission has been disabled, because it requires a "
+                     << "single compiler invocation: consider enabling the "
+                     << "-whole-module-optimization flag.\n";
+      } else {
+        auto filename = *getOutputFilenameFromPathArgOrAsTopLevel(
+            OI, C.getArgs(), options::OPT_emit_tbd_path, types::TY_TBD,
+            /*TreatAsTopLevelOutput=*/true, "tbd", Buf);
+
+        Output->setAdditionalOutputForType(types::TY_TBD, filename);
+      }
     }
   }
 

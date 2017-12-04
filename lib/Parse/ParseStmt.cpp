@@ -1269,7 +1269,7 @@ ParserStatus Parser::parseStmtCondition(StmtCondition &Condition,
               diag::expected_expr_conditional;
         auto BoolExpr = parseExprBasic(diagID);
         Status |= BoolExpr;
-        if (BoolExpr.isNull() || BoolExpr.hasCodeCompletion())
+        if (BoolExpr.isNull())
           return Status;
         result.push_back(BoolExpr.get());
         BindingKindStr = StringRef();
@@ -1353,7 +1353,7 @@ ParserStatus Parser::parseStmtCondition(StmtCondition &Condition,
       ParserResult<Expr> InitExpr
         = parseExprBasic(diag::expected_expr_conditional_var);
       Status |= InitExpr;
-      if (InitExpr.isNull() || InitExpr.hasCodeCompletion())
+      if (InitExpr.isNull())
         return Status;
       Init = InitExpr.get();
       
@@ -2085,11 +2085,20 @@ ParserResult<Stmt> Parser::parseStmtForEach(SourceLoc ForLoc,
     SourceLoc LBraceLoc = Tok.getLoc();
     diagnose(LBraceLoc, diag::expected_foreach_container);
     Container = makeParserErrorResult(new (Context) ErrorExpr(LBraceLoc));
+  } else if (Tok.is(tok::code_complete)) {
+    Container =
+        makeParserResult(new (Context) CodeCompletionExpr(Tok.getLoc()));
+    Container.setHasCodeCompletion();
+    Status |= Container;
+    if (CodeCompletion)
+      CodeCompletion->completeForEachSequenceBeginning(
+          cast<CodeCompletionExpr>(Container.get()));
+    consumeToken(tok::code_complete);
   } else {
     Container = parseExprBasic(diag::expected_foreach_container);
+    Status |= Container;
     if (Container.isNull())
       Container = makeParserErrorResult(new (Context) ErrorExpr(Tok.getLoc()));
-    Status |= Container;
   }
 
   // Introduce a new scope and place the variables in the pattern into that

@@ -46,6 +46,7 @@
 #include "clang/CodeGen/ObjectFilePCHContainerOperations.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/Utils.h"
+#include "clang/Index/IndexingAction.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ASTWriter.h"
 #include "clang/Lex/Preprocessor.h"
@@ -690,6 +691,8 @@ addCommonInvocationArguments(std::vector<std::string> &invocationArgStrs,
         triple.getArch() == llvm::Triple::aarch64_be) {
       invocationArgStrs.push_back("-mcpu=cyclone");
     }
+  } else if (triple.getArch() == llvm::Triple::systemz) {
+    invocationArgStrs.push_back("-march=z196");
   }
 
   const std::string &overrideResourceDir = importerOpts.OverrideResourceDir;
@@ -712,6 +715,11 @@ addCommonInvocationArguments(std::vector<std::string> &invocationArgStrs,
   } else {
     invocationArgStrs.push_back("-resource-dir");
     invocationArgStrs.push_back(overrideResourceDir);
+  }
+
+  if (!importerOpts.IndexStorePath.empty()) {
+    invocationArgStrs.push_back("-index-store-path");
+    invocationArgStrs.push_back(importerOpts.IndexStorePath);
   }
 
   for (auto extraArg : importerOpts.ExtraArgs) {
@@ -1315,6 +1323,7 @@ ClangImporter::emitBridgingPCH(StringRef headerPath,
   invocation->getFrontendOpts().Inputs.push_back(
       clang::FrontendInputFile(headerPath, clang::IK_ObjC));
   invocation->getFrontendOpts().OutputFile = outputPCHPath;
+  invocation->getFrontendOpts().ProgramAction = clang::frontend::GeneratePCH;
   invocation->getPreprocessorOpts().resetNonModularOptions();
 
   clang::CompilerInstance emitInstance(
@@ -1328,8 +1337,15 @@ ClangImporter::emitBridgingPCH(StringRef headerPath,
   emitInstance.createSourceManager(fileManager);
   emitInstance.setTarget(&Impl.Instance->getTarget());
 
-  clang::GeneratePCHAction action;
-  emitInstance.ExecuteAction(action);
+  std::unique_ptr<clang::FrontendAction> action;
+  action.reset(new clang::GeneratePCHAction());
+  if (!emitInstance.getFrontendOpts().IndexStorePath.empty()) {
+    action = clang::index::
+      createIndexDataRecordingAction(emitInstance.getFrontendOpts(),
+                                     std::move(action));
+  }
+  emitInstance.ExecuteAction(*action);
+
   if (emitInstance.getDiagnostics().hasErrorOccurred()) {
     Impl.SwiftContext.Diags.diagnose({},
                                      diag::bridging_header_pch_error,
@@ -1416,6 +1432,17 @@ ModuleDecl *ClangImporter::loadModule(
     auto importRAII = diagClient.handleImport(clangPath.front().first,
                                               importLoc);
 
+    std::string preservedIndexStorePathOption;
+    auto &clangFEOpts = Impl.Instance->getFrontendOpts();
+    if (!clangFEOpts.IndexStorePath.empty()) {
+      StringRef moduleName = path[0].first->getName();
+      // Ignore the SwiftShims module for the index data.
+      if (moduleName == Impl.SwiftContext.SwiftShimsModuleName.str()) {
+        preservedIndexStorePathOption = clangFEOpts.IndexStorePath;
+        clangFEOpts.IndexStorePath.clear();
+      }
+    }
+
     // FIXME: The source location here is completely bogus. It can't be
     // invalid, it can't be the same thing twice in a row, and it has to come
     // from an actual buffer, so we make a fake buffer and just use a counter.
@@ -1436,6 +1463,12 @@ ModuleDecl *ClangImporter::loadModule(
     clang::ModuleLoadResult result =
         Impl.Instance->loadModule(clangImportLoc, path, visibility,
                                   /*IsInclusionDirective=*/false);
+
+    if (!preservedIndexStorePathOption.empty()) {
+      // Restore the -index-store-path option.
+      clangFEOpts.IndexStorePath = preservedIndexStorePathOption;
+    }
+
     if (result && makeVisible)
       Impl.getClangPreprocessor().makeModuleVisible(result, clangImportLoc);
     return result;
@@ -2281,7 +2314,14 @@ void ClangModuleUnit::getTopLevelDecls(SmallVectorImpl<Decl*> &results) const {
           owner.importDecl(decl, owner.CurrentVersion);
       if (!importedDecl) continue;
 
-      auto ext = dyn_cast<ExtensionDecl>(importedDecl->getDeclContext());
+      // Find the enclosing extension, if there is one.
+      ExtensionDecl *ext = nullptr;
+      for (auto importedDC = importedDecl->getDeclContext();
+           !importedDC->isModuleContext();
+           importedDC = importedDC->getParent()) {
+        ext = dyn_cast<ExtensionDecl>(importedDC);
+        if (ext) break;
+      }
       if (!ext) continue;
 
       if (knownExtensions.insert(ext).second)
@@ -2395,6 +2435,91 @@ static bool isVisibleClangEntry(clang::ASTContext &ctx,
   }
 
   return true;
+}
+
+TypeDecl *
+ClangModuleUnit::lookupNestedType(Identifier name,
+                                  const NominalTypeDecl *baseType) const {
+  // Special case for error code enums: try looking directly into the struct
+  // first. But only if it looks like a synthesized error wrapped struct.
+  if (name == getASTContext().Id_Code && !baseType->hasClangNode() &&
+      isa<StructDecl>(baseType) && !baseType->hasLazyMembers() &&
+      baseType->isChildContextOf(this)) {
+    auto *mutableBase = const_cast<NominalTypeDecl *>(baseType);
+    auto codeEnum = mutableBase->lookupDirect(name,/*ignoreNewExtensions*/true);
+    // Double-check that we actually have a good result. It's possible what we
+    // found is /not/ a synthesized error struct, but just something that looks
+    // like it. But if we still found a good result we should return that.
+    if (codeEnum.size() == 1 && isa<TypeDecl>(codeEnum.front()))
+      return cast<TypeDecl>(codeEnum.front());
+    if (codeEnum.size() > 1)
+      return nullptr;
+    // Otherwise, fall back and try via lookup table.
+  }
+
+  auto lookupTable = owner.findLookupTable(clangModule);
+  if (!lookupTable)
+    return nullptr;
+
+  auto baseTypeContext = owner.getEffectiveClangContext(baseType);
+  if (!baseTypeContext)
+    return nullptr;
+
+  auto &clangCtx = owner.getClangASTContext();
+
+  // FIXME: This is very similar to what's in Implementation::lookupValue and
+  // Implementation::loadAllMembers.
+  SmallVector<TypeDecl *, 2> results;
+  for (auto entry : lookupTable->lookup(name.str(),
+                                        baseTypeContext)) {
+    // If the entry is not visible, skip it.
+    if (!isVisibleClangEntry(clangCtx, entry)) continue;
+
+    auto clangDecl = entry.dyn_cast<clang::NamedDecl *>();
+    auto clangTypeDecl = dyn_cast_or_null<clang::TypeDecl>(clangDecl);
+    if (!clangTypeDecl)
+      continue;
+
+    clangTypeDecl = cast<clang::TypeDecl>(clangTypeDecl->getMostRecentDecl());
+
+    bool anyMatching = false;
+    TypeDecl *originalDecl = nullptr;
+    owner.forEachDistinctName(clangTypeDecl, [&](ImportedName newName,
+                                                 ImportNameVersion nameVersion){
+      if (anyMatching)
+        return;
+      if (!newName.getDeclName().isSimpleName(name))
+        return;
+
+      auto decl = dyn_cast_or_null<TypeDecl>(
+          owner.importDeclReal(clangTypeDecl, nameVersion));
+      if (!decl)
+        return;
+
+      if (!originalDecl)
+        originalDecl = decl;
+      else if (originalDecl == decl)
+        return;
+
+      auto *importedContext = decl->getDeclContext()->
+          getAsNominalTypeOrNominalTypeExtensionContext();
+      if (importedContext != baseType)
+        return;
+
+      assert(decl->getFullName().matchesRef(name) &&
+             "importFullName behaved differently from importDecl");
+      results.push_back(decl);
+      anyMatching = true;
+    });
+  }
+
+  if (results.size() != 1) {
+    // It's possible that two types were import-as-member'd onto the same base
+    // type with the same name. In this case, fall back to regular lookup.
+    return nullptr;
+  }
+
+  return results.front();
 }
 
 void ClangImporter::loadExtensions(NominalTypeDecl *nominal,
@@ -3093,7 +3218,7 @@ void ClangImporter::Implementation::lookupAllObjCMembers(
 }
 
 EffectiveClangContext ClangImporter::Implementation::getEffectiveClangContext(
-                        NominalTypeDecl *nominal) {
+    const NominalTypeDecl *nominal) {
   // If we have a Clang declaration, look at it to determine the
   // effective Clang context.
   if (auto constClangDecl = nominal->getClangDecl()) {
@@ -3108,7 +3233,7 @@ EffectiveClangContext ClangImporter::Implementation::getEffectiveClangContext(
 
   // Resolve the type.
   if (auto typeResolver = getTypeResolver())
-    typeResolver->resolveDeclSignature(nominal);
+    typeResolver->resolveDeclSignature(const_cast<NominalTypeDecl *>(nominal));
 
   // If it's an @objc entity, go look for it.
   if (nominal->isObjC()) {

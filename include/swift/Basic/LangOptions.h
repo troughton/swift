@@ -79,8 +79,8 @@ namespace swift {
     /// \brief Disable API availability checking.
     bool DisableAvailabilityChecking = false;
 
-    /// \brief Disable typo correction.
-    bool DisableTypoCorrection = false;
+    /// \brief Maximum number of typo corrections we are allowed to perform.
+    unsigned TypoCorrectionLimit = 10;
     
     /// Should access control be respected?
     bool EnableAccessControl = true;
@@ -171,6 +171,10 @@ namespace swift {
 
     unsigned SolverBindingThreshold = 1024 * 1024;
 
+    /// \brief The upper bound to number of sub-expressions unsolved
+    /// before termination of the shrink phrase of the constraint solver.
+    unsigned SolverShrinkUnsolvedThreshold = 10;
+
     /// The maximum depth to which to test decl circularity.
     unsigned MaxCircularityDepth = 500;
 
@@ -184,6 +188,9 @@ namespace swift {
     /// \brief Staging flag for treating inout parameters as Thread Sanitizer
     /// accesses.
     bool DisableTsanInoutInstrumentation = false;
+
+    /// \brief Staging flag for reporting runtime issues to the debugger.
+    bool ReportErrorsToDebugger = false;
 
     /// \brief Staging flag for class resilience, which we do not want to enable
     /// fully until more code is in place, to allow the standard library to be
@@ -231,9 +238,6 @@ namespace swift {
     /// Diagnose uses of NSCoding with classes that have unstable mangled names.
     bool EnableNSKeyedArchiverDiagnostics = true;
     
-    /// Enable keypath components that aren't fully implemented.
-    bool EnableExperimentalKeyPathComponents = false;
-
     /// When a conversion from String to Substring fails, emit a fix-it to append
     /// the void subscript '[]'.
     /// FIXME: Remove this flag when void subscripts are implemented.

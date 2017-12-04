@@ -113,6 +113,31 @@ namespace swift {
 namespace Demangle {
 
 //////////////////////////////////
+// Public utility functions    //
+//////////////////////////////////
+
+int getManglingPrefixLength(const char *mangledName) {
+  // Check for the swift-4 prefix
+  if (mangledName[0] == '_' && mangledName[1] == 'T' && mangledName[2] == '0')
+    return 3;
+
+  // Check for the swift > 4 prefix
+  unsigned Offset = (mangledName[0] == '_' ? 1 : 0);
+  if (mangledName[Offset] == '$' && mangledName[Offset + 1] == 'S')
+    return Offset + 2;
+
+  return 0;
+}
+
+bool isSwiftSymbol(const char *mangledName) {
+  // The old mangling.
+  if (mangledName[0] == '_' && mangledName[1] == 'T')
+    return true;
+
+  return getManglingPrefixLength(mangledName) != 0;
+}
+
+//////////////////////////////////
 // Node member functions        //
 //////////////////////////////////
 
@@ -226,11 +251,11 @@ NodePointer Demangler::demangleSymbol(StringRef MangledName) {
   if (nextIf("_Tt"))
     return demangleObjCTypeName();
 
-  if (!nextIf(MANGLING_PREFIX_STR)
-      // Also accept the future mangling prefix.
-      // TODO: remove this line as soon as MANGLING_PREFIX_STR gets "_S".
-      && !nextIf("_S"))
+  unsigned PrefixLength = getManglingPrefixLength(MangledName.data());
+  if (PrefixLength == 0)
     return nullptr;
+
+  Pos += PrefixLength;
 
   // If any other prefixes are accepted, please update Mangler::verify.
 
@@ -393,6 +418,11 @@ NodePointer Demangler::demangleOperator() {
     case 'z': return createType(createWithChild(Node::Kind::InOut,
                                                 popTypeAndGetChild()));
     case '_': return createNode(Node::Kind::FirstElementMarker);
+    case '.':
+      // IRGen still uses '.<n>' to disambiguate partial apply thunks and
+      // outlined copy functions. We treat such a suffix as "unmangled suffix".
+      pushBack();
+      return createNode(Node::Kind::Suffix, consumeAll());
     default:
       pushBack();
       return demangleIdentifier();
@@ -1263,15 +1293,65 @@ NodePointer Demangler::demangleThunkOrSpecialization() {
     case 'k': {
       auto nodeKind = c == 'K' ? Node::Kind::KeyPathGetterThunkHelper
                                : Node::Kind::KeyPathSetterThunkHelper;
-      auto type = popNode();
-      auto sigOrDecl = popNode();
-      if (sigOrDecl &&
-          sigOrDecl->getKind() == Node::Kind::DependentGenericSignature) {
-        auto decl = popNode();
-        return createWithChildren(nodeKind, decl, sigOrDecl, type);
+      std::vector<NodePointer> types;
+      auto node = popNode();
+      if (!node || node->getKind() != Node::Kind::Type)
+        return nullptr;
+      do {
+        types.push_back(node);
+        node = popNode();
+      } while (node && node->getKind() == Node::Kind::Type);
+      
+      NodePointer result;
+      if (node) {
+        if (node->getKind() == Node::Kind::DependentGenericSignature) {
+          auto decl = popNode();
+          result = createWithChildren(nodeKind, decl, /*sig*/ node);
+        } else {
+          result = createWithChild(nodeKind, /*decl*/ node);
+        }
       } else {
-        return createWithChildren(nodeKind, sigOrDecl, type);
+        return nullptr;
       }
+      for (auto i = types.rbegin(), e = types.rend(); i != e; ++i) {
+        result->addChild(*i, *this);
+      }
+      return result;
+    }
+    case 'H':
+    case 'h': {
+      auto nodeKind = c == 'H' ? Node::Kind::KeyPathEqualsThunkHelper
+                               : Node::Kind::KeyPathHashThunkHelper;
+      NodePointer genericSig = nullptr;
+      std::vector<NodePointer> types;
+      
+      auto node = popNode();
+      if (node) {
+        if (node->getKind() == Node::Kind::DependentGenericSignature) {
+          genericSig = node;
+        } else if (node->getKind() == Node::Kind::Type) {
+          types.push_back(node);
+        } else {
+          return nullptr;
+        }
+      } else {
+        return nullptr;
+      }
+      
+      while (auto node = popNode()) {
+        if (node->getKind() != Node::Kind::Type) {
+          return nullptr;
+        }
+        types.push_back(node);
+      }
+      
+      NodePointer result = createNode(nodeKind);
+      for (auto i = types.rbegin(), e = types.rend(); i != e; ++i) {
+        result->addChild(*i, *this);
+      }
+      if (genericSig)
+        result->addChild(genericSig, *this);
+      return result;
     }
     default:
       return nullptr;

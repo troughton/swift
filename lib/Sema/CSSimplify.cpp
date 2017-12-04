@@ -445,50 +445,46 @@ matchCallArguments(ArrayRef<CallArgParam> args,
   // If any arguments were provided out-of-order, check whether we have
   // violated any of the reordering rules.
   if (potentiallyOutOfOrder) {
-    // Build a mapping from arguments to parameters.
-    SmallVector<unsigned, 4> argumentBindings(numArgs);
-    for (paramIdx = 0; paramIdx != numParams; ++paramIdx) {
-      for (auto argIdx : parameterBindings[paramIdx])
-        argumentBindings[argIdx] = paramIdx;
-    }
-
-    // Walk through the arguments, determining if any were bound to parameters
-    // out-of-order where it is not permitted.
-    unsigned prevParamIdx = argumentBindings[0];
-    for (unsigned argIdx = 1; argIdx != numArgs; ++argIdx) {
-      unsigned paramIdx = argumentBindings[argIdx];
-
-      // If this argument binds to the same parameter as the previous one or to
-      // a later parameter, just update the parameter index.
-      if (paramIdx >= prevParamIdx) {
-        prevParamIdx = paramIdx;
-        continue;
-      }
-
-      unsigned prevArgIdx = parameterBindings[prevParamIdx].front();
-
-      // First let's double check if out-of-order argument is nothing
-      // more than a simple label mismatch, because in situation where
-      // one argument requires label and another one doesn't, but caller
-      // doesn't provide either, problem is going to be identified as
-      // out-of-order argument instead of label mismatch.
-      auto &parameter = params[prevArgIdx];
-      if (parameter.hasLabel()) {
-        auto expectedLabel = parameter.Label;
-        auto argumentLabel = args[argIdx].Label;
-
-        // If there is a label but it's incorrect it can only mean
-        // situation like this: expected (x, _ y) got (y, _ x).
-        if (argumentLabel.empty() ||
-            (expectedLabel.compare(argumentLabel) != 0 &&
-             args[prevArgIdx].Label.empty())) {
-          listener.missingLabel(prevArgIdx);
-          return true;
+    unsigned argIdx = 0;
+    // Enumerate the parameters and their bindings to see if any arguments are
+    // our of order
+    for (auto binding : parameterBindings) {
+      for (auto boundArgIdx : binding) {
+        if (boundArgIdx == argIdx) {
+          // If the argument is in the right location, just continue
+          argIdx++;
+          continue;
         }
-      }
 
-      listener.outOfOrderArgument(argIdx, prevArgIdx);
-      return true;
+        // Otherwise, we've found the (first) parameter that has an out of order
+        // argument, and know the indices of the argument the needs to move
+        // (fromArgIdx) and the argument location it should move to (toArgItd).
+        auto fromArgIdx = boundArgIdx;
+        auto toArgIdx = argIdx;
+
+        // First let's double check if out-of-order argument is nothing
+        // more than a simple label mismatch, because in situation where
+        // one argument requires label and another one doesn't, but caller
+        // doesn't provide either, problem is going to be identified as
+        // out-of-order argument instead of label mismatch.
+        auto &parameter = params[toArgIdx];
+        if (parameter.hasLabel()) {
+          auto expectedLabel = parameter.Label;
+          auto argumentLabel = args[fromArgIdx].Label;
+
+          // If there is a label but it's incorrect it can only mean
+          // situation like this: expected (x, _ y) got (y, _ x).
+          if (argumentLabel.empty() ||
+              (expectedLabel.compare(argumentLabel) != 0 &&
+               !args[toArgIdx].hasLabel())) {
+            listener.missingLabel(toArgIdx);
+            return true;
+          }
+        }
+
+        listener.outOfOrderArgument(fromArgIdx, toArgIdx);
+        return true;
+      }
     }
   }
 
@@ -520,27 +516,55 @@ getCalleeDeclAndArgs(ConstraintSystem &cs,
   if (!path.empty() &&
       !(path.size() == 1 &&
         (path.back().getKind() == ConstraintLocator::ApplyArgument ||
-         path.back().getKind() == ConstraintLocator::SubscriptIndex)))
+         path.back().getKind() == ConstraintLocator::SubscriptIndex ||
+         path.back().getKind() == ConstraintLocator::KeyPathComponent)))
     return std::make_tuple(nullptr, 0, argLabels, hasTrailingClosure);
 
   // Dig out the callee.
-  Expr *calleeExpr;
+  ConstraintLocator *targetLocator;
   if (auto call = dyn_cast<CallExpr>(callExpr)) {
-    calleeExpr = call->getDirectCallee();
+    targetLocator = cs.getConstraintLocator(call->getDirectCallee());
     argLabels = call->getArgumentLabels();
     hasTrailingClosure = call->hasTrailingClosure();
   } else if (auto unresolved = dyn_cast<UnresolvedMemberExpr>(callExpr)) {
-    calleeExpr = callExpr;
+    targetLocator = cs.getConstraintLocator(callExpr);
     argLabels = unresolved->getArgumentLabels();
     hasTrailingClosure = unresolved->hasTrailingClosure();
   } else if (auto subscript = dyn_cast<SubscriptExpr>(callExpr)) {
-    calleeExpr = callExpr;
+    targetLocator = cs.getConstraintLocator(callExpr);
     argLabels = subscript->getArgumentLabels();
     hasTrailingClosure = subscript->hasTrailingClosure();
   } else if (auto dynSubscript = dyn_cast<DynamicSubscriptExpr>(callExpr)) {
-    calleeExpr = callExpr;
+    targetLocator = cs.getConstraintLocator(callExpr);
     argLabels = dynSubscript->getArgumentLabels();
     hasTrailingClosure = dynSubscript->hasTrailingClosure();
+  } else if (auto keyPath = dyn_cast<KeyPathExpr>(callExpr)) {
+    if (path.empty()
+        || path.back().getKind() != ConstraintLocator::KeyPathComponent)
+      return std::make_tuple(nullptr, 0, argLabels, hasTrailingClosure);
+    
+    auto componentIndex = path.back().getValue();
+    if (componentIndex >= keyPath->getComponents().size())
+      return std::make_tuple(nullptr, 0, argLabels, hasTrailingClosure);
+
+    auto &component = keyPath->getComponents()[componentIndex];
+    switch (component.getKind()) {
+    case KeyPathExpr::Component::Kind::Subscript:
+    case KeyPathExpr::Component::Kind::UnresolvedSubscript:
+      targetLocator = cs.getConstraintLocator(keyPath, path.back());
+      argLabels = component.getSubscriptLabels();
+      hasTrailingClosure = false; // key paths don't support trailing closures
+      break;
+      
+    case KeyPathExpr::Component::Kind::Invalid:
+    case KeyPathExpr::Component::Kind::UnresolvedProperty:
+    case KeyPathExpr::Component::Kind::Property:
+    case KeyPathExpr::Component::Kind::OptionalForce:
+    case KeyPathExpr::Component::Kind::OptionalChain:
+    case KeyPathExpr::Component::Kind::OptionalWrap:
+      return std::make_tuple(nullptr, 0, argLabels, hasTrailingClosure);
+    }
+
   } else {
     if (auto apply = dyn_cast<ApplyExpr>(callExpr)) {
       argLabels = apply->getArgumentLabels(argLabelsScratch);
@@ -551,11 +575,6 @@ getCalleeDeclAndArgs(ConstraintSystem &cs,
     }
     return std::make_tuple(nullptr, 0, argLabels, hasTrailingClosure);
   }
-
-  // Determine the target locator.
-  // FIXME: Check whether the callee is of an expression kind that
-  // could describe a declaration. This is an optimization.
-  ConstraintLocator *targetLocator = cs.getConstraintLocator(calleeExpr);
 
   // Find the overload choice corresponding to the callee locator.
   // FIXME: This linearly walks the list of resolved overloads, which is
@@ -1049,12 +1068,21 @@ ConstraintSystem::matchFunctionTypes(FunctionType *func1, FunctionType *func2,
   auto func1Input = func1->getInput();
   auto func2Input = func2->getInput();
   if (!getASTContext().isSwiftVersion3()) {
-    if (auto elt = locator.last()) {
-      if (elt->getKind() == ConstraintLocator::ApplyArgToParam) {
+    SmallVector<LocatorPathElt, 4> path;
+    locator.getLocatorParts(path);
+
+    // Find the last path element, skipping OptioanlPayload elements
+    // so that we allow this exception in cases of optional injection.
+    auto last = std::find_if(
+        path.rbegin(), path.rend(), [](LocatorPathElt &elt) -> bool {
+          return elt.getKind() != ConstraintLocator::OptionalPayload;
+        });
+
+    if (last != path.rend()) {
+      if (last->getKind() == ConstraintLocator::ApplyArgToParam) {
         if (auto *paren2 = dyn_cast<ParenType>(func2Input.getPointer())) {
-          func2Input = paren2->getUnderlyingType();
-          if (auto *paren1 = dyn_cast<ParenType>(func1Input.getPointer()))
-            func1Input = paren1->getUnderlyingType();
+          if (!isa<ParenType>(func1Input.getPointer()))
+            func2Input = paren2->getUnderlyingType();
         }
       }
     }
@@ -1441,7 +1469,8 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
         // Simplify the right-hand type and perform the "occurs" check.
         typeVar1 = getRepresentative(typeVar1);
         type2 = simplifyType(type2, flags);
-        if (typeVarOccursInType(typeVar1, type2))
+        if (typeVarOccursInType(typeVar1, type2) ||
+            type2->is<DependentMemberType>())
           return formUnsolvedResult();
 
         // Equal constraints allow mixed LValue/RValue bindings, but
@@ -1491,7 +1520,8 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
       // Simplify the left-hand type and perform the "occurs" check.
       typeVar2 = getRepresentative(typeVar2);
       type1 = simplifyType(type1, flags);
-      if (typeVarOccursInType(typeVar2, type1))
+      if (typeVarOccursInType(typeVar2, type1) ||
+          type1->is<DependentMemberType>())
         return formUnsolvedResult();
 
       // Equal constraints allow mixed LValue/RValue bindings, but
@@ -1523,7 +1553,8 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
         // Simplify the left-hand type and perform the "occurs" check.
         typeVar2 = getRepresentative(typeVar2);
         type1 = simplifyType(type1, flags);
-        if (typeVarOccursInType(typeVar2, type1))
+        if (typeVarOccursInType(typeVar2, type1) ||
+            type1->is<DependentMemberType>())
           return formUnsolvedResult();
 
         if (auto *iot = type1->getAs<InOutType>()) {
@@ -1536,7 +1567,8 @@ ConstraintSystem::matchTypes(Type type1, Type type2, ConstraintKind kind,
         // Simplify the right-hand type and perform the "occurs" check.
         typeVar1 = getRepresentative(typeVar1);
         type2 = simplifyType(type2, flags);
-        if (typeVarOccursInType(typeVar1, type2))
+        if (typeVarOccursInType(typeVar1, type2) ||
+            type2->is<DependentMemberType>())
           return formUnsolvedResult();
 
         if (auto *lvt = type2->getAs<LValueType>()) {
@@ -2859,7 +2891,9 @@ performMemberLookup(ConstraintKind constraintKind, DeclName memberName,
   result.OverallResult = MemberLookupResult::HasResults;
   
   // If we're looking for a subscript, consider key path operations.
-  if (memberName.isSimpleName(getASTContext().Id_subscript)) {
+  if (memberName.isSimpleName(getASTContext().Id_subscript)
+      && (isa<SubscriptExpr>(memberLocator->getAnchor())
+          || isa<KeyPathExpr>(memberLocator->getAnchor()))) {
     result.ViableCandidates.push_back(
         OverloadChoice(baseTy, OverloadChoiceKind::KeyPathApplication));
   }
@@ -3845,7 +3879,8 @@ ConstraintSystem::simplifyKeyPathConstraint(Type keyPathTy,
   // If we're fixed to a bound generic type, trying harvesting context from it.
   // However, we don't want a solution that fixes the expression type to
   // PartialKeyPath; we'd rather that be represented using an upcast conversion.
-  if (auto keyPathBGT = keyPathTy->getAs<BoundGenericType>()) {
+  auto keyPathBGT = keyPathTy->getAs<BoundGenericType>();
+  if (keyPathBGT) {
     if (tryMatchRootAndValueFromKeyPathType(keyPathBGT, /*allowPartial*/false)
           == SolutionKind::Error)
       return SolutionKind::Error;
@@ -3875,6 +3910,8 @@ ConstraintSystem::simplifyKeyPathConstraint(Type keyPathTy,
     case KeyPathExpr::Component::Kind::Invalid:
       break;
       
+    case KeyPathExpr::Component::Kind::Property:
+    case KeyPathExpr::Component::Kind::Subscript:
     case KeyPathExpr::Component::Kind::UnresolvedProperty:
     case KeyPathExpr::Component::Kind::UnresolvedSubscript: {
       // If no choice was made, leave the constraint unsolved.
@@ -3919,10 +3956,11 @@ ConstraintSystem::simplifyKeyPathConstraint(Type keyPathTy,
       // Forcing an optional preserves its lvalue-ness.
       break;
     
-    case KeyPathExpr::Component::Kind::Property:
-    case KeyPathExpr::Component::Kind::Subscript:
     case KeyPathExpr::Component::Kind::OptionalWrap:
-      llvm_unreachable("already resolved");
+      // An optional chain should already have forced the entire key path to
+      // be read-only.
+      assert(capability == ReadOnly);
+      break;
     }
   }
 done:
@@ -3943,9 +3981,19 @@ done:
     break;
   }
   
+  // FIXME: Allow the type to be upcast if the type system has a concrete
+  // KeyPath type assigned to the expression already.
+  if (keyPathBGT) {
+    if (keyPathBGT->getDecl() == getASTContext().getKeyPathDecl())
+      kpDecl = getASTContext().getKeyPathDecl();
+    else if (keyPathBGT->getDecl() == getASTContext().getWritableKeyPathDecl()
+             && capability >= Writable)
+      kpDecl = getASTContext().getWritableKeyPathDecl();
+  }
+  
   auto resolvedKPTy = BoundGenericType::get(kpDecl, nullptr,
                                             {rootTy, valueTy});
-  return matchTypes(resolvedKPTy, keyPathTy, ConstraintKind::Subtype,
+  return matchTypes(resolvedKPTy, keyPathTy, ConstraintKind::Bind,
                     subflags, locator);
 }
 

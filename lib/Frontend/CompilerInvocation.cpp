@@ -169,6 +169,11 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     Opts.GroupInfoPath = A->getValue();
   }
 
+  if (const Arg *A = Args.getLastArg(OPT_index_store_path)) {
+    Opts.IndexStorePath = A->getValue();
+  }
+  Opts.IndexSystemModules |= Args.hasArg(OPT_index_system_modules);
+
   Opts.EmitVerboseSIL |= Args.hasArg(OPT_emit_verbose_sil);
   Opts.EmitSortedSIL |= Args.hasArg(OPT_emit_sorted_sil);
 
@@ -204,6 +209,10 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Diags.diagnose(SourceLoc(), diag::error_unsupported_option_argument,
                      A->getOption().getPrefixedName(), value);
     }
+  }
+
+  if (const Arg *A = Args.getLastArg(OPT_tbd_install_name)) {
+    Opts.TBDInstallName = A->getValue();
   }
 
   if (const Arg *A = Args.getLastArg(OPT_warn_long_function_bodies)) {
@@ -305,8 +314,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Action = FrontendOptions::EmitPCH;
     } else if (Opt.matches(OPT_emit_imported_modules)) {
       Action = FrontendOptions::EmitImportedModules;
-    } else if (Opt.matches(OPT_emit_tbd)) {
-      Action = FrontendOptions::EmitTBD;
     } else if (Opt.matches(OPT_parse)) {
       Action = FrontendOptions::Parse;
     } else if (Opt.matches(OPT_typecheck)) {
@@ -592,13 +599,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       else
         Suffix = "importedmodules";
       break;
-
-    case FrontendOptions::EmitTBD:
-      if (Opts.OutputFilenames.empty())
-        Opts.setSingleOutputFilename("-");
-      else
-        Suffix = "tbd";
-      break;
     }
 
     if (!Suffix.empty()) {
@@ -708,6 +708,9 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
                           OPT_emit_loaded_module_trace_path,
                           "trace.json", false);
 
+  determineOutputFilename(Opts.TBDPath, OPT_emit_tbd, OPT_emit_tbd_path, "tbd",
+                          false);
+
   if (const Arg *A = Args.getLastArg(OPT_emit_fixits_path)) {
     Opts.FixitsOutputPath = A->getValue();
   }
@@ -758,7 +761,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::EmitAssembly:
     case FrontendOptions::EmitObject:
     case FrontendOptions::EmitImportedModules:
-    case FrontendOptions::EmitTBD:
       break;
     }
   }
@@ -789,7 +791,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::EmitAssembly:
     case FrontendOptions::EmitObject:
     case FrontendOptions::EmitImportedModules:
-    case FrontendOptions::EmitTBD:
       break;
     }
   }
@@ -821,7 +822,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::EmitAssembly:
     case FrontendOptions::EmitObject:
     case FrontendOptions::EmitImportedModules:
-    case FrontendOptions::EmitTBD:
       break;
     }
   }
@@ -856,7 +856,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
     case FrontendOptions::EmitAssembly:
     case FrontendOptions::EmitObject:
     case FrontendOptions::EmitImportedModules:
-    case FrontendOptions::EmitTBD:
       break;
     }
   }
@@ -869,7 +868,6 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
       Args.hasArg(OPT_serialize_debugging_options);
   Opts.EnableSourceImport |= Args.hasArg(OPT_enable_source_import);
   Opts.ImportUnderlyingModule |= Args.hasArg(OPT_import_underlying_module);
-  Opts.SILSerializeAll |= Args.hasArg(OPT_sil_serialize_all);
   Opts.EnableSerializationNestedTypeLookupTable &=
       !Args.hasArg(OPT_disable_serialization_nested_type_lookup_table);
 
@@ -947,9 +945,6 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableExperimentalPropertyBehaviors |=
     Args.hasArg(OPT_enable_experimental_property_behaviors);
 
-  Opts.EnableExperimentalKeyPathComponents |=
-    Args.hasArg(OPT_enable_experimental_keypath_components);
-
   Opts.EnableClassResilience |=
     Args.hasArg(OPT_enable_class_resilience);
 
@@ -965,6 +960,9 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.DisableTsanInoutInstrumentation |=
       Args.hasArg(OPT_disable_tsan_inout_instrumentation);
 
+  Opts.ReportErrorsToDebugger |=
+      Args.hasArg(OPT_report_errors_to_debugger);
+
   if (FrontendOpts.InputKind == InputFileKind::IFK_SIL)
     Opts.DisableAvailabilityChecking = true;
   
@@ -974,7 +972,21 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
       = A->getOption().matches(OPT_enable_access_control);
   }
 
-  Opts.DisableTypoCorrection |= Args.hasArg(OPT_disable_typo_correction);
+  if (auto A = Args.getLastArg(OPT_disable_typo_correction,
+                               OPT_typo_correction_limit)) {
+    if (A->getOption().matches(OPT_disable_typo_correction))
+      Opts.TypoCorrectionLimit = 0;
+    else {
+      unsigned limit;
+      if (StringRef(A->getValue()).getAsInteger(10, limit)) {
+        Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                       A->getAsString(Args), A->getValue());
+        return true;
+      }
+
+      Opts.TypoCorrectionLimit = limit;
+    }
+  }
 
   Opts.CodeCompleteInitsInPostfixExpr |=
       Args.hasArg(OPT_code_complete_inits_in_postfix_expr);
@@ -1035,6 +1047,17 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     }
     
     Opts.SolverMemoryThreshold = threshold;
+  }
+
+  if (const Arg *A = Args.getLastArg(OPT_solver_shrink_unsolved_threshold)) {
+    unsigned threshold;
+    if (StringRef(A->getValue()).getAsInteger(10, threshold)) {
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+      return true;
+    }
+
+    Opts.SolverShrinkUnsolvedThreshold = threshold;
   }
 
   if (const Arg *A = Args.getLastArg(OPT_value_recursion_threshold)) {
@@ -1140,6 +1163,9 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
 
   if (const Arg *A = Args.getLastArg(OPT_target_cpu))
     Opts.TargetCPU = A->getValue();
+
+  if (const Arg *A = Args.getLastArg(OPT_index_store_path))
+    Opts.IndexStorePath = A->getValue();
 
   for (const Arg *A : make_range(Args.filtered_begin(OPT_Xcc),
                                  Args.filtered_end())) {
@@ -1339,7 +1365,15 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
   if (Args.hasArg(OPT_sil_merge_partial_modules))
     Opts.MergePartialModules = true;
 
+  Opts.SILSerializeAll |= Args.hasArg(OPT_sil_serialize_all);
+  Opts.SILSerializeWitnessTables |=
+    Args.hasArg(OPT_sil_serialize_witness_tables);
+
   // Parse the optimization level.
+  // Default to Onone settings if no option is passed.
+  IRGenOpts.Optimize = false;
+  IRGenOpts.OptimizeForSize = false;
+  Opts.Optimization = SILOptions::SILOptMode::None;
   if (const Arg *A = Args.getLastArg(OPT_O_Group)) {
     if (A->getOption().matches(OPT_Onone)) {
       IRGenOpts.Optimize = false;
@@ -1347,6 +1381,7 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
     } else if (A->getOption().matches(OPT_Ounchecked)) {
       // Turn on optimizations and remove all runtime checks.
       IRGenOpts.Optimize = true;
+      IRGenOpts.OptimizeForSize = false;
       Opts.Optimization = SILOptions::SILOptMode::OptimizeUnchecked;
       // Removal of cond_fail (overflow on binary operations).
       Opts.RemoveRuntimeAsserts = true;
@@ -1354,9 +1389,15 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
     } else if (A->getOption().matches(OPT_Oplayground)) {
       // For now -Oplayground is equivalent to -Onone.
       IRGenOpts.Optimize = false;
+      IRGenOpts.OptimizeForSize = false;
       Opts.Optimization = SILOptions::SILOptMode::None;
+    } else if (A->getOption().matches(OPT_Osize)) {
+      IRGenOpts.Optimize = true;
+      IRGenOpts.OptimizeForSize = true;
+      Opts.Optimization = SILOptions::SILOptMode::OptimizeForSize;
     } else {
       assert(A->getOption().matches(OPT_O));
+      IRGenOpts.OptimizeForSize = false;
       IRGenOpts.Optimize = true;
       Opts.Optimization = SILOptions::SILOptMode::Optimize;
     }

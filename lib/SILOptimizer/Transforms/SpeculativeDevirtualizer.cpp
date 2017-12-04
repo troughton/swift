@@ -150,10 +150,15 @@ static FullApplySite speculateMonomorphicTarget(FullApplySite AI,
   SILArgument *Arg =
       Continue->createPHIArgument(AI.getType(), ValueOwnershipKind::Owned);
   if (!isa<TryApplyInst>(AI)) {
-    IdenBuilder.createBranch(AI.getLoc(), Continue,
-                             ArrayRef<SILValue>(IdenAI.getInstruction()));
-    VirtBuilder.createBranch(AI.getLoc(), Continue,
-                             ArrayRef<SILValue>(VirtAI.getInstruction()));
+    if (AI.getSubstCalleeType()->isNoReturnFunction()) {
+      IdenBuilder.createUnreachable(AI.getLoc());
+      VirtBuilder.createUnreachable(AI.getLoc());
+    } else {
+      IdenBuilder.createBranch(AI.getLoc(), Continue,
+                               ArrayRef<SILValue>(IdenAI.getInstruction()));
+      VirtBuilder.createBranch(AI.getLoc(), Continue,
+                               ArrayRef<SILValue>(VirtAI.getInstruction()));
+    }
   }
 
   // Remove the old Apply instruction.
@@ -551,6 +556,13 @@ namespace {
     ~SpeculativeDevirtualization() override {}
 
     void run() override {
+
+      auto &CurFn = *getFunction();
+      // Don't perform speculative devirtualization at -Os.
+      if (CurFn.getModule().getOptions().Optimization ==
+          SILOptions::SILOptMode::OptimizeForSize)
+        return;
+
       ClassHierarchyAnalysis *CHA = PM->getAnalysis<ClassHierarchyAnalysis>();
 
       bool Changed = false;

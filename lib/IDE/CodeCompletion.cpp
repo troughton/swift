@@ -1381,9 +1381,9 @@ class CodeCompletionCallbacksImpl : public CodeCompletionCallbacks {
   }
 
   /// \returns true on success, false on failure.
-  bool typecheckDelayedParsedDecl() {
-    assert(DelayedParsedDecl && "should have a delayed parsed decl");
-    return typeCheckCompletionDecl(DelayedParsedDecl);
+  bool typecheckParsedDecl() {
+    assert(ParsedDecl && "should have a parsed decl");
+    return typeCheckCompletionDecl(ParsedDecl);
   }
 
   Optional<std::pair<Type, ConcreteDeclRef>> typeCheckParsedExpr() {
@@ -1440,6 +1440,7 @@ public:
   void completeDotExpr(Expr *E, SourceLoc DotLoc) override;
   void completeStmtOrExpr() override;
   void completePostfixExprBeginning(CodeCompletionExpr *E) override;
+  void completeForEachSequenceBeginning(CodeCompletionExpr *E) override;
   void completePostfixExpr(Expr *E, bool hasSpace) override;
   void completePostfixExprParen(Expr *E, Expr *CodeCompletionE) override;
   void completeExprSuper(SuperRefExpr *SRE) override;
@@ -1536,7 +1537,7 @@ protocolForLiteralKind(CodeCompletionLiteralKind kind) {
   case CodeCompletionLiteralKind::NilLiteral:
     return KnownProtocolKind::ExpressibleByNilLiteral;
   case CodeCompletionLiteralKind::StringLiteral:
-    return KnownProtocolKind::ExpressibleByStringLiteral;
+    return KnownProtocolKind::ExpressibleByUnicodeScalarLiteral;
   case CodeCompletionLiteralKind::Tuple:
     llvm_unreachable("no such protocol kind");
   }
@@ -1574,6 +1575,7 @@ class CompletionLookup final : public swift::VisibleDeclConsumer {
   OwnedResolver TypeResolver;
   const DeclContext *CurrDeclContext;
   ClangImporter *Importer;
+  CodeCompletionContext *CompletionContext;
 
   enum class LookupKind {
     ValueExpr,
@@ -1719,11 +1721,13 @@ public:
 public:
   CompletionLookup(CodeCompletionResultSink &Sink,
                    ASTContext &Ctx,
-                   const DeclContext *CurrDeclContext)
+                   const DeclContext *CurrDeclContext,
+                   CodeCompletionContext *CompletionContext = nullptr)
       : Sink(Sink), Ctx(Ctx),
         TypeResolver(createLazyResolver(Ctx)), CurrDeclContext(CurrDeclContext),
         Importer(static_cast<ClangImporter *>(CurrDeclContext->getASTContext().
-          getClangModuleLoader())) {
+          getClangModuleLoader())),
+        CompletionContext(CompletionContext) {
 
     // Determine if we are doing code completion inside a static method.
     if (CurrDeclContext) {
@@ -3650,6 +3654,19 @@ public:
       }
     }
 
+    if (CompletionContext) {
+      // FIXME: this is an awful simplification that says all and only enums can
+      // use implicit member syntax (leading dot). Computing the accurate answer
+      // using lookup (e.g. getUnresolvedMemberCompletions) is too expensive,
+      // and for some clients this approximation is good enough.
+      CompletionContext->MayUseImplicitMemberExpr =
+          std::any_of(ExpectedTypes.begin(), ExpectedTypes.end(), [](Type T) {
+            if (auto *NTD = T->getAnyNominal())
+              return isa<EnumDecl>(NTD);
+            return false;
+          });
+    }
+
     if (LiteralCompletions)
       addValueLiteralCompletions();
 
@@ -4452,6 +4469,14 @@ void CodeCompletionCallbacksImpl::completePostfixExprBeginning(CodeCompletionExp
   CodeCompleteTokenExpr = E;
 }
 
+void CodeCompletionCallbacksImpl::completeForEachSequenceBeginning(
+    CodeCompletionExpr *E) {
+  assert(P.Tok.is(tok::code_complete));
+  Kind = CompletionKind::ForEachSequence;
+  CurDeclContext = P.CurDeclContext;
+  CodeCompleteTokenExpr = E;
+}
+
 void CodeCompletionCallbacksImpl::completePostfixExpr(Expr *E, bool hasSpace) {
   assert(P.Tok.is(tok::code_complete));
 
@@ -4813,6 +4838,7 @@ void CodeCompletionCallbacksImpl::addKeywords(CodeCompletionResultSink &Sink,
   case CompletionKind::AssignmentRHS:
   case CompletionKind::ReturnStmtExpr:
   case CompletionKind::PostfixExprBeginning:
+  case CompletionKind::ForEachSequence:
     addSuperKeyword(Sink);
     addLetVarKeywords(Sink);
     addExprKeywords(Sink);
@@ -4930,6 +4956,9 @@ public:
         case StmtKind::Return:
         case StmtKind::ForEach:
         case StmtKind::RepeatWhile:
+        case StmtKind::If:
+        case StmtKind::While:
+        case StmtKind::Guard:
           return true;
         default:
           return false;
@@ -4977,35 +5006,51 @@ public:
     }
   }
 
-   void analyzeStmt(Stmt *Parent, llvm::function_ref<void(Type)> Callback) {
-     switch (Parent->getKind()) {
-       case StmtKind::Return: {
-         Callback(getReturnTypeFromContext(DC));
-         break;
-       }
-       case StmtKind::ForEach: {
-         auto FES = cast<ForEachStmt>(Parent);
-         if (auto SEQ = FES->getSequence()) {
-           if (SM.rangeContains(SEQ->getSourceRange(),
-                                ParsedExpr->getSourceRange())) {
-             Callback(Context.getSequenceDecl()->getDeclaredInterfaceType());
-           }
-         }
-         break;
-       }
-       case StmtKind::RepeatWhile: {
-         auto Cond = cast<RepeatWhileStmt>(Parent)->getCond();
-         if (Cond &&
-             SM.rangeContains(Cond->getSourceRange(),
-                              ParsedExpr->getSourceRange())) {
-           Callback(Context.getBoolDecl()->getDeclaredType());
-         }
-         break;
-       }
-       default:
-         llvm_unreachable("Unhandled statement kinds.");
-     }
-   }
+  void analyzeStmt(Stmt *Parent, llvm::function_ref<void(Type)> Callback) {
+    switch (Parent->getKind()) {
+    case StmtKind::Return:
+      Callback(getReturnTypeFromContext(DC));
+      break;
+    case StmtKind::ForEach:
+      if (auto SEQ = cast<ForEachStmt>(Parent)->getSequence()) {
+        if (containsTarget(SEQ)) {
+          Callback(Context.getSequenceDecl()->getDeclaredInterfaceType());
+        }
+      }
+      break;
+    case StmtKind::RepeatWhile:
+    case StmtKind::If:
+    case StmtKind::While:
+    case StmtKind::Guard:
+      if (isBoolConditionOf(Parent)) {
+        Callback(Context.getBoolDecl()->getDeclaredInterfaceType());
+      }
+      break;
+    default:
+      llvm_unreachable("Unhandled statement kinds.");
+    }
+  }
+
+  bool isBoolConditionOf(Stmt *parent) {
+    if (auto *repeat = dyn_cast<RepeatWhileStmt>(parent)) {
+      return repeat->getCond() && containsTarget(repeat->getCond());
+    }
+    if (auto *conditional = dyn_cast<LabeledConditionalStmt>(parent)) {
+      for (StmtConditionElement cond : conditional->getCond()) {
+        if (auto *E = cond.getBooleanOrNull()) {
+          if (containsTarget(E)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  bool containsTarget(Expr *E) {
+    assert(E && "expected parent expression");
+    return SM.rangeContains(E->getSourceRange(), ParsedExpr->getSourceRange());
+  }
 
   void analyzeDecl(Decl *D, llvm::function_ref<void(Type)> Callback) {
     switch (D->getKind()) {
@@ -5013,7 +5058,7 @@ public:
         auto PBD = cast<PatternBindingDecl>(D);
         for (unsigned I = 0; I < PBD->getNumPatternEntries(); ++ I) {
           if (auto Init = PBD->getInit(I)) {
-            if (SM.rangeContains(Init->getSourceRange(), ParsedExpr->getLoc())) {
+            if (containsTarget(Init)) {
               if (PBD->getPattern(I)->hasType()) {
                 Callback(PBD->getPattern(I)->getType());
                 break;
@@ -5080,11 +5125,11 @@ void CodeCompletionCallbacksImpl::doneParsing() {
   if (!typecheckContext())
     return;
 
-  if (DelayedParsedDecl && !typecheckDelayedParsedDecl())
+  if (ParsedDecl && !typecheckParsedDecl())
     return;
 
-  if (auto *AFD = dyn_cast_or_null<AbstractFunctionDecl>(DelayedParsedDecl))
-    CurDeclContext = AFD;
+  if (auto *DC = dyn_cast_or_null<DeclContext>(ParsedDecl))
+    CurDeclContext = DC;
 
   Optional<Type> ExprType;
   ConcreteDeclRef ReferencedDecl = nullptr;
@@ -5106,7 +5151,7 @@ void CodeCompletionCallbacksImpl::doneParsing() {
     return;
 
   CompletionLookup Lookup(CompletionContext.getResultSink(), P.Context,
-                          CurDeclContext);
+                          CurDeclContext, &CompletionContext);
   if (ExprType) {
     Lookup.setIsStaticMetatype(ParsedExpr->isStaticallyDerivedMetatype());
   }
@@ -5164,6 +5209,7 @@ void CodeCompletionCallbacksImpl::doneParsing() {
     DoPostfixExprBeginning();
     break;
 
+  case CompletionKind::ForEachSequence:
   case CompletionKind::PostfixExprBeginning: {
     ::CodeCompletionTypeContextAnalyzer Analyzer(CurDeclContext,
                                                CodeCompleteTokenExpr);

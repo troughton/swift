@@ -168,21 +168,24 @@ struct StructWithStaticVar {
   }
 }
 
-// <rdar://problem/17405715> lazy property crashes silgen of implicit memberwise initializer
-// CHECK-LABEL: // decls.StructWithLazyField.init
-// CHECK-NEXT: sil hidden @_T05decls19StructWithLazyFieldVACSiSg4once_tcfC : $@convention(method) (Optional<Int>, @thin StructWithLazyField.Type) -> @owned StructWithLazyField {
-struct StructWithLazyField {
-  lazy var once : Int = 42
-  let someProp = "Some value"
+// Make sure unbound method references on class hierarchies are
+// properly represented in the AST
+
+class Base {
+  func method1() -> Self { return self }
+  func method2() -> Self { return self }
 }
 
-// <rdar://problem/21057425> Crash while compiling attached test-app.
-// CHECK-LABEL: // decls.test21057425
-func test21057425() {
-  var x = 0, y: Int = 0
+class Derived : Base {
+  override func method2() -> Self { return self }
 }
 
-func useImplicitDecls() {
-  _ = StructWithLazyField(once: 55)
-}
+func generic<T>(arg: T) { }
 
+func unboundMethodReferences() {
+  generic(arg: Derived.method1)
+  generic(arg: Derived.method2)
+
+  _ = type(of: Derived.method1)
+  _ = type(of: Derived.method2)
+}

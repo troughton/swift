@@ -54,7 +54,7 @@ const uint16_t VERSION_MAJOR = 0;
 /// in source control, you should also update the comment to briefly
 /// describe what change you made. The content of this comment isn't important;
 /// it just ensures a conflict if two people change the module format.
-const uint16_t VERSION_MINOR = 346; // Last change: dependency types for enums
+const uint16_t VERSION_MINOR = 365; // KeyPathInst operands
 
 using DeclID = PointerEmbeddedInt<unsigned, 31>;
 using DeclIDField = BCFixed<31>;
@@ -1147,10 +1147,11 @@ namespace decls_block {
     DeclContextIDField, // the decl that provided this conformance
     BCVBR<5>, // value mapping count
     BCVBR<5>, // type mapping count
+    BCVBR<5>, // requirement signature conformance count
     BCArray<DeclIDField>
     // The array contains archetype-value pairs, then type declarations.
-    // Inherited conformances follow, then the substitution records for the
-    // associated types.
+    // Requirement signature conformances follow, then the substitution records
+    // for the associated types.
   >;
 
   using SpecializedProtocolConformanceLayout = BCRecordLayout<
@@ -1323,6 +1324,8 @@ namespace decls_block {
   using ImplementsDeclAttrLayout = BCRecordLayout<Implements_DECL_ATTR>;
   using ObjCRuntimeNameDeclAttrLayout
     = BCRecordLayout<ObjCRuntimeName_DECL_ATTR>;
+  using RestatedObjCConformanceDeclAttrLayout
+    = BCRecordLayout<RestatedObjCConformance_DECL_ATTR>;
 
   using InlineDeclAttrLayout = BCRecordLayout<
     Inline_DECL_ATTR,

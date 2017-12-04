@@ -43,13 +43,15 @@ getChildrenMaxResidentSetSize() {
 }
 
 static std::string
-makeFileName(StringRef ProcessName) {
+makeFileName(StringRef ProgramName,
+             StringRef AuxName) {
   std::string tmp;
   raw_string_ostream stream(tmp);
   auto now = std::chrono::system_clock::now();
   stream << "stats"
          << "-" << now.time_since_epoch().count()
-         << "-" << ProcessName
+         << "-" << ProgramName
+         << "-" << AuxName
          << "-" << Process::GetRandomNumber()
          << ".json";
   return stream.str();
@@ -58,15 +60,17 @@ makeFileName(StringRef ProcessName) {
 // LLVM's statistics-reporting machinery is sensitive to filenames containing
 // YAML-quote-requiring characters, which occur surprisingly often in the wild;
 // we only need a recognizable and likely-unique name for a target here, not an
-// exact filename, so we go with a crude approximation.
+// exact filename, so we go with a crude approximation. Furthermore, to avoid
+// parse ambiguities when "demangling" counters and filenames we exclude hyphens
+// and slashes.
 static std::string
-cleanTargetName(StringRef TargetName) {
+cleanName(StringRef n) {
   std::string tmp;
-  for (auto c : TargetName) {
+  for (auto c : n) {
     if (('a' <= c && c <= 'z') ||
         ('A' <= c && c <= 'Z') ||
         ('0' <= c && c <= '9') ||
-        (c == '-') || (c == '.') || (c == '/'))
+        (c == '.'))
       tmp += c;
     else
       tmp += '_';
@@ -74,15 +78,60 @@ cleanTargetName(StringRef TargetName) {
   return tmp;
 }
 
+static std::string
+auxName(StringRef ModuleName,
+        StringRef InputName,
+        StringRef TripleName,
+        StringRef OutputType,
+        StringRef OptType) {
+  if (InputName.empty()) {
+    InputName = "all";
+  }
+  // Dispose of path prefix, which might make composite name too long.
+  InputName = path::filename(InputName);
+  if (OptType.empty()) {
+    OptType = "Onone";
+  }
+  if (!OutputType.empty() && OutputType.front() == '.') {
+    OutputType = OutputType.substr(1);
+  }
+  if (!OptType.empty() && OptType.front() == '-') {
+    OptType = OptType.substr(1);
+  }
+  return (cleanName(ModuleName)
+          + "-" + cleanName(InputName)
+          + "-" + cleanName(TripleName)
+          + "-" + cleanName(OutputType)
+          + "-" + cleanName(OptType));
+}
+
 UnifiedStatsReporter::UnifiedStatsReporter(StringRef ProgramName,
-                                           StringRef TargetName,
+                                           StringRef ModuleName,
+                                           StringRef InputName,
+                                           StringRef TripleName,
+                                           StringRef OutputType,
+                                           StringRef OptType,
+                                           StringRef Directory)
+  : UnifiedStatsReporter(ProgramName,
+                         auxName(ModuleName,
+                                 InputName,
+                                 TripleName,
+                                 OutputType,
+                                 OptType),
+                         Directory)
+{
+}
+
+UnifiedStatsReporter::UnifiedStatsReporter(StringRef ProgramName,
+                                           StringRef AuxName,
                                            StringRef Directory)
   : Filename(Directory),
-    Timer(make_unique<NamedRegionTimer>(cleanTargetName(TargetName),
+    StartedTime(llvm::TimeRecord::getCurrentTime()),
+    Timer(make_unique<NamedRegionTimer>(AuxName,
                                         "Building Target",
                                         ProgramName, "Running Program"))
 {
-  path::append(Filename, makeFileName(ProgramName));
+  path::append(Filename, makeFileName(ProgramName, AuxName));
   EnableStatistics(/*PrintOnExit=*/false);
   SharedTimer::enableCompilationTimers();
 }
@@ -115,6 +164,8 @@ UnifiedStatsReporter::publishAlwaysOnStatsToLLVM() {
     auto &C = getFrontendCounters();
 
     PUBLISH_STAT(C, "AST", NumSourceBuffers);
+    PUBLISH_STAT(C, "AST", NumSourceLines);
+    PUBLISH_STAT(C, "AST", NumSourceLinesPerSecond);
     PUBLISH_STAT(C, "AST", NumLinkLibraries);
     PUBLISH_STAT(C, "AST", NumLoadedModules);
     PUBLISH_STAT(C, "AST", NumImportedExternalDefinitions);
@@ -205,6 +256,8 @@ UnifiedStatsReporter::printAlwaysOnStatsAndTimers(raw_ostream &OS) {
     auto &C = getFrontendCounters();
 
     PRINT_STAT(OS, delim, C, "AST", NumSourceBuffers);
+    PRINT_STAT(OS, delim, C, "AST", NumSourceLines);
+    PRINT_STAT(OS, delim, C, "AST", NumSourceLinesPerSecond);
     PRINT_STAT(OS, delim, C, "AST", NumLinkLibraries);
     PRINT_STAT(OS, delim, C, "AST", NumLoadedModules);
     PRINT_STAT(OS, delim, C, "AST", NumImportedExternalDefinitions);
@@ -293,9 +346,22 @@ UnifiedStatsReporter::~UnifiedStatsReporter()
   // we're repurposing a bit here.
   Timer.reset();
 
+  // We currently do this by manual TimeRecord keeping because LLVM has decided
+  // not to allow access to the Timers inside NamedRegionTimers.
+  auto ElapsedTime = llvm::TimeRecord::getCurrentTime();
+  ElapsedTime -= StartedTime;
+
   if (DriverCounters) {
     auto &C = getDriverCounters();
     C.ChildrenMaxRSS = getChildrenMaxResidentSetSize();
+  }
+
+  if (FrontendCounters) {
+    auto &C = getFrontendCounters();
+    // Convenience calculation for crude top-level "absolute speed".
+    if (C.NumSourceLines != 0 && ElapsedTime.getProcessTime() != 0.0)
+      C.NumSourceLinesPerSecond = (size_t) (((double)C.NumSourceLines) /
+                                            ElapsedTime.getProcessTime());
   }
 
   std::error_code EC;

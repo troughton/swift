@@ -1086,17 +1086,45 @@ typedef enum __attribute__((ns_error_domain(FictionalServerErrorDomain))) Fictio
   FictionalServerErrorMeltedDown = 1
 } FictionalServerErrorCode;
 
+@protocol Wearable
+- (void)wear;
+@end
+
 @protocol Garment
 @end
 
 @protocol Cotton
 @end
 
-@interface Coat
+@interface Coat : NSObject<Wearable>
+
+- (void)wear;
+@property (class) Coat <Wearable> *fashionStatement;
+
 @end
 
 @protocol NSLaundry
 - (void)wash:(Coat <Garment> * _Nonnull)garment;
 - (void)bleach:(Coat <Garment, Cotton> * _Nonnull)garment;
 - (Coat <Garment> * _Nonnull)dry;
+@end
+
+@interface NSLaundromat : NSObject
+@end
+
+extern NSString * const NSLaundryErrorDomain;
+
+typedef enum __attribute__((ns_error_domain(NSLaundryErrorDomain))) __attribute__((swift_name("NSLaundromat.Error"))) NSLaundryErrorCode {
+    NSLaundryErrorTooMuchSoap = 1,
+    NSLaundryErrorCatInWasher = 2
+};
+
+@interface NSObject ()
+- (void) addObserver: (id) observer
+         forKeyPath: (NSString*) keyPath
+         options: (NSInteger) options
+         context: (void*) context;
+- (void) removeObserver: (id) observer
+         forKeyPath: (NSString*) keyPath
+         context: (void*) options;
 @end

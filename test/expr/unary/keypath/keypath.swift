@@ -1,10 +1,21 @@
-// RUN: %target-swift-frontend -typecheck -parse-as-library -enable-experimental-keypath-components  %s -verify
+// RUN: %target-swift-frontend -typecheck -parse-as-library %s -verify
 
-struct Sub {}
-struct OptSub {}
+struct Sub: Hashable {
+  static func ==(_: Sub, _: Sub) -> Bool { return true }
+  var hashValue: Int { return 0 }
+}
+struct OptSub: Hashable {
+  static func ==(_: OptSub, _: OptSub) -> Bool { return true }
+  var hashValue: Int { return 0 }
+}
+struct NonHashableSub {}
+
 struct Prop {
   subscript(sub: Sub) -> A { get { return A() } set { } }
   subscript(optSub: OptSub) -> A? { get { return A() } set { } }
+  subscript(nonHashableSub: NonHashableSub) -> A { get { return A() } set { } }
+  subscript(a: Sub, b: Sub) -> A { get { return A() } set { } }
+  subscript(a: Sub, b: NonHashableSub) -> A { get { return A() } set { } }
 
   var nonMutatingProperty: B {
     get { fatalError() }
@@ -27,8 +38,10 @@ struct A: Hashable {
 struct B {}
 struct C<T> {
   var value: T
+  subscript() -> T { get { return value } }
   subscript(sub: Sub) -> T { get { return value } set { } }
-  subscript<U>(sub: U) -> U { get { return sub } set { } }
+  subscript<U: Hashable>(sub: U) -> U { get { return sub } set { } }
+  subscript<X>(noHashableConstraint sub: X) -> X { get { return sub } set { } }
 }
 
 extension Array where Element == A {
@@ -39,7 +52,8 @@ struct Exactly<T> {}
 
 func expect<T>(_ x: inout T, toHaveType _: Exactly<T>.Type) {}
 
-func testKeyPath(sub: Sub, optSub: OptSub, x: Int) {
+func testKeyPath(sub: Sub, optSub: OptSub,
+                 nonHashableSub: NonHashableSub, x: Int) {
   var a = \A.property
   expect(&a, toHaveType: Exactly<WritableKeyPath<A, Prop>>.self)
 
@@ -152,6 +166,21 @@ func testKeyPath(sub: Sub, optSub: OptSub, x: Int) {
   let _: AnyKeyPath = \.property // expected-error{{ambiguous}}
   let _: AnyKeyPath = \C.value // expected-error{{cannot convert}} (need to improve diagnostic)
   let _: AnyKeyPath = \.value // expected-error{{ambiguous}}
+
+  let _ = \Prop.[nonHashableSub] // expected-error{{subscript index of type 'NonHashableSub' in a key path must be Hashable}}
+  let _ = \Prop.[sub, sub]
+  let _ = \Prop.[sub, nonHashableSub] // expected-error{{subscript index of type 'NonHashableSub' in a key path must be Hashable}}
+
+  let _ = \C<Int>.[]
+  let _ = \C<Int>.[sub]
+  let _ = \C<Int>.[noHashableConstraint: sub]
+  let _ = \C<Int>.[noHashableConstraint: nonHashableSub] // expected-error{{subscript index of type 'NonHashableSub' in a key path must be Hashable}}
+}
+
+func testKeyPathInGenericContext<H: Hashable, X>(hashable: H, anything: X) {
+  let _ = \C<Int>.[hashable]
+  let _ = \C<Int>.[noHashableConstraint: hashable]
+  let _ = \C<Int>.[noHashableConstraint: anything] // expected-error{{subscript index of type 'X' in a key path must be Hashable}}
 }
 
 func testDisembodiedStringInterpolation(x: Int) {
@@ -322,8 +351,82 @@ func testKeyPathSubscriptTuple(readonly: (Z,Z), writable: inout (Z,Z),
   writable[keyPath: rkp] = sink
 }
 
+func testKeyPathSubscriptLValue(base: Z, kp: inout KeyPath<Z, Z>) {
+  _ = base[keyPath: kp]
+}
+
+struct AA {
+  subscript(x: Int) -> Int { return x }
+  subscript(labeled x: Int) -> Int { return x }
+  var c: CC? = CC()
+}
+
+class CC {
+  var i = 0
+}
+
+func testKeyPathOptional() {
+  _ = \AA.c?.i
+  _ = \AA.c!.i
+}
+
+func testLiteralInAnyContext() {
+  let _: AnyKeyPath = \A.property
+  let _: AnyObject = \A.property
+  let _: Any = \A.property
+  let _: Any? = \A.property
+}
+
+func testMoreGeneralContext<T, U>(_: KeyPath<T, U>, with: T.Type) {}
+
+func testLiteralInMoreGeneralContext() {
+  testMoreGeneralContext(\.property, with: A.self)
+}
+
+func testLabeledSubscript() {
+  let _: KeyPath<AA, Int> = \AA.[labeled: 0]
+  let _: KeyPath<AA, Int> = \.[labeled: 0]
+  let k = \AA.[labeled: 0]
+
+  // TODO: These ought to work without errors.
+  let _ = \AA.[keyPath: k] // expected-error{{}}
+  let _ = \AA.[keyPath: \AA.[labeled: 0]] // expected-error{{}}
+}
+
+func testInvalidKeyPathComponents() {
+  let _ = \.{return 0} // expected-error* {{}}
+}
+
+class X {
+  class var a: Int { return 1 }
+  static var b = 2
+}
+
+func testStaticKeyPathComponent() {
+  _ = \X.a // expected-error{{}}
+  _ = \X.Type.a // expected-error{{cannot refer to static member}}
+  _ = \X.b // expected-error{{}}
+  _ = \X.Type.b // expected-error{{cannot refer to static member}}
+}
+
+class Bass: Hashable {
+  static func ==(_: Bass, _: Bass) -> Bool { return false }
+  var hashValue: Int { return 0 }
+}
+
+class Treble: Bass { }
+
+struct BassSubscript {
+  subscript(_: Bass) -> Int { fatalError() }
+  subscript(_: @autoclosure () -> String) -> Int { fatalError() }
+}
+
+func testImplicitConversionInSubscriptIndex() {
+  _ = \BassSubscript.[Treble()]
+  _ = \BassSubscript.["hello"] // expected-error{{must be Hashable}}
+}
+
 func testSyntaxErrors() { // expected-note{{}}
-  // TODO: recovery
   _ = \.  ; // expected-error{{expected member name following '.'}}
   _ = \.a ;
   _ = \[a ;

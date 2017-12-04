@@ -1,3 +1,5 @@
+// A similar struct with Codable properties adopting Codable should get a
+// synthesized init(from:), along with the memberwise initializer.
 //===--- TypeCheckDecl.cpp - Type Checking for Declarations ---------------===//
 //
 // This source file is part of the Swift.org open source project
@@ -438,7 +440,7 @@ void TypeChecker::checkInheritanceClause(Decl *decl,
   Type superclassTy;
   SourceRange superclassRange;
   llvm::SmallSetVector<ProtocolDecl *, 4> allProtocols;
-  llvm::SmallDenseMap<CanType, SourceRange> inheritedTypes;
+  llvm::SmallDenseMap<CanType, std::pair<unsigned, SourceRange>> inheritedTypes;
   addImplicitConformances(*this, decl, allProtocols);
   for (unsigned i = 0, n = inheritedClause.size(); i != n; ++i) {
     auto &inherited = inheritedClause[i];
@@ -473,15 +475,32 @@ void TypeChecker::checkInheritanceClause(Decl *decl,
     CanType inheritedCanTy = inheritedTy->getCanonicalType();
     auto knownType = inheritedTypes.find(inheritedCanTy);
     if (knownType != inheritedTypes.end()) {
+      // If the duplicated type is 'AnyObject', check whether the first was
+      // written as 'class'. Downgrade the error to a warning in such cases
+      // for backward compatibility.
+      if (inheritedTy->isAnyObject() &&
+          (isa<ProtocolDecl>(decl) || isa<AbstractTypeParamDecl>(decl)) &&
+          Lexer::getTokenAtLocation(Context.SourceMgr,
+                                    knownType->second.second.Start)
+            .is(tok::kw_class)) {
+        SourceLoc classLoc = knownType->second.second.Start;
+        SourceRange removeRange = getRemovalRange(knownType->second.first);
+
+        diagnose(classLoc, diag::duplicate_anyobject_class_inheritance)
+          .fixItRemoveChars(removeRange.Start, removeRange.End);
+        inherited.setInvalidType(Context);
+        continue;
+      }
+
       auto removeRange = getRemovalRange(i);
       diagnose(inherited.getSourceRange().Start,
                diag::duplicate_inheritance, inheritedTy)
         .fixItRemoveChars(removeRange.Start, removeRange.End)
-        .highlight(knownType->second);
+        .highlight(knownType->second.second);
       inherited.setInvalidType(Context);
       continue;
     }
-    inheritedTypes[inheritedCanTy] = inherited.getSourceRange();
+    inheritedTypes[inheritedCanTy] = { i, inherited.getSourceRange() };
 
     // If this is a protocol or protocol composition type, record the
     // protocols.
@@ -2641,6 +2660,9 @@ static void checkBridgedFunctions(TypeChecker &TC) {
 
 /// Infer the Objective-C name for a given declaration.
 static void inferObjCName(TypeChecker &tc, ValueDecl *decl) {
+  if (isa<DestructorDecl>(decl))
+    return;
+
   // If this declaration overrides an @objc declaration, use its name.
   if (auto overridden = decl->getOverriddenDecl()) {
     if (overridden->isObjC()) {
@@ -4708,7 +4730,9 @@ public:
     TC.checkDeclAttributes(PD);
 
     if (TC.Context.LangOpts.DebugGenericSignatures) {
-      auto requirementsSig = PD->getRequirementSignature();
+      auto requirementsSig =
+        GenericSignature::get({PD->getProtocolSelfType()},
+                              PD->getRequirementSignature());
 
       llvm::errs() << "Protocol requirement signature:\n";
       PD->dumpRef(llvm::errs());
@@ -5811,6 +5835,8 @@ public:
           matchMode |= TypeMatchFlags::AllowTopLevelOptionalMismatch;
         } else if (parentDecl->isObjC()) {
           matchMode |= TypeMatchFlags::AllowNonOptionalForIUOParam;
+          matchMode |=
+              TypeMatchFlags::IgnoreNonEscapingForOptionalFunctionParam;
         }
 
         if (declTy->matches(parentDeclTy, matchMode, &TC)) {
@@ -6157,6 +6183,7 @@ public:
 
     UNINTERESTING_ATTR(ObjCMembers)
     UNINTERESTING_ATTR(ObjCRuntimeName)
+    UNINTERESTING_ATTR(RestatedObjCConformance)
     UNINTERESTING_ATTR(Implements)
     UNINTERESTING_ATTR(StaticInitializeObjCMetadata)
     UNINTERESTING_ATTR(DowngradeExhaustivityCheck)
@@ -6208,6 +6235,10 @@ public:
     }
 
     void visitDynamicAttr(DynamicAttr *attr) {
+      // Final overrides are not dynamic.
+      if (Override->isFinal())
+        return;
+
       makeDynamic(TC.Context, Override);
     }
 
@@ -7290,9 +7321,6 @@ void TypeChecker::validateDecl(ValueDecl *D) {
 
     validateAttributes(*this, D);
 
-    if (!proto->isRequirementSignatureComputed())
-      proto->computeRequirementSignature();
-
     // If the protocol is @objc, it may only refine other @objc protocols.
     // FIXME: Revisit this restriction.
     if (proto->getAttrs().hasAttribute<ObjCAttr>()) {
@@ -7921,6 +7949,67 @@ static void diagnoseClassWithoutInitializers(TypeChecker &tc,
   tc.diagnose(classDecl, diag::class_without_init,
               classDecl->getDeclaredType());
 
+  // HACK: We've got a special case to look out for and diagnose specifically to
+  // improve the experience of seeing this, and mitigate some confusion.
+  //
+  // For a class A which inherits from Decodable class B, class A may have
+  // additional members which prevent default initializer synthesis (and
+  // inheritance of other initializers). The user may have assumed that this
+  // case would synthesize Encodable/Decodable conformance for class A the same
+  // way it may have for class B, or other classes.
+  //
+  // It is helpful to suggest here that the user may have forgotten to override
+  // init(from:) (and encode(to:), if applicable) in a note, before we start
+  // listing the members that prevented initializer synthesis.
+  // TODO: Add a fixit along with this suggestion.
+  if (auto *superclassDecl = classDecl->getSuperclassDecl()) {
+    ASTContext &C = tc.Context;
+    auto *decodableProto = C.getProtocol(KnownProtocolKind::Decodable);
+    auto superclassType = superclassDecl->getDeclaredInterfaceType();
+    if (auto ref = tc.conformsToProtocol(superclassType, decodableProto,
+                                         superclassDecl,
+                                         ConformanceCheckOptions(),
+                                         SourceLoc())) {
+      // super conforms to Decodable, so we've failed to inherit init(from:).
+      // Let's suggest overriding it here.
+      //
+      // We're going to diagnose on the concrete init(from:) decl if it exists
+      // and isn't implicit; otherwise, on the subclass itself.
+      ValueDecl *diagDest = classDecl;
+      auto initFrom = DeclName(C, C.Id_init, C.Id_from);
+      auto result = tc.lookupMember(superclassDecl, superclassType, initFrom,
+                                    NameLookupFlags::ProtocolMembers |
+                                    NameLookupFlags::IgnoreAccessibility);
+
+      if (!result.empty() && !result.front()->isImplicit())
+        diagDest = result.front();
+
+      auto diagName = diag::decodable_suggest_overriding_init_here;
+
+      // This is also a bit of a hack, but the best place we've got at the
+      // moment to suggest this.
+      //
+      // If the superclass also conforms to Encodable, it's quite
+      // likely that the user forgot to override its encode(to:). In this case,
+      // we can produce a slightly different diagnostic to suggest doing so.
+      auto *encodableProto = C.getProtocol(KnownProtocolKind::Encodable);
+      if ((ref = tc.conformsToProtocol(superclassType, encodableProto,
+                                       superclassDecl,
+                                       ConformanceCheckOptions(),
+                                       SourceLoc()))) {
+        // We only want to produce this version of the diagnostic if the
+        // subclass doesn't directly implement encode(to:).
+        // The direct lookup here won't see an encode(to:) if it is inherited
+        // from the superclass.
+        auto encodeTo = DeclName(C, C.Id_encode, C.Id_to);
+        if (classDecl->lookupDirect(encodeTo).empty())
+          diagName = diag::codable_suggest_overriding_init_here;
+      }
+
+      tc.diagnose(diagDest, diagName);
+    }
+  }
+
   for (auto member : classDecl->getMembers()) {
     auto pbd = dyn_cast<PatternBindingDecl>(member);
     if (!pbd)
@@ -8108,14 +8197,49 @@ void TypeChecker::addImplicitConstructors(NominalTypeDecl *decl) {
   bool FoundMemberwiseInitializedProperty = false;
   bool SuppressDefaultInitializer = false;
   bool SuppressMemberwiseInitializer = false;
+  bool FoundSynthesizedInit = false;
   bool FoundDesignatedInit = false;
   decl->setAddedImplicitInitializers();
+
+  // Before we look for constructors, we need to make sure that all synthesized
+  // initializers are properly synthesized.
+  //
+  // NOTE: Lookups of synthesized initializers MUST come after
+  //       decl->setAddedImplicitInitializers() in case synthesis requires
+  //       protocol conformance checking, which might be recursive here.
+  // FIXME: Disable this code and prevent _any_ implicit constructors from doing
+  //        this. Investigate why this hasn't worked otherwise.
+  DeclName synthesizedInitializers[1] = {
+    // init(from:) is synthesized by derived conformance to Decodable.
+    DeclName(Context, DeclBaseName(Context.Id_init), Context.Id_from)
+  };
+
+  auto initializerIsSynthesized = [=](ConstructorDecl *initializer) {
+    if (!initializer->isImplicit())
+      return false;
+
+    for (auto &name : synthesizedInitializers)
+      if (initializer->getFullName() == name)
+        return true;
+
+    return false;
+  };
+
+  for (auto &name : synthesizedInitializers) {
+    synthesizeMemberForLookup(decl, name);
+  }
+
   SmallPtrSet<CanType, 4> initializerParamTypes;
   llvm::SmallPtrSet<ConstructorDecl *, 4> overriddenInits;
   for (auto member : decl->getMembers()) {
     if (auto ctor = dyn_cast<ConstructorDecl>(member)) {
-      if (ctor->isDesignatedInit())
+      // Synthesized initializers others than the default initializer should
+      // not prevent default initializer synthesis.
+      if (initializerIsSynthesized(ctor)) {
+        FoundSynthesizedInit = true;
+      } else if (ctor->isDesignatedInit()) {
         FoundDesignatedInit = true;
+      }
 
       if (!ctor->isInvalid())
         initializerParamTypes.insert(getInitializerParamType(ctor));
@@ -8210,7 +8334,8 @@ void TypeChecker::addImplicitConstructors(NominalTypeDecl *decl) {
 
     // We can't define these overrides if we have any uninitialized
     // stored properties.
-    if (SuppressDefaultInitializer && !FoundDesignatedInit) {
+    if (SuppressDefaultInitializer && !FoundDesignatedInit
+        && !FoundSynthesizedInit) {
       diagnoseClassWithoutInitializers(*this, classDecl);
       return;
     }
@@ -8302,11 +8427,103 @@ void TypeChecker::addImplicitConstructors(NominalTypeDecl *decl) {
 
     // ... unless there are uninitialized stored properties.
     if (SuppressDefaultInitializer) {
-      diagnoseClassWithoutInitializers(*this, classDecl);
+      if (!FoundSynthesizedInit)
+        diagnoseClassWithoutInitializers(*this, classDecl);
+
       return;
     }
 
     defineDefaultConstructor(decl);
+  }
+}
+
+void TypeChecker::synthesizeMemberForLookup(NominalTypeDecl *target,
+                                            DeclName member) {
+  auto baseName = member.getBaseName();
+  if (baseName.isSpecial())
+    return;
+
+  // Checks whether the target conforms to the given protocol. If the
+  // conformance is incomplete, check the conformance to force synthesis, if
+  // possible.
+  //
+  // Swallows diagnostics if conformance checking is already in progress (so we
+  // don't display diagnostics twice).
+  //
+  // Returns whether the target conforms to the protocol and the conformance is
+  // complete.
+  auto evaluateTargetConformanceTo = [&](ProtocolDecl *protocol) {
+    auto targetType = target->getDeclaredInterfaceType();
+    if (auto ref = conformsToProtocol(targetType, protocol, target,
+                                      ConformanceCheckFlags::Used,
+                                      SourceLoc())) {
+      if (auto *conformance =
+          dyn_cast_or_null<NormalProtocolConformance>(ref->getConcrete())) {
+        if (conformance->isIncomplete()) {
+          // Check conformance, forcing synthesis.
+          //
+          // If synthesizing conformance fails, this will produce diagnostics.
+          // If conformance checking was already in progress elsewhere, though,
+          // this could produce diagnostics twice.
+          //
+          // To prevent this duplication, we swallow the diagnostics if the
+          // state of the conformance is not Incomplete.
+          DiagnosticTransaction transaction(Context.Diags);
+          auto shouldSwallowDiagnostics =
+            conformance->getState() != ProtocolConformanceState::Incomplete;
+
+          checkConformance(conformance);
+          if (shouldSwallowDiagnostics)
+            transaction.abort();
+
+          return conformance->isComplete();
+        }
+      }
+    }
+
+    return false;
+  };
+
+  if (member.isSimpleName()) {
+    if (baseName.getIdentifier() == Context.Id_CodingKeys) {
+      // CodingKeys is a special type which may be synthesized as part of
+      // Encodable/Decodable conformance. If the target conforms to either
+      // protocol and would derive conformance to either, the type may be
+      // synthesized.
+      // If the target conforms to either and the conformance has not yet been
+      // evaluated, then we should do that here.
+      //
+      // Try to synthesize Decodable first. If that fails, try to synthesize
+      // Encodable. If either succeeds and CodingKeys should have been
+      // synthesized, it will be synthesized.
+      auto *decodableProto = Context.getProtocol(KnownProtocolKind::Decodable);
+      auto *encodableProto = Context.getProtocol(KnownProtocolKind::Encodable);
+      if (!evaluateTargetConformanceTo(decodableProto))
+        (void)evaluateTargetConformanceTo(encodableProto);
+    }
+  } else {
+    auto argumentNames = member.getArgumentNames();
+    if (argumentNames.size() != 1)
+      return;
+
+    auto argumentName = argumentNames.front();
+    if (baseName.getIdentifier() == Context.Id_init &&
+        argumentName == Context.Id_from) {
+      // init(from:) may be synthesized as part of derived confromance to the
+      // Decodable protocol.
+      // If the target should conform to the Decodable protocol, check the
+      // conformance here to attempt synthesis.
+      auto *decodableProto = Context.getProtocol(KnownProtocolKind::Decodable);
+      (void)evaluateTargetConformanceTo(decodableProto);
+    } else if (baseName.getIdentifier() == Context.Id_encode &&
+               argumentName == Context.Id_to) {
+      // encode(to:) may be synthesized as part of derived confromance to the
+      // Encodable protocol.
+      // If the target should conform to the Encodable protocol, check the
+      // conformance here to attempt synthesis.
+      auto *encodableProto = Context.getProtocol(KnownProtocolKind::Encodable);
+      (void)evaluateTargetConformanceTo(encodableProto);
+    }
   }
 }
 

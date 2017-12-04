@@ -1469,50 +1469,90 @@ public:
     StoredProperty,
     GettableProperty,
     SettableProperty,
+    Last_Packed = SettableProperty, // Last enum value that can be packed in
+                                    // a PointerIntPair
+    OptionalChain,
+    OptionalForce,
+    OptionalWrap,
   };
   
-  // The pair of a captured index value and its Hashable conformance for a
+  // Description of a captured index value and its Hashable conformance for a
   // subscript keypath.
-  struct IndexPair {
+  struct Index {
     unsigned Operand;
-    ProtocolConformance *Hashable;
+    CanType FormalType;
+    SILType LoweredType;
+    ProtocolConformanceRef Hashable;
   };
   
 private:
-  // Value is the VarDecl* for StoredProperty, and the SILFunction* of the
-  // Getter for computed properties
-  llvm::PointerIntPair<void *, 2, Kind> ValueAndKind;
+  static constexpr const unsigned KindPackingBits = 2;
+  static constexpr const unsigned UnpackedKind = (1u << KindPackingBits) - 1;
+  static_assert((unsigned)Kind::Last_Packed < UnpackedKind,
+                "too many kinds to pack");
+                
+  // Value is the VarDecl* for StoredProperty, the SILFunction* of the
+  // Getter for computed properties, or the Kind for other kinds
+  llvm::PointerIntPair<void *, KindPackingBits, unsigned> ValueAndKind;
   // false if id is a SILFunction*; true if id is a SILDeclRef
-  llvm::PointerIntPair<SILFunction *, 2, ComputedPropertyId::KindType>
+  llvm::PointerIntPair<SILFunction *, 2,
+                       ComputedPropertyId::KindType>
     SetterAndIdKind;
   ComputedPropertyId::ValueType IdValue;
-  ArrayRef<IndexPair> Indices;
+  ArrayRef<Index> Indices;
+  SILFunction *IndicesEqual;
+  SILFunction *IndicesHash;
   CanType ComponentType;
-
+  
+  unsigned kindForPacking(Kind k) {
+    auto value = (unsigned)k;
+    assert(value <= (unsigned)Kind::Last_Packed);
+    return value;
+  }
+  
+  KeyPathPatternComponent(Kind kind, CanType ComponentType)
+    : ValueAndKind((void*)((uintptr_t)kind << KindPackingBits), UnpackedKind),
+      ComponentType(ComponentType)
+  {
+    assert(kind > Kind::Last_Packed && "wrong initializer");
+  }
+  
   KeyPathPatternComponent(VarDecl *storedProp, Kind kind,
                           CanType ComponentType)
-    : ValueAndKind(storedProp, kind), ComponentType(ComponentType) {}
+    : ValueAndKind(storedProp, kindForPacking(kind)),
+      ComponentType(ComponentType) {}
 
   KeyPathPatternComponent(ComputedPropertyId id, Kind kind,
                           SILFunction *getter,
                           SILFunction *setter,
-                          ArrayRef<IndexPair> indices,
+                          ArrayRef<Index> indices,
+                          SILFunction *indicesEqual,
+                          SILFunction *indicesHash,
                           CanType ComponentType)
-    : ValueAndKind(getter, kind),
+    : ValueAndKind(getter, kindForPacking(kind)),
       SetterAndIdKind(setter, id.Kind),
       IdValue(id.Value),
       Indices(indices),
-      ComponentType(ComponentType) {}
+      IndicesEqual(indicesEqual),
+      IndicesHash(indicesHash),
+      ComponentType(ComponentType) {
+    assert(indices.empty() == !indicesEqual
+           && indices.empty() == !indicesHash
+           && "must have equals/hash functions iff there are indices");
+  }
 
 public:
-  KeyPathPatternComponent() : ValueAndKind(nullptr, (Kind)0) {}
+  KeyPathPatternComponent() : ValueAndKind(nullptr, 0) {}
 
   bool isNull() const {
     return ValueAndKind.getPointer() == nullptr;
   }
 
   Kind getKind() const {
-    return ValueAndKind.getInt();
+    auto packedKind = ValueAndKind.getInt();
+    if (packedKind != UnpackedKind)
+      return (Kind)packedKind;
+    return (Kind)((uintptr_t)ValueAndKind.getPointer() >> KindPackingBits);
   }
   
   CanType getComponentType() const {
@@ -1525,6 +1565,9 @@ public:
       return static_cast<VarDecl*>(ValueAndKind.getPointer());
     case Kind::GettableProperty:
     case Kind::SettableProperty:
+    case Kind::OptionalChain:
+    case Kind::OptionalForce:
+    case Kind::OptionalWrap:
       llvm_unreachable("not a stored property");
     }
     llvm_unreachable("unhandled kind");
@@ -1533,6 +1576,9 @@ public:
   ComputedPropertyId getComputedPropertyId() const {
     switch (getKind()) {
     case Kind::StoredProperty:
+    case Kind::OptionalChain:
+    case Kind::OptionalForce:
+    case Kind::OptionalWrap:
       llvm_unreachable("not a computed property");
     case Kind::GettableProperty:
     case Kind::SettableProperty:
@@ -1544,6 +1590,9 @@ public:
   SILFunction *getComputedPropertyGetter() const {
     switch (getKind()) {
     case Kind::StoredProperty:
+    case Kind::OptionalChain:
+    case Kind::OptionalForce:
+    case Kind::OptionalWrap:
       llvm_unreachable("not a computed property");
     case Kind::GettableProperty:
     case Kind::SettableProperty:
@@ -1556,6 +1605,9 @@ public:
     switch (getKind()) {
     case Kind::StoredProperty:
     case Kind::GettableProperty:
+    case Kind::OptionalChain:
+    case Kind::OptionalForce:
+    case Kind::OptionalWrap:
       llvm_unreachable("not a settable computed property");
     case Kind::SettableProperty:
       return SetterAndIdKind.getPointer();
@@ -1563,9 +1615,12 @@ public:
     llvm_unreachable("unhandled kind");
   }
   
-  ArrayRef<IndexPair> getComputedPropertyIndices() const {
+  ArrayRef<Index> getComputedPropertyIndices() const {
     switch (getKind()) {
     case Kind::StoredProperty:
+    case Kind::OptionalChain:
+    case Kind::OptionalForce:
+    case Kind::OptionalWrap:
       llvm_unreachable("not a computed property");
     case Kind::GettableProperty:
     case Kind::SettableProperty:
@@ -1573,6 +1628,13 @@ public:
     }
   }
   
+  SILFunction *getComputedPropertyIndexEquals() const {
+    return IndicesEqual;
+  }
+  SILFunction *getComputedPropertyIndexHash() const {
+    return IndicesHash;
+  }
+
   bool isComputedSettablePropertyMutating() const;
   
   static KeyPathPatternComponent forStoredProperty(VarDecl *property,
@@ -1583,20 +1645,44 @@ public:
   static KeyPathPatternComponent
   forComputedGettableProperty(ComputedPropertyId identifier,
                               SILFunction *getter,
-                              ArrayRef<IndexPair> indices,
+                              ArrayRef<Index> indices,
+                              SILFunction *indicesEquals,
+                              SILFunction *indicesHash,
                               CanType ty) {
     return KeyPathPatternComponent(identifier, Kind::GettableProperty,
-                                   getter, nullptr, indices, ty);
+                                   getter, nullptr, indices,
+                                   indicesEquals, indicesHash, ty);
   }
 
   static KeyPathPatternComponent
   forComputedSettableProperty(ComputedPropertyId identifier,
                               SILFunction *getter,
                               SILFunction *setter,
-                              ArrayRef<IndexPair> indices,
+                              ArrayRef<Index> indices,
+                              SILFunction *indicesEquals,
+                              SILFunction *indicesHash,
                               CanType ty) {
     return KeyPathPatternComponent(identifier, Kind::SettableProperty,
-                                   getter, setter, indices, ty);
+                                   getter, setter, indices,
+                                   indicesEquals, indicesHash, ty);
+  }
+  
+  static KeyPathPatternComponent
+  forOptional(Kind kind, CanType ty) {
+    switch (kind) {
+    case Kind::OptionalChain:
+    case Kind::OptionalForce:
+      break;
+    case Kind::OptionalWrap:
+      assert(ty->getAnyOptionalObjectType()
+             && "optional wrap didn't form optional?!");
+      break;
+    case Kind::StoredProperty:
+    case Kind::GettableProperty:
+    case Kind::SettableProperty:
+      llvm_unreachable("not an optional kind");
+    }
+    return KeyPathPatternComponent(kind, ty);
   }
   
   void incrementRefCounts() const;
@@ -1678,32 +1764,40 @@ public:
 /// Instantiates a key path object.
 class KeyPathInst final
   : public SILInstruction,
-    private llvm::TrailingObjects<KeyPathInst, Substitution>
+    private llvm::TrailingObjects<KeyPathInst, Substitution, Operand>
 {
   friend SILBuilder;
   friend TrailingObjects;
   
   KeyPathPattern *Pattern;
-  unsigned NumSubstitutions;
+  unsigned NumSubstitutions, NumOperands;
   
   static KeyPathInst *create(SILDebugLocation Loc,
                              KeyPathPattern *Pattern,
                              SubstitutionList Subs,
+                             ArrayRef<SILValue> Args,
                              SILType Ty,
                              SILFunction &F);
   
   KeyPathInst(SILDebugLocation Loc,
               KeyPathPattern *Pattern,
               SubstitutionList Subs,
+              ArrayRef<SILValue> Args,
               SILType Ty);
+  
+  size_t numTrailingObjects(OverloadToken<Substitution>) const {
+    return NumSubstitutions;
+  }
+  size_t numTrailingObjects(OverloadToken<Operand>) const {
+    return NumOperands;
+  }
   
 public:
   KeyPathPattern *getPattern() const;
   bool hasPattern() const { return (bool)Pattern; }
 
   ArrayRef<Operand> getAllOperands() const {
-    // TODO: Subscript keypaths will have operands.
-    return {};
+    return const_cast<KeyPathInst*>(this)->getAllOperands();
   }
   MutableArrayRef<Operand> getAllOperands();
 
@@ -4527,7 +4621,7 @@ class SuperMethodInst
 
   SuperMethodInst(SILDebugLocation DebugLoc, SILValue Operand,
                   SILDeclRef Member, SILType Ty, bool Volatile = false)
-      : UnaryInstructionBase(DebugLoc, Operand, Ty, Member, Volatile) {}
+      : UnaryInstructionBase(DebugLoc, Operand, Ty, Member, Volatile) {}      
 };
 
 /// WitnessMethodInst - Given a type, a protocol conformance,

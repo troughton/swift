@@ -129,6 +129,7 @@ static void addCommonFrontendArgs(const ToolChain &TC,
   inputArgs.AddLastArg(arguments,
                        options::OPT_warn_swift3_objc_inference_minimal,
                        options::OPT_warn_swift3_objc_inference_complete);
+  inputArgs.AddLastArg(arguments, options::OPT_typo_correction_limit);
   inputArgs.AddLastArg(arguments, options::OPT_enable_app_extension);
   inputArgs.AddLastArg(arguments, options::OPT_enable_testing);
   inputArgs.AddLastArg(arguments, options::OPT_g_Group);
@@ -150,6 +151,8 @@ static void addCommonFrontendArgs(const ToolChain &TC,
   inputArgs.AddLastArg(arguments, options::OPT_swift_version);
   inputArgs.AddLastArg(arguments, options::OPT_enforce_exclusivity_EQ);
   inputArgs.AddLastArg(arguments, options::OPT_stats_output_dir);
+  inputArgs.AddLastArg(arguments,
+                       options::OPT_solver_shrink_unsolved_threshold);
 
   // Pass on any build config options
   inputArgs.AddAllArgs(arguments, options::OPT_D);
@@ -228,9 +231,13 @@ ToolChain::constructInvocation(const CompileJobAction &job,
     case types::TY_ImportedModules:
       FrontendModeOption = "-emit-imported-modules";
       break;
-    case types::TY_TBD:
-      FrontendModeOption = "-emit-tbd";
+
+    // BEGIN APPLE-ONLY OUTPUT TYPES
+    case types::TY_IndexData:
+      FrontendModeOption = "-typecheck";
       break;
+    // END APPLE-ONLY OUTPUT TYPES
+
     case types::TY_Remapping:
       FrontendModeOption = "-update-code";
       break;
@@ -253,6 +260,7 @@ ToolChain::constructInvocation(const CompileJobAction &job,
     case types::TY_Image:
     case types::TY_SwiftDeps:
     case types::TY_ModuleTrace:
+    case types::TY_TBD:
       llvm_unreachable("Output type can never be primary output.");
     case types::TY_INVALID:
       llvm_unreachable("Invalid type ID");
@@ -311,6 +319,12 @@ ToolChain::constructInvocation(const CompileJobAction &job,
     break;
   }
   case OutputInfo::Mode::SingleCompile: {
+    if (context.Output.getPrimaryOutputType() == types::TY_IndexData) {
+      if (Arg *A = context.Args.getLastArg(options::OPT_index_file_path)) {
+        Arguments.push_back("-primary-file");
+        Arguments.push_back(A->getValue());
+      }
+    }
     if (context.Args.hasArg(options::OPT_driver_use_filelists) ||
         context.InputActions.size() > TOO_MANY_FILES) {
       Arguments.push_back("-filelist");
@@ -419,6 +433,13 @@ ToolChain::constructInvocation(const CompileJobAction &job,
     Arguments.push_back(LoadedModuleTracePath.c_str());
   }
 
+  const std::string &TBDPath =
+      context.Output.getAdditionalOutputForType(types::TY_TBD);
+  if (!TBDPath.empty()) {
+    Arguments.push_back("-emit-tbd-path");
+    Arguments.push_back(TBDPath.c_str());
+  }
+
   if (context.Args.hasArg(options::OPT_migrate_keep_objc_visibility)) {
     Arguments.push_back("-migrate-keep-objc-visibility");
   }
@@ -455,6 +476,11 @@ ToolChain::constructInvocation(const CompileJobAction &job,
 
   if (context.Args.hasArg(options::OPT_embed_bitcode_marker))
     Arguments.push_back("-embed-bitcode-marker");
+
+  if (context.Args.hasArg(options::OPT_index_store_path)) {
+    context.Args.AddLastArg(Arguments, options::OPT_index_store_path);
+    Arguments.push_back("-index-system-modules");
+  }
 
   return II;
 }
@@ -541,6 +567,7 @@ ToolChain::constructInvocation(const BackendJobAction &job,
     case types::TY_SIL:
     case types::TY_SIB:
     case types::TY_PCH:
+    case types::TY_IndexData:
       llvm_unreachable("Cannot be output from backend job");
     case types::TY_Swift:
     case types::TY_dSYM:
@@ -824,6 +851,7 @@ ToolChain::constructInvocation(const GeneratePCHJobAction &job,
                         Arguments);
 
   addInputsOfType(Arguments, context.InputActions, types::TY_ObjCHeader);
+  context.Args.AddLastArg(Arguments, options::OPT_index_store_path);
 
   if (job.isPersistentPCH()) {
     Arguments.push_back("-emit-pch");

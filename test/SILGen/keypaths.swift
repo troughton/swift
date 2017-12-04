@@ -1,4 +1,4 @@
-// RUN: %target-swift-frontend -enable-experimental-keypath-components -emit-silgen %s | %FileCheck %s
+// RUN: %target-swift-frontend -emit-silgen %s | %FileCheck %s
 
 struct S<T> {
   var x: T
@@ -181,4 +181,158 @@ func keyPathForExistentialMember() {
   _ = \P.y
   _ = \P.z
   _ = \P.w
+}
+
+struct OptionalFields {
+  var x: S<Int>?
+}
+struct OptionalFields2 {
+  var y: OptionalFields?
+}
+
+// CHECK-LABEL: sil hidden @_T08keypaths18keyPathForOptionalyyF
+func keyPathForOptional() {
+  // CHECK: keypath $WritableKeyPath<OptionalFields, S<Int>>, (
+  // CHECK-SAME:   stored_property #OptionalFields.x : $Optional<S<Int>>;
+  // CHECK-SAME:   optional_force : $S<Int>)
+  _ = \OptionalFields.x!
+  // CHECK: keypath $KeyPath<OptionalFields, Optional<String>>, (
+  // CHECK-SAME:   stored_property #OptionalFields.x : $Optional<S<Int>>;
+  // CHECK-SAME:   optional_chain : $S<Int>;
+  // CHECK-SAME:   stored_property #S.y : $String;
+  // CHECK-SAME:   optional_wrap : $Optional<String>)
+  _ = \OptionalFields.x?.y
+  // CHECK: keypath $KeyPath<OptionalFields2, Optional<S<Int>>>, (
+  // CHECK-SAME:   root $OptionalFields2;
+  // CHECK-SAME:   stored_property #OptionalFields2.y : $Optional<OptionalFields>;
+  // CHECK-SAME:   optional_chain : $OptionalFields;
+  // CHECK-SAME:   stored_property #OptionalFields.x : $Optional<S<Int>>)
+  _ = \OptionalFields2.y?.x
+}
+
+class StorageQualified {
+  weak var tooWeak: StorageQualified?
+  unowned var disowned: StorageQualified
+  
+  init() { fatalError() }
+}
+
+final class FinalStorageQualified {
+  weak var tooWeak: StorageQualified?
+  unowned var disowned: StorageQualified
+  
+  init() { fatalError() }
+}
+
+// CHECK-LABEL: sil hidden @{{.*}}keyPathForStorageQualified
+func keyPathForStorageQualified() {
+  // CHECK: = keypath $ReferenceWritableKeyPath<StorageQualified, Optional<StorageQualified>>,
+  // CHECK-SAME: settable_property $Optional<StorageQualified>, id #StorageQualified.tooWeak!getter.1
+  _ = \StorageQualified.tooWeak
+  // CHECK: = keypath $ReferenceWritableKeyPath<StorageQualified, StorageQualified>,
+  // CHECK-SAME: settable_property $StorageQualified, id #StorageQualified.disowned!getter.1
+  _ = \StorageQualified.disowned
+
+  // CHECK: = keypath $ReferenceWritableKeyPath<FinalStorageQualified, Optional<StorageQualified>>,
+  // CHECK-SAME: settable_property $Optional<StorageQualified>, id ##FinalStorageQualified.tooWeak
+  _ = \FinalStorageQualified.tooWeak
+  // CHECK: = keypath $ReferenceWritableKeyPath<FinalStorageQualified, StorageQualified>,
+  // CHECK-SAME: settable_property $StorageQualified, id ##FinalStorageQualified.disowned
+  _ = \FinalStorageQualified.disowned
+}
+
+struct IUOProperty {
+  var iuo: IUOBlob!
+}
+
+struct IUOBlob {
+  var x: Int
+  subscript(y: String) -> String {
+    get { return y }
+    set {}
+  }
+}
+
+// CHECK-LABEL: sil hidden @{{.*}}11iuoKeyPaths
+func iuoKeyPaths() {
+  // CHECK: = keypath $WritableKeyPath<IUOProperty, Int>,
+  // CHECK-SAME: stored_property #IUOProperty.iuo
+  // CHECK-SAME: optional_force
+  // CHECK-SAME: stored_property #IUOBlob.x
+  _ = \IUOProperty.iuo.x
+  // CHECK: = keypath $WritableKeyPath<IUOProperty, Int>,
+  // CHECK-SAME: stored_property #IUOProperty.iuo
+  // CHECK-SAME: optional_force
+  // CHECK-SAME: stored_property #IUOBlob.x
+  _ = \IUOProperty.iuo!.x
+}
+
+class Bass: Hashable {
+  static func ==(_: Bass, _: Bass) -> Bool { return false }
+  var hashValue: Int { return 0 }
+}
+
+class Treble: Bass { }
+
+struct Subscripts<T> {
+  subscript() -> T {
+    get { fatalError() }
+    set { fatalError() }
+  }
+  subscript(generic x: T) -> T {
+    get { fatalError() }
+    set { fatalError() }
+  }
+  subscript(concrete x: String) -> String {
+    get { fatalError() }
+    set { fatalError() }
+  }
+  subscript(x: String, y: String) -> String {
+    get { fatalError() }
+    set { fatalError() }
+  }
+  subscript<U>(subGeneric z: U) -> U {
+    get { fatalError() }
+    set { fatalError() }
+  }
+  subscript(mutable x: T) -> T {
+    get { fatalError() }
+    set { fatalError() }
+  }
+  subscript(bass: Bass) -> Bass {
+    get { return bass }
+    set { }
+  }
+}
+
+// CHECK-LABEL: sil hidden @{{.*}}10subscripts
+func subscripts<T: Hashable, U: Hashable>(x: T, y: U, s: String) {
+  _ = \Subscripts<T>.[]
+  _ = \Subscripts<T>.[generic: x]
+  _ = \Subscripts<T>.[concrete: s]
+  _ = \Subscripts<T>.[s, s]
+  _ = \Subscripts<T>.[subGeneric: s]
+  _ = \Subscripts<T>.[subGeneric: x]
+  _ = \Subscripts<T>.[subGeneric: y]
+
+  _ = \Subscripts<U>.[]
+  _ = \Subscripts<U>.[generic: y]
+  _ = \Subscripts<U>.[concrete: s]
+  _ = \Subscripts<U>.[s, s]
+  _ = \Subscripts<U>.[subGeneric: s]
+  _ = \Subscripts<U>.[subGeneric: x]
+  _ = \Subscripts<U>.[subGeneric: y]
+
+  _ = \Subscripts<String>.[]
+  _ = \Subscripts<String>.[generic: s]
+  _ = \Subscripts<String>.[concrete: s]
+  _ = \Subscripts<String>.[s, s]
+  _ = \Subscripts<String>.[subGeneric: s]
+  _ = \Subscripts<String>.[subGeneric: x]
+  _ = \Subscripts<String>.[subGeneric: y]
+
+  _ = \Subscripts<T>.[s, s].count
+
+  _ = \Subscripts<T>.[Bass()]
+  _ = \Subscripts<T>.[Treble()]
 }

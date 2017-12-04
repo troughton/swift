@@ -66,7 +66,8 @@ void AccessSummaryAnalysis::processArgument(FunctionInfo *info,
     switch (user->getKind()) {
     case ValueKind::BeginAccessInst: {
       auto *BAI = cast<BeginAccessInst>(user);
-      summary.mergeWith(BAI->getAccessKind(), BAI->getLoc());
+      const IndexTrieNode *subPath = findSubPathAccessed(BAI);
+      summary.mergeWith(BAI->getAccessKind(), BAI->getLoc(), subPath);
       // We don't add the users of the begin_access to the worklist because
       // even if these users eventually begin an access to the address
       // or a projection from it, that access can't begin more exclusive
@@ -102,25 +103,14 @@ void AccessSummaryAnalysis::processArgument(FunctionInfo *info,
       processFullApply(info, argumentIndex, cast<TryApplyInst>(user), operand,
                        order);
       break;
-    case ValueKind::CopyAddrInst:
-    case ValueKind::ExistentialMetatypeInst:
-    case ValueKind::ValueMetatypeInst:
-    case ValueKind::LoadInst:
-    case ValueKind::LoadBorrowInst:
-    case ValueKind::EndBorrowInst:
-    case ValueKind::OpenExistentialAddrInst:
-    case ValueKind::ProjectBlockStorageInst:
-      // These likely represent scenarios in which we're not generating
+    default:
+      // FIXME: These likely represent scenarios in which we're not generating
       // begin access markers. Ignore these for now. But we really should
       // add SIL verification to ensure all loads and stores have associated
-      // access markers.
-      break;
-    default:
-      // TODO: These requirements should be checked for in the SIL verifier.
-      // This is an assertion rather than llvm_unreachable() because
-      // it is likely the whitelist above for scenarios in which we'ren
-      // not generating access markers is not comprehensive.
-      assert(false && "Unrecognized argument use");
+      // access markers. Once SIL verification is implemented, enable the
+      // following assert to verify that the whitelist above is comprehensive,
+      // which guarnatees that exclusivity enforcement is complete.
+      //   assert(false && "Unrecognized argument use");
       break;
     }
   }
@@ -130,7 +120,8 @@ void AccessSummaryAnalysis::processArgument(FunctionInfo *info,
 /// Sanity check to make sure that a noescape partial apply is
 /// only ultimately used by an apply, a try_apply or as an argument (but not
 /// the called function) in a partial_apply.
-/// TODO: This really should be checked in the SILVerifier.
+///
+/// FIXME: This needs to be checked in the SILVerifier.
 static bool hasExpectedUsesOfNoEscapePartialApply(Operand *partialApplyUse) {
   SILInstruction *user = partialApplyUse->getUser();
 
@@ -239,12 +230,48 @@ void AccessSummaryAnalysis::processCall(FunctionInfo *callerInfo,
   propagateFromCalleeToCaller(callerInfo, flow);
 }
 
-bool AccessSummaryAnalysis::ArgumentSummary::mergeWith(SILAccessKind otherKind,
-                                                        SILLocation otherLoc) {
+bool AccessSummaryAnalysis::ArgumentSummary::mergeWith(
+    SILAccessKind otherKind, SILLocation otherLoc,
+    const IndexTrieNode *otherSubPath) {
+  bool changed = false;
+
+  auto found =
+      SubAccesses.try_emplace(otherSubPath, otherKind, otherLoc, otherSubPath);
+  if (!found.second) {
+    // We already have an entry for otherSubPath, so merge with it.
+    changed = found.first->second.mergeWith(otherKind, otherLoc, otherSubPath);
+  } else {
+    // We just added a new entry for otherSubPath.
+    changed = true;
+  }
+
+  return changed;
+}
+
+bool AccessSummaryAnalysis::ArgumentSummary::mergeWith(
+    const ArgumentSummary &other) {
+  bool changed = false;
+
+  const SubAccessMap &otherAccesses = other.SubAccesses;
+  for (auto it = otherAccesses.begin(), e = otherAccesses.end(); it != e;
+       ++it) {
+    const SubAccessSummary &otherSubAccess = it->getSecond();
+    if (mergeWith(otherSubAccess.getAccessKind(), otherSubAccess.getAccessLoc(),
+                  otherSubAccess.getSubPath())) {
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+bool AccessSummaryAnalysis::SubAccessSummary::mergeWith(
+    SILAccessKind otherKind, SILLocation otherLoc,
+    const IndexTrieNode *otherSubPath) {
+  assert(otherSubPath == this->SubPath);
   // In the lattice, a modification-like accesses subsume a read access or no
   // access.
-  if (!Kind.hasValue() ||
-      (*Kind == SILAccessKind::Read && otherKind != SILAccessKind::Read)) {
+  if (Kind == SILAccessKind::Read && otherKind != SILAccessKind::Read) {
     Kind = otherKind;
     AccessLoc = otherLoc;
     return true;
@@ -253,11 +280,11 @@ bool AccessSummaryAnalysis::ArgumentSummary::mergeWith(SILAccessKind otherKind,
   return false;
 }
 
-bool AccessSummaryAnalysis::ArgumentSummary::mergeWith(
-    const ArgumentSummary &other) {
-  if (other.Kind.hasValue())
-    return mergeWith(*other.Kind, other.AccessLoc);
-  return false;
+bool AccessSummaryAnalysis::SubAccessSummary::mergeWith(
+    const SubAccessSummary &other) {
+  // We don't currently support merging accesses for different sub paths.
+  assert(SubPath == other.SubPath);
+  return mergeWith(other.Kind, other.AccessLoc, SubPath);
 }
 
 void AccessSummaryAnalysis::recompute(FunctionInfo *initial) {
@@ -299,12 +326,57 @@ void AccessSummaryAnalysis::recompute(FunctionInfo *initial) {
   } while (needAnotherIteration);
 }
 
-StringRef AccessSummaryAnalysis::ArgumentSummary::getDescription() const {
-  if (Optional<SILAccessKind> kind = getAccessKind()) {
-    return getSILAccessKindName(*kind);
+std::string
+AccessSummaryAnalysis::SubAccessSummary::getDescription(SILType BaseType,
+                                                        SILModule &M) const {
+  std::string sbuf;
+  llvm::raw_string_ostream os(sbuf);
+
+  os << AccessSummaryAnalysis::getSubPathDescription(BaseType, SubPath, M);
+
+  if (!SubPath->isRoot())
+    os << " ";
+  os << getSILAccessKindName(getAccessKind());
+  return os.str();
+}
+
+void AccessSummaryAnalysis::ArgumentSummary::getSortedSubAccesses(
+    SmallVectorImpl<SubAccessSummary> &storage) const {
+  for (auto it = SubAccesses.begin(), e = SubAccesses.end(); it != e; ++it) {
+    storage.push_back(it->getSecond());
   }
 
-  return "none";
+  const auto &compare = [](const SubAccessSummary &lhs,
+                           const SubAccessSummary &rhs) {
+    return compareSubPaths(lhs.getSubPath(), rhs.getSubPath());
+  };
+  std::sort(storage.begin(), storage.end(), compare);
+
+  assert(storage.size() == SubAccesses.size());
+}
+
+std::string
+AccessSummaryAnalysis::ArgumentSummary::getDescription(SILType BaseType,
+                                                       SILModule &M) const {
+  std::string sbuf;
+  llvm::raw_string_ostream os(sbuf);
+  os << "[";
+  unsigned index = 0;
+
+  SmallVector<AccessSummaryAnalysis::SubAccessSummary, 8> Sorted;
+  Sorted.reserve(SubAccesses.size());
+  getSortedSubAccesses(Sorted);
+
+  for (auto &subAccess : Sorted) {
+    if (index > 0) {
+      os << ", ";
+    }
+    os << subAccess.getDescription(BaseType, M);
+    index++;
+  }
+  os << "]";
+
+  return os.str();
 }
 
 bool AccessSummaryAnalysis::propagateFromCalleeToCaller(
@@ -355,19 +427,155 @@ SILAnalysis *swift::createAccessSummaryAnalysis(SILModule *M) {
   return new AccessSummaryAnalysis();
 }
 
-raw_ostream &swift::
-operator<<(raw_ostream &os,
-           const AccessSummaryAnalysis::FunctionSummary &summary) {
-  unsigned argCount = summary.getArgumentCount();
-  os << "(";
+/// If the instruction is a field or tuple projection and it has a single
+/// user return a pair of the single user and the projection index.
+/// Otherwise, return a pair with the component nullptr and the second
+/// unspecified.
+static std::pair<SILInstruction *, unsigned>
+getSingleAddressProjectionUser(SILInstruction *I) {
+  SILInstruction *SingleUser = nullptr;
+  unsigned ProjectionIndex = 0;
 
-  if (argCount > 0) {
-    os << summary.getAccessForArgument(0).getDescription();
-    for (unsigned i = 1; i < argCount; i++) {
-      os << ",  " << summary.getAccessForArgument(i).getDescription();
+  for (Operand *Use : I->getUses()) {
+    SILInstruction *User = Use->getUser();
+    if (isa<BeginAccessInst>(I) && isa<EndAccessInst>(User))
+      continue;
+
+    // We have more than a single user so bail.
+    if (SingleUser)
+      return std::make_pair(nullptr, 0);
+
+    switch (User->getKind()) {
+    case ValueKind::StructElementAddrInst:
+      ProjectionIndex = cast<StructElementAddrInst>(User)->getFieldNo();
+      SingleUser = User;
+      break;
+    case ValueKind::TupleElementAddrInst:
+      ProjectionIndex = cast<TupleElementAddrInst>(User)->getFieldNo();
+      SingleUser = User;
+      break;
+    default:
+      return std::make_pair(nullptr, 0);
     }
   }
 
+  return std::make_pair(SingleUser, ProjectionIndex);
+}
+
+const IndexTrieNode *
+AccessSummaryAnalysis::findSubPathAccessed(BeginAccessInst *BAI) {
+  IndexTrieNode *SubPath = SubPathTrie;
+
+  // For each single-user projection of BAI, construct or get a node
+  // from the trie representing the index of the field or tuple element
+  // accessed by that projection.
+  SILInstruction *Iter = BAI;
+  while (true) {
+    std::pair<SILInstruction *, unsigned> ProjectionUser =
+        getSingleAddressProjectionUser(Iter);
+    if (!ProjectionUser.first)
+      break;
+
+    SubPath = SubPath->getChild(ProjectionUser.second);
+    Iter = ProjectionUser.first;
+  }
+
+  return SubPath;
+}
+
+/// Returns a string representation of the SubPath
+/// suitable for use in diagnostic text. Only supports the Projections
+/// that stored-property relaxation supports: struct stored properties
+/// and tuple elements.
+std::string AccessSummaryAnalysis::getSubPathDescription(
+    SILType baseType, const IndexTrieNode *subPath, SILModule &M) {
+  // Walk the trie to the root to collect the sequence (in reverse order).
+  llvm::SmallVector<unsigned, 4> reversedIndices;
+  const IndexTrieNode *I = subPath;
+  while (!I->isRoot()) {
+    reversedIndices.push_back(I->getIndex());
+    I = I->getParent();
+  }
+
+  std::string sbuf;
+  llvm::raw_string_ostream os(sbuf);
+
+  SILType containingType = baseType;
+  for (unsigned index : reversed(reversedIndices)) {
+    os << ".";
+
+    if (StructDecl *D = containingType.getStructOrBoundGenericStruct()) {
+      auto iter = D->getStoredProperties().begin();
+      std::advance(iter, index);
+      VarDecl *var = *iter;
+      os << var->getBaseName();
+      containingType = containingType.getFieldType(var, M);
+      continue;
+    }
+
+    if (auto tupleTy = containingType.getAs<TupleType>()) {
+      Identifier elementName = tupleTy->getElement(index).getName();
+      if (elementName.empty())
+        os << index;
+      else
+        os << elementName;
+      containingType = containingType.getTupleElementType(index);
+      continue;
+    }
+
+    llvm_unreachable("Unexpected type in projection SubPath!");
+  }
+
+  return os.str();
+}
+
+static unsigned subPathLength(const IndexTrieNode *subPath) {
+  unsigned length = 0;
+
+  const IndexTrieNode *iter = subPath;
+  while (iter) {
+    length++;
+    iter = iter->getParent();
+  }
+
+  return length;
+}
+
+bool AccessSummaryAnalysis::compareSubPaths(const IndexTrieNode *lhs,
+                                            const IndexTrieNode *rhs) {
+  unsigned lhsLength = subPathLength(lhs);
+  unsigned rhsLength = subPathLength(rhs);
+
+  if (lhsLength != rhsLength)
+    return lhsLength < rhsLength;
+
+
+  while (lhs) {
+    if (lhs->getIndex() != rhs->getIndex())
+      return lhs->getIndex() < rhs->getIndex();
+
+    lhs = lhs->getParent();
+    rhs = rhs->getParent();
+  }
+
+  assert(!rhs && "Equal paths with different lengths?");
+  // The two paths are equal.
+  return false;
+}
+
+void AccessSummaryAnalysis::FunctionSummary::print(raw_ostream &os,
+                                                   SILFunction *fn) const {
+  unsigned argCount = getArgumentCount();
+  os << "(";
+
+  for (unsigned i = 0; i < argCount; i++) {
+    if (i > 0) {
+      os << ",  ";
+    }
+    SILArgument *arg = fn->getArgument(i);
+    SILModule &m = fn->getModule();
+    os << getAccessForArgument(i).getDescription(arg->getType(), m);
+  }
+
   os << ")";
-  return os;
 }

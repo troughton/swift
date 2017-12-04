@@ -1983,6 +1983,9 @@ bool KeyPathPatternComponent::isComputedSettablePropertyMutating() const {
   switch (getKind()) {
   case Kind::StoredProperty:
   case Kind::GettableProperty:
+  case Kind::OptionalChain:
+  case Kind::OptionalWrap:
+  case Kind::OptionalForce:
     llvm_unreachable("not a settable computed property");
   case Kind::SettableProperty: {
     auto setter = getComputedPropertySetter();
@@ -1997,6 +2000,9 @@ forEachRefcountableReference(const KeyPathPatternComponent &component,
                          llvm::function_ref<void (SILFunction*)> forFunction) {
   switch (component.getKind()) {
   case KeyPathPatternComponent::Kind::StoredProperty:
+  case KeyPathPatternComponent::Kind::OptionalChain:
+  case KeyPathPatternComponent::Kind::OptionalWrap:
+  case KeyPathPatternComponent::Kind::OptionalForce:
     return;
   case KeyPathPatternComponent::Kind::SettableProperty:
     forFunction(component.getComputedPropertySetter());
@@ -2007,13 +2013,19 @@ forEachRefcountableReference(const KeyPathPatternComponent &component,
     switch (component.getComputedPropertyId().getKind()) {
     case KeyPathPatternComponent::ComputedPropertyId::DeclRef:
       // Mark the vtable entry as used somehow?
-      return;
+      break;
     case KeyPathPatternComponent::ComputedPropertyId::Function:
       forFunction(component.getComputedPropertyId().getFunction());
-      return;
+      break;
     case KeyPathPatternComponent::ComputedPropertyId::Property:
-      return;
+      break;
     }
+    
+    if (auto equals = component.getComputedPropertyIndexEquals())
+      forFunction(equals);
+    if (auto hash = component.getComputedPropertyIndexHash())
+      forFunction(hash);
+    return;
   }
 }
 
@@ -2040,21 +2052,26 @@ KeyPathPattern::get(SILModule &M, CanGenericSignature signature,
     return existing;
   
   // Determine the number of operands.
+  int maxOperandNo = -1;
   for (auto component : components) {
     switch (component.getKind()) {
     case KeyPathPatternComponent::Kind::StoredProperty:
+    case KeyPathPatternComponent::Kind::OptionalChain:
+    case KeyPathPatternComponent::Kind::OptionalWrap:
+    case KeyPathPatternComponent::Kind::OptionalForce:
       break;
       
     case KeyPathPatternComponent::Kind::GettableProperty:
     case KeyPathPatternComponent::Kind::SettableProperty:
-      assert(component.getComputedPropertyIndices().empty()
-             && "todo");
+      for (auto &index : component.getComputedPropertyIndices()) {
+        maxOperandNo = std::max(maxOperandNo, (int)index.Operand);
+      }
     }
   }
   
   auto newPattern = KeyPathPattern::create(M, signature, rootType, valueType,
                                            components, objcString,
-                                           0 /*todo: num operands*/);
+                                           maxOperandNo + 1);
   M.KeyPathPatterns.InsertNode(newPattern, insertPos);
   return newPattern;
 }
@@ -2104,6 +2121,11 @@ void KeyPathPattern::Profile(llvm::FoldingSetNodeID &ID,
   for (auto &component : components) {
     ID.AddInteger((unsigned)component.getKind());
     switch (component.getKind()) {
+    case KeyPathPatternComponent::Kind::OptionalForce:
+    case KeyPathPatternComponent::Kind::OptionalWrap:
+    case KeyPathPatternComponent::Kind::OptionalChain:
+      break;
+      
     case KeyPathPatternComponent::Kind::StoredProperty:
       ID.AddPointer(component.getStoredPropertyDecl());
       break;
@@ -2137,8 +2159,12 @@ void KeyPathPattern::Profile(llvm::FoldingSetNodeID &ID,
         break;
       }
       }
-      assert(component.getComputedPropertyIndices().empty()
-             && "todo");
+      for (auto &index : component.getComputedPropertyIndices()) {
+        ID.AddInteger(index.Operand);
+        ID.AddPointer(index.FormalType.getPointer());
+        ID.AddPointer(index.LoweredType.getOpaqueValue());
+        ID.AddPointer(index.Hashable.getOpaqueValue());
+      }
       break;
     }
   }
@@ -2148,22 +2174,34 @@ KeyPathInst *
 KeyPathInst::create(SILDebugLocation Loc,
                     KeyPathPattern *Pattern,
                     SubstitutionList Subs,
+                    ArrayRef<SILValue> Args,
                     SILType Ty,
                     SILFunction &F) {
-  auto totalSize = totalSizeToAlloc<Substitution>(Subs.size());
+  assert(Args.size() == Pattern->getNumOperands()
+         && "number of key path args doesn't match pattern");
+
+  auto totalSize = totalSizeToAlloc<Substitution, Operand>
+    (Subs.size(), Args.size());
   void *mem = F.getModule().allocateInst(totalSize, alignof(Substitution));
-  return ::new (mem) KeyPathInst(Loc, Pattern, Subs, Ty);
+  return ::new (mem) KeyPathInst(Loc, Pattern, Subs, Args, Ty);
 }
 
 KeyPathInst::KeyPathInst(SILDebugLocation Loc,
                          KeyPathPattern *Pattern,
                          SubstitutionList Subs,
+                         ArrayRef<SILValue> Args,
                          SILType Ty)
   : SILInstruction(ValueKind::KeyPathInst, Loc, Ty),
-    Pattern(Pattern), NumSubstitutions(Subs.size())
+    Pattern(Pattern), NumSubstitutions(Subs.size()),
+    NumOperands(Pattern->getNumOperands())
 {
   auto *subsBuf = getTrailingObjects<Substitution>();
   std::uninitialized_copy(Subs.begin(), Subs.end(), subsBuf);
+  
+  auto *operandsBuf = getTrailingObjects<Operand>();
+  for (unsigned i = 0; i < Args.size(); ++i) {
+    ::new ((void*)&operandsBuf[i]) Operand(this, Args[i]);
+  }
   
   // Increment the use of any functions referenced from the keypath pattern.
   for (auto component : Pattern->getComponents()) {
@@ -2178,8 +2216,7 @@ KeyPathInst::getSubstitutions() {
 
 MutableArrayRef<Operand>
 KeyPathInst::getAllOperands() {
-  // TODO: subscript indexes
-  return {};
+  return {getTrailingObjects<Operand>(), NumOperands};
 }
 
 KeyPathInst::~KeyPathInst() {
@@ -2190,7 +2227,9 @@ KeyPathInst::~KeyPathInst() {
   for (auto component : Pattern->getComponents()) {
     component.decrementRefCounts();
   }
-  // TODO: destroy operands
+  // Destroy operands.
+  for (auto &operand : getAllOperands())
+    operand.~Operand();
 }
 
 KeyPathPattern *KeyPathInst::getPattern() const {

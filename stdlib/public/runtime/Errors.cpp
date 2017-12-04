@@ -252,8 +252,8 @@ void _swift_runtime_on_report(uintptr_t flags, const char *message,
                );
 }
 
-void swift::reportToDebugger(uintptr_t flags, const char *message,
-                             RuntimeErrorDetails *details) {
+void swift::_swift_reportToDebugger(uintptr_t flags, const char *message,
+                                    RuntimeErrorDetails *details) {
   _swift_runtime_on_report(flags, message, details);
 }
 
@@ -261,7 +261,7 @@ void swift::reportToDebugger(uintptr_t flags, const char *message,
 /// Does not crash by itself.
 void swift::swift_reportError(uint32_t flags,
                               const char *message) {
-#if NDEBUG
+#if defined(__APPLE__) && NDEBUG
   flags &= ~FatalErrorFlags::ReportBacktrace;
 #endif
   reportNow(flags, message);
@@ -324,7 +324,7 @@ LLVM_ATTRIBUTE_NORETURN
 void
 swift_deletedMethodError() {
   swift::fatalError(/* flags = */ 0,
-                    "fatal error: call of deleted method\n");
+                    "Fatal error: Call of deleted method\n");
 }
 
 
@@ -332,7 +332,14 @@ swift_deletedMethodError() {
 // FIXME: can't pass the object's address from InlineRefCounts without hacks
 void swift::swift_abortRetainOverflow() {
   swift::fatalError(FatalErrorFlags::ReportBacktrace,
-                    "fatal error: object was retained too many times");
+                    "Fatal error: Object was retained too many times");
+}
+
+// Crash due to an unowned retain count overflow.
+// FIXME: can't pass the object's address from InlineRefCounts without hacks
+void swift::swift_abortUnownedRetainOverflow() {
+  swift::fatalError(FatalErrorFlags::ReportBacktrace,
+                    "Fatal error: Object's unowned reference was retained too many times");
 }
 
 // Crash due to retain of a dead unowned reference.
@@ -340,11 +347,11 @@ void swift::swift_abortRetainOverflow() {
 void swift::swift_abortRetainUnowned(const void *object) {
   if (object) {
     swift::fatalError(FatalErrorFlags::ReportBacktrace,
-                      "fatal error: attempted to read an unowned reference but "
+                      "Fatal error: Attempted to read an unowned reference but "
                       "object %p was already deallocated", object);
   } else {
     swift::fatalError(FatalErrorFlags::ReportBacktrace,
-                      "fatal error: attempted to read an unowned reference but "
+                      "Fatal error: Attempted to read an unowned reference but "
                       "the object was already deallocated");
   }
 }

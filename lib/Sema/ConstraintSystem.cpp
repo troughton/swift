@@ -1046,6 +1046,9 @@ void ConstraintSystem::openGeneric(
       auto subjectTy = openType(req.getFirstType(), replacements);
       auto boundTy = openType(req.getSecondType(), replacements);
       addConstraint(ConstraintKind::Subtype, subjectTy, boundTy, locatorPtr);
+      addConstraint(ConstraintKind::ConformsTo, subjectTy,
+                    TC.Context.getAnyObjectType(),
+                    locatorPtr);
       break;
     }
 
@@ -1278,7 +1281,8 @@ ConstraintSystem::getTypeOfMemberReference(
   } else {
     // For an unbound instance method reference, replace the 'Self'
     // parameter with the base type.
-    type = openedFnType->replaceSelfParameterType(baseObjTy);
+    openedType = openedFnType->replaceSelfParameterType(baseObjTy);
+    type = openedType;
   }
 
   // When accessing protocol members with an existential base, replace

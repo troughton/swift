@@ -765,9 +765,14 @@ static CanSILFunctionType getSILFunctionType(SILModule &M,
     for (auto capture : loweredCaptures.getCaptures()) {
       if (capture.isDynamicSelfMetadata()) {
         ParameterConvention convention = ParameterConvention::Direct_Unowned;
+        auto dynamicSelfInterfaceType = GenericEnvironment::mapTypeOutOfContext(
+          function->getGenericEnvironment(),
+          loweredCaptures.getDynamicSelfType());
+        
         auto selfMetatype = MetatypeType::get(
-            loweredCaptures.getDynamicSelfType(),
+            dynamicSelfInterfaceType,
             MetatypeRepresentation::Thick);
+        
         auto canSelfMetatype = getCanonicalType(selfMetatype);
         SILParameterInfo param(canSelfMetatype, convention);
         inputs.push_back(param);
@@ -1546,7 +1551,8 @@ namespace {
       }
 
       auto type = tl.getLoweredType().getSwiftRValueType();
-      if (type->hasRetainablePointerRepresentation())
+      if (type->hasRetainablePointerRepresentation()
+          || (type->getSwiftNewtypeUnderlyingType() && !tl.isTrivial()))
         return ResultConvention::Autoreleased;
 
       return ResultConvention::Unowned;
@@ -1783,8 +1789,11 @@ static bool requiresNewVTableEntry(SILDeclRef method) {
     return true;
   if (method.kind == SILDeclRef::Kind::Allocator) {
     auto *ctor = cast<ConstructorDecl>(method.getDecl());
-    if (ctor->isRequired() && !ctor->getOverriddenDecl()->isRequired())
-      return true;
+    if (ctor->isRequired()) {
+      if (!ctor->getOverriddenDecl()->isRequired()
+          || ctor->getOverriddenDecl()->hasClangNode())
+        return true;
+    }
   }
   return false;
 }

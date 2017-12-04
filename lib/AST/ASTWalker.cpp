@@ -952,10 +952,14 @@ class Traversal : public ASTVisitor<Traversal, Expr*, Stmt*,
             ? KeyPathExpr::Component::forSubscriptWithPrebuiltIndexExpr(
                 component.getDeclRef(),
                 newIndex,
+                component.getSubscriptLabels(),
                 component.getComponentType(),
-                component.getLoc())
-            : KeyPathExpr::Component::forUnresolvedSubscriptWithPrebuiltIndexExpr(
-                newIndex, component.getLoc());
+                component.getLoc(),
+                component.getSubscriptIndexHashableConformances())
+            : KeyPathExpr::Component
+                         ::forUnresolvedSubscriptWithPrebuiltIndexExpr(
+                E->getType()->getASTContext(),
+                newIndex, component.getSubscriptLabels(), component.getLoc());
         }
         break;
       }

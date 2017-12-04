@@ -16,6 +16,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "TypeChecker.h"
+#include "swift/AST/ExistentialLayout.h"
 #include "swift/AST/Initializer.h"
 #include "swift/AST/NameLookup.h"
 #include "swift/AST/ProtocolConformance.h"
@@ -120,27 +121,48 @@ namespace {
       if (!Options.contains(NameLookupFlags::ProtocolMembers) ||
           !isa<ProtocolDecl>(foundDC) ||
           isa<GenericTypeParamDecl>(found) ||
-          (isa<FuncDecl>(found) && cast<FuncDecl>(found)->isOperator()) ||
-          foundInType->isAnyExistentialType()) {
+          (isa<FuncDecl>(found) && cast<FuncDecl>(found)->isOperator())) {
         addResult(found);
         return;
       }
 
       assert(isa<ProtocolDecl>(foundDC));
 
+      auto conformingType = foundInType;
+
+      // When performing a lookup on a subclass existential, we might
+      // find a member of the class that witnesses a requirement on a
+      // protocol that the class conforms to.
+      //
+      // Since subclass existentials don't normally conform to protocols,
+      // pull out the superclass instead, and use that below.
+      if (foundInType->isExistentialType()) {
+        auto layout = foundInType->getExistentialLayout();
+        if (layout.superclass)
+          conformingType = layout.superclass;
+      }
+
       // If we found something within the protocol itself, and our
       // search began somewhere that is not in a protocol or extension
       // thereof, remap this declaration to the witness.
       if (foundInType->is<ArchetypeType>() ||
+          foundInType->isExistentialType() ||
           Options.contains(NameLookupFlags::PerformConformanceCheck)) {
         // Dig out the protocol conformance.
-        auto conformance = TC.conformsToProtocol(foundInType, foundProto, DC,
+        auto conformance = TC.conformsToProtocol(conformingType, foundProto, DC,
                                                  conformanceOptions);
-        if (!conformance)
+        if (!conformance) {
+          // If there's no conformance, we have an existential
+          // and we found a member from one of the protocols, and
+          // not a class constraint if any.
+          assert(foundInType->isExistentialType());
+          addResult(found);
           return;
+        }
 
         if (conformance->isAbstract()) {
-          assert(foundInType->is<ArchetypeType>());
+          assert(foundInType->is<ArchetypeType>() ||
+                 foundInType->isExistentialType());
           addResult(found);
           return;
         }
@@ -161,6 +183,10 @@ namespace {
 
         // FIXME: the "isa<ProtocolDecl>()" check will be wrong for
         // default implementations in protocols.
+        //
+        // If we have an imported conformance or the witness could
+        // not be deserialized, getWitnessDecl() will just return
+        // the requirement, so just drop the lookup result here.
         if (witness && !isa<ProtocolDecl>(witness->getDeclContext()))
           addResult(witness);
 
@@ -552,12 +578,16 @@ void TypeChecker::performTypoCorrection(DeclContext *DC, DeclRefKind refKind,
                                         SourceLoc nameLoc,
                                         NameLookupOptions lookupOptions,
                                         LookupResult &result,
+                                        GenericSignatureBuilder *gsb,
                                         unsigned maxResults) {
-  // Disable typo-correction if we won't show the diagnostic anyway.
-  if (getLangOpts().DisableTypoCorrection ||
+  // Disable typo-correction if we won't show the diagnostic anyway or if
+  // we've hit our typo correction limit.
+  if (NumTypoCorrections >= getLangOpts().TypoCorrectionLimit ||
       (Diags.hasFatalErrorOccurred() &&
        !Diags.getShowDiagnosticsAfterFatalError()))
     return;
+
+  ++NumTypoCorrections;
 
   // Fill in a collection of the most reasonable entries.
   TopCollection<unsigned, ValueDecl*> entries(maxResults);
@@ -592,7 +622,7 @@ void TypeChecker::performTypoCorrection(DeclContext *DC, DeclRefKind refKind,
   TypoCorrectionResolver resolver(*this, nameLoc);
   if (baseTypeOrNull) {
     lookupVisibleMemberDecls(consumer, baseTypeOrNull, DC, &resolver,
-                             /*include instance members*/ true);
+                             /*include instance members*/ true, gsb);
   } else {
     lookupVisibleDecls(consumer, DC, &resolver, /*top level*/ true, nameLoc);
   }

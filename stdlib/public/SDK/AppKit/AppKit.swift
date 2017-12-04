@@ -79,9 +79,9 @@ extension NSApplication {
 
 extension NSColor : _ExpressibleByColorLiteral {
   @nonobjc
-  public required convenience init(colorLiteralRed red: Float, green: Float,
+  public required convenience init(_colorLiteralRed red: Float, green: Float,
                                    blue: Float, alpha: Float) {
-    self.init(srgbRed: CGFloat(red), green: CGFloat(green),
+    self.init(red: CGFloat(red), green: CGFloat(green),
               blue: CGFloat(blue), alpha: CGFloat(alpha))
   }
 }

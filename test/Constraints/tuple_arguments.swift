@@ -1135,7 +1135,7 @@ do {
   _ = GenericEnum.two(3, 4)
   _ = GenericEnum.two((3, 4)) // expected-error {{missing argument for parameter #2 in call}}
 
-  _ = GenericEnum.tuple(3, 4) // expected-error {{enum element 'tuple' expects a single parameter of type '(_, _)'}} {{25-25=(}} {{29-29=)}}
+  _ = GenericEnum.tuple(3, 4) // expected-error {{enum element 'tuple' expects a single parameter of type '(T, T)'}} {{25-25=(}} {{29-29=)}}
   _ = GenericEnum.tuple((3, 4))
 }
 
@@ -1168,7 +1168,7 @@ do {
   _ = GenericEnum.two((a, b)) // expected-error {{missing argument for parameter #2 in call}}
   _ = GenericEnum.two(c) // expected-error {{missing argument for parameter #2 in call}}
 
-  _ = GenericEnum.tuple(a, b) // expected-error {{enum element 'tuple' expects a single parameter of type '(_, _)'}} {{25-25=(}} {{29-29=)}}
+  _ = GenericEnum.tuple(a, b) // expected-error {{enum element 'tuple' expects a single parameter of type '(T, T)'}} {{25-25=(}} {{29-29=)}}
   _ = GenericEnum.tuple((a, b))
   _ = GenericEnum.tuple(c)
 }
@@ -1204,7 +1204,7 @@ do {
   _ = GenericEnum.two((a, b)) // expected-error {{missing argument for parameter #2 in call}}
   _ = GenericEnum.two(c) // expected-error {{missing argument for parameter #2 in call}}
 
-  _ = GenericEnum.tuple(a, b) // expected-error {{enum element 'tuple' expects a single parameter of type '(_, _)'}} {{25-25=(}} {{29-29=)}}
+  _ = GenericEnum.tuple(a, b) // expected-error {{enum element 'tuple' expects a single parameter of type '(T, T)'}} {{25-25=(}} {{29-29=)}}
   _ = GenericEnum.tuple((a, b))
   _ = GenericEnum.tuple(c)
 }
@@ -1550,4 +1550,69 @@ extension Sequence where Iterator.Element == (key: String, value: String?) {
         SR_5199() // Ok
     }
   }
+}
+
+func rdar33043106(_ records: [(Int)], _ other: [((Int))]) -> [Int] {
+  let x: [Int] = records.flatMap { _ in
+    let i = 1
+    return i
+  }
+  let y: [Int] = other.flatMap { _ in
+    let i = 1
+    return i
+  }
+
+  return x + y
+}
+
+func itsFalse(_: Int) -> Bool? {
+  return false
+}
+
+func rdar33159366(s: AnySequence<Int>) {
+  _ = s.flatMap(itsFalse)
+  let a = Array(s)
+  _ = a.flatMap(itsFalse)
+}
+
+extension Concrete {
+  typealias T = (Int, Int)
+  typealias F = (T) -> ()
+  func opt1(_ fn: (((Int, Int)) -> ())?) {}
+  func opt2(_ fn: (((Int, Int)) -> ())??) {}
+  func opt3(_ fn: (((Int, Int)) -> ())???) {}
+  func optAliasT(_ fn: ((T) -> ())?) {}
+  func optAliasF(_ fn: F?) {}
+}
+
+extension Generic {
+  typealias F = (T) -> ()
+  func opt1(_ fn: (((Int, Int)) -> ())?) {}
+  func opt2(_ fn: (((Int, Int)) -> ())??) {}
+  func opt3(_ fn: (((Int, Int)) -> ())???) {}
+  func optAliasT(_ fn: ((T) -> ())?) {}
+  func optAliasF(_ fn: F?) {}
+}
+
+func rdar33239714() {
+  Concrete().opt1 { x, y in }
+  Concrete().opt1 { (x, y) in }
+  Concrete().opt2 { x, y in }
+  Concrete().opt2 { (x, y) in }
+  Concrete().opt3 { x, y in }
+  Concrete().opt3 { (x, y) in }
+  Concrete().optAliasT { x, y in }
+  Concrete().optAliasT { (x, y) in }
+  Concrete().optAliasF { x, y in }
+  Concrete().optAliasF { (x, y) in }
+  Generic<(Int, Int)>().opt1 { x, y in }
+  Generic<(Int, Int)>().opt1 { (x, y) in }
+  Generic<(Int, Int)>().opt2 { x, y in }
+  Generic<(Int, Int)>().opt2 { (x, y) in }
+  Generic<(Int, Int)>().opt3 { x, y in }
+  Generic<(Int, Int)>().opt3 { (x, y) in }
+  Generic<(Int, Int)>().optAliasT { x, y in }
+  Generic<(Int, Int)>().optAliasT { (x, y) in }
+  Generic<(Int, Int)>().optAliasF { x, y in }
+  Generic<(Int, Int)>().optAliasF { (x, y) in }
 }

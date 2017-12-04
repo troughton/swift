@@ -1122,6 +1122,27 @@ unsigned Lexer::lexUnicodeEscape(const char *&CurPtr, Lexer *Diags) {
   return CharValue;
 }
 
+/// maybeConsumeNewlineEscape - Check for valid elided newline escape and
+/// move pointer passed in to the character after the end of the line.
+static bool maybeConsumeNewlineEscape(const char *&CurPtr, ssize_t Offset) {
+  const char *TmpPtr = CurPtr + Offset;
+  while (true) {
+    switch (*TmpPtr++) {
+    case ' ': case '\t':
+      continue;
+    case '\r':
+      if (*TmpPtr == '\n')
+        TmpPtr++;
+      LLVM_FALLTHROUGH;
+    case '\n':
+      CurPtr = TmpPtr;
+      return true;
+    case 0:
+    default:
+      return false;
+    }
+  }
+}
 
 /// lexCharacter - Read a character and return its UTF32 code.  If this is the
 /// end of enclosing string/character sequence (i.e. the character is equal to
@@ -1187,6 +1208,10 @@ unsigned Lexer::lexCharacter(const char *&CurPtr, char StopQuote,
   unsigned CharValue = 0;
   // Escape processing.  We already ate the "\".
   switch (*CurPtr) {
+  case ' ': case '\t': case '\n': case '\r':
+    if (MultilineString && maybeConsumeNewlineEscape(CurPtr, 0))
+      return '\n';
+    LLVM_FALLTHROUGH;
   default:  // Invalid escape.
     if (EmitDiagnostics)
       diagnose(CurPtr, diag::lex_invalid_escape);
@@ -1244,6 +1269,9 @@ static const char *skipToEndOfInterpolatedExpression(const char *CurPtr,
                                                      DiagnosticEngine *Diags,
                                                      bool MultilineString) {
   llvm::SmallVector<char, 4> OpenDelimiters;
+  llvm::SmallVector<bool, 4> AllowNewline;
+  AllowNewline.push_back(MultilineString);
+
   auto inStringLiteral = [&]() {
     return !OpenDelimiters.empty() &&
            (OpenDelimiters.back() == '"' || OpenDelimiters.back() == '\'');
@@ -1262,27 +1290,46 @@ static const char *skipToEndOfInterpolatedExpression(const char *CurPtr,
     // interpolated ones are no exception - unless multiline literals.
     case '\n':
     case '\r':
-      if (MultilineString)
+      if (AllowNewline.back())
         continue;
       // Will be diagnosed as an unterminated string literal.
       return CurPtr-1;
 
     case '"':
-    case '\'':
-      if (inStringLiteral()) {
-        // Is it the closing quote?
+    case '\'': {
+      if (!AllowNewline.back() && inStringLiteral()) {
         if (OpenDelimiters.back() == CurPtr[-1]) {
+          // Closing single line string literal.
           OpenDelimiters.pop_back();
+          AllowNewline.pop_back();
         }
-        // Otherwise it's an ordinary character; treat it normally.
-      } else {
-        OpenDelimiters.push_back(CurPtr[-1]);
+        // Otherwise, it's just a quote in string literal. e.g. "foo's".
+        continue;
       }
-      if (*CurPtr == '"' && *(CurPtr + 1) == '"' && *(CurPtr - 1) == '"') {
-        MultilineString = true;
+
+      bool isMultilineQuote = (
+          *CurPtr == '"' && *(CurPtr + 1) == '"' && *(CurPtr - 1) == '"');
+      if (isMultilineQuote)
         CurPtr += 2;
+
+      if (!inStringLiteral()) {
+        // Open string literal
+        OpenDelimiters.push_back(CurPtr[-1]);
+        AllowNewline.push_back(isMultilineQuote);
+        continue;
       }
+
+      // We are in multiline string literal.
+      assert(AllowNewline.back() && "other cases must be handled above");
+      if (isMultilineQuote) {
+        // Close multiline string literal.
+        OpenDelimiters.pop_back();
+        AllowNewline.pop_back();
+      }
+
+      // Otherwise, it's just a normal character in multiline string.
       continue;
+    }
     case '\\':
       if (inStringLiteral()) {
         char escapedChar = *CurPtr++;
@@ -1291,7 +1338,11 @@ static const char *skipToEndOfInterpolatedExpression(const char *CurPtr,
           // Entering a recursive interpolated expression
           OpenDelimiters.push_back('(');
           continue;
-        case '\n': case '\r': case 0:
+        case '\n': case '\r':
+          if (AllowNewline.back())
+            continue;
+          LLVM_FALLTHROUGH;
+        case 0:
           // Don't jump over newline/EOF due to preceding backslash!
           return CurPtr-1;
         default:
@@ -1373,13 +1424,28 @@ getMultilineTrailingIndent(const Token &Str, DiagnosticEngine *Diags) {
       continue;
     case '\n':
     case '\r': {
-      auto bytes = start + 1;
-      auto length = end-(start+1);
-      
-      auto bytesLoc = Lexer::getSourceLoc(bytes);
-      auto string = StringRef(bytes, length);
-      
-      return std::make_tuple(string, bytesLoc);
+      start++;
+      auto startLoc = Lexer::getSourceLoc(start);
+      auto string = StringRef(start, end - start);
+
+      // Disallow escaped newline in the last line.
+      if (Diags) {
+        auto *Ptr = start - 1;
+        if (*Ptr == '\n') --Ptr;
+        if (*Ptr == '\r') --Ptr;
+        auto *LineEnd = Ptr + 1;
+        while (Ptr > begin && (*Ptr == ' ' || *Ptr == '\t')) --Ptr;
+        if (*Ptr == '\\') {
+          auto escapeLoc = Lexer::getSourceLoc(Ptr);
+          bool invalid = true;
+          while (*--Ptr == '\\') invalid = !invalid;
+          if (invalid)
+            Diags->diagnose(escapeLoc, diag::lex_escaped_newline_at_lastline)
+              .fixItRemoveChars(escapeLoc, Lexer::getSourceLoc(LineEnd));
+        }
+      }
+
+      return std::make_tuple(string, startLoc);
     }
     default:
       sawNonWhitespace = true;
@@ -1794,12 +1860,14 @@ StringRef Lexer::getEncodedStringSegment(StringRef Bytes,
   // we know that there is a terminating " character.  Use BytesPtr to avoid a
   // range check subscripting on the StringRef.
   const char *BytesPtr = Bytes.begin();
+  bool IsEscapedNewline = false;
   while (BytesPtr < Bytes.end()) {
     char CurChar = *BytesPtr++;
 
     // Multiline string line ending normalization and indent stripping.
     if (CurChar == '\r' || CurChar == '\n') {
-      bool stripNewline = IsFirstSegment && BytesPtr - 1 == Bytes.begin();
+      bool stripNewline = IsEscapedNewline ||
+        (IsFirstSegment && BytesPtr - 1 == Bytes.begin());
       if (CurChar == '\r' && *BytesPtr == '\n')
         BytesPtr++;
       if (*BytesPtr != '\r' && *BytesPtr != '\n')
@@ -1808,6 +1876,7 @@ StringRef Lexer::getEncodedStringSegment(StringRef Bytes,
         stripNewline = true;
       if (!stripNewline)
         TempString.push_back('\n');
+      IsEscapedNewline = false;
       continue;
     }
 
@@ -1832,6 +1901,12 @@ StringRef Lexer::getEncodedStringSegment(StringRef Bytes,
     case '\'': TempString.push_back('\''); continue;
     case '\\': TempString.push_back('\\'); continue;
 
+    case ' ': case '\t': case '\n': case '\r':
+      if (maybeConsumeNewlineEscape(BytesPtr, -1)) {
+        IsEscapedNewline = true;
+        BytesPtr--;
+      }
+      continue;
 
     // String interpolation.
     case '(':

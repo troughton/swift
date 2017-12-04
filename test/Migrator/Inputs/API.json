@@ -130,6 +130,17 @@
   {
     "DiffItemKind": "CommonDiffItem",
     "NodeKind": "Function",
+    "NodeAnnotation": "SetterToProperty",
+    "ChildIndex": "0",
+    "LeftUsr": "c:objc(cs)PropertyUserInterface(im)setURL:",
+    "LeftComment": "",
+    "RightUsr": "",
+    "RightComment": "",
+    "ModuleName": "bar"
+  },
+  {
+    "DiffItemKind": "CommonDiffItem",
+    "NodeKind": "Function",
     "NodeAnnotation": "UnwrapOptional",
     "ChildIndex": "2",
     "LeftUsr": "s:6CitiesAAC10mooloolabayAB1x_ABSg1ytF",
@@ -433,6 +444,17 @@
     "LeftComment": "",
     "RightUsr": "",
     "RightComment": "setZooLocationNew(newX:newY:newZ:)",
+    "ModuleName": "Cities"
+  },
+  {
+    "DiffItemKind": "CommonDiffItem",
+    "NodeKind": "Function",
+    "NodeAnnotation": "Rename",
+    "ChildIndex": "0",
+    "LeftUsr": "s:6Cities04MoreA0P8addZooAtySi_Si1ySi1ztF",
+    "LeftComment": "",
+    "RightUsr": "",
+    "RightComment": "addNewZooAt(_:newY:newZ:)",
     "ModuleName": "Cities"
   },
   {

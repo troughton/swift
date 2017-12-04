@@ -267,8 +267,7 @@ ERROR(incorrect_explicit_closure_result,none,
       "declared closure result %0 is incompatible with contextual type %1",
       (Type, Type))
 
-// FIXME: make this an error when we've fixed the Dispatch problem.
-WARNING(err_noescape_param_call,none,
+ERROR(err_noescape_param_call,none,
       "passing a %select{|closure which captures a }1non-escaping function "
       "parameter %0 to a call to a non-escaping function parameter can allow "
       "re-entrant modification of a variable",
@@ -423,7 +422,7 @@ ERROR(noescape_functiontype_mismatch,none,
 ERROR(expr_keypath_no_objc_runtime,none,
       "'#keyPath' can only be used with the Objective-C runtime", ())
 ERROR(expression_unused_keypath_result,none,
-      "result of '#keyPath' is unused", ())
+      "result of key path is unused", ())
 ERROR(expr_keypath_non_objc_property,none,
       "argument of '#keyPath' refers to non-'@objc' property %0",
       (DeclName))
@@ -435,14 +434,17 @@ ERROR(expr_keypath_type_of_property,none,
       "cannot refer to type member %0 within instance of type %1",
       (DeclName, Type))
 ERROR(expr_keypath_generic_type,none,
-      "'#keyPath' cannot refer to generic type %0", (DeclName))
+      "key path cannot refer to generic type %0", (DeclName))
 ERROR(expr_keypath_not_property,none,
-      "'#keyPath' cannot refer to %0 %1", (DescriptiveDeclKind, DeclName))
+      "key path cannot refer to %0 %1", (DescriptiveDeclKind, DeclName))
 ERROR(expr_keypath_mutating_getter,none,
-      "'#keyPath' cannot refer to %0, which has a mutating getter",
+      "key path cannot refer to %0, which has a mutating getter",
+      (DeclName))
+ERROR(expr_keypath_static_member,none,
+      "key path cannot refer to static member %0",
       (DeclName))
 ERROR(expr_keypath_empty,none,
-      "empty '#keyPath' does not refer to a property", ())
+      "empty key path does not refer to a property", ())
 ERROR(expr_unsupported_objc_key_path_component,none,
       "an Objective-C key path cannot contain "
       "%select{BAD|subscript|BAD|BAD|optional-forcing|optional-chaining|BAD} "
@@ -460,7 +462,7 @@ ERROR(expr_swift_keypath_not_starting_with_type,none,
 ERROR(expr_swift_keypath_unimplemented_component,none,
       "key path support for %0 components is not implemented", (StringRef))
 ERROR(expr_smart_keypath_value_covert_to_contextual_type,none,
-      "KeyPath value type %0 cannot be converted to contextual type %1",
+      "key path value type %0 cannot be converted to contextual type %1",
       (Type, Type))
 ERROR(expr_swift_keypath_empty, none,
       "key path must have at least one component", ())
@@ -468,6 +470,8 @@ ERROR(expr_string_interpolation_outside_string,none,
       "string interpolation can only appear inside a string literal", ())
 ERROR(unsupported_keypath_tuple_element_reference,none,
       "key path cannot reference tuple elements", ())
+ERROR(expr_keypath_subscript_index_not_hashable, none,
+      "subscript index of type %0 in a key path must be Hashable", (Type))
 
 // Selector expressions.
 ERROR(expr_selector_no_objc_runtime,none,
@@ -911,6 +915,10 @@ ERROR(member_shadows_global_function,none,
       "use of %0 refers to %1 %2 rather than %3 %4 in %5 %6",
       (DeclName, DescriptiveDeclKind, DeclName, DescriptiveDeclKind, DeclName,
        DescriptiveDeclKind, DeclName))
+ERROR(member_shadows_global_function_near_match,none,
+      "use of %0 nearly matches %3 %4 in %5 %6 rather than %1 %2",
+      (DeclName, DescriptiveDeclKind, DeclName, DescriptiveDeclKind, DeclName,
+      DescriptiveDeclKind, DeclName))
 
 ERROR(instance_member_use_on_type,none,
       "instance member %1 cannot be used on type %0; "
@@ -1381,6 +1389,14 @@ NOTE(type_does_not_inherit_requirement,none,
 ERROR(types_not_equal,none,
       "%0 requires the types %1 and %2 be equivalent",
       (Type, Type, Type))
+NOTE(candidate_types_equal_requirement,none,
+     "candidate requires that the types %0 and %1 be equivalent "
+     "(requirement specified as %2 == %3%4)",
+     (Type, Type, Type, Type, StringRef))
+NOTE(candidate_types_inheritance_requirement,none,
+     "candidate requires that %1 inherit from %2 "
+     "(requirement specified as %2 : %3%4)",
+     (Type, Type, Type, Type, StringRef))
 NOTE(types_not_equal_requirement,none,
      "requirement specified as %0 == %1%2", (Type, Type, StringRef))
 ERROR(non_class_cannot_conform_to_class_protocol,none,
@@ -1596,7 +1612,10 @@ NOTE(declared_protocol_conformance_here,none,
      "%0 implicitly conforms to protocol %2}1 here",
      (Type, unsigned, DeclName, DeclName))
 
-WARNING(witness_unavailable,none,
+WARNING(witness_unavailable_warn,none,
+        "unavailable %0 %1 was used to satisfy a requirement of protocol %2",
+        (DescriptiveDeclKind, DeclName, DeclName))
+ERROR(witness_unavailable,none,
         "unavailable %0 %1 was used to satisfy a requirement of protocol %2",
         (DescriptiveDeclKind, DeclName, DeclName))
 
@@ -1651,11 +1670,12 @@ ERROR(protocol_composition_one_class,none,
       "contains class %1", (Type, Type))
 
 ERROR(requires_conformance_nonprotocol,none,
-      "type %0 constrained to non-protocol type %1", (TypeLoc, TypeLoc))
+      "type %0 constrained to non-protocol, non-class type %1",
+      (TypeLoc, TypeLoc))
 ERROR(requires_not_suitable_archetype,none,
-      "%select{|first |second }0type %1 in %select{conformance|same-type}2 "
-      "requirement does not refer to a generic parameter or associated type",
-      (int, TypeLoc, int))
+      "type %0 in conformance requirement does not refer to a "
+      "generic parameter or associated type",
+      (TypeLoc))
 ERROR(requires_no_same_type_archetype,none,
       "neither type in same-type refers to a generic parameter or "
       "associated type",
@@ -1682,9 +1702,6 @@ ERROR(requires_generic_param_same_type_does_not_conform,none,
       (Type, Identifier))
 ERROR(requires_same_concrete_type,none,
       "generic signature requires types %0 and %1 to be the same", (Type, Type))
-ERROR(protocol_typealias_conflict, none,
-      "type alias %0 requires types %1 and %2 to be the same",
-      (Identifier, Type, Type))
 WARNING(redundant_conformance_constraint,none,
         "redundant conformance constraint %0: %1", (Type, ProtocolDecl *))
 NOTE(redundant_conformance_here,none,
@@ -1692,6 +1709,9 @@ NOTE(redundant_conformance_here,none,
      "inferred from type here}0",
      (unsigned, Type, ProtocolDecl *))
 
+ERROR(same_type_conflict,none,
+      "%select{generic parameter |protocol |}0%1 cannot be equal to both "
+      "%2 and %3", (unsigned, Type, Type, Type))
 WARNING(redundant_same_type_to_concrete,none,
         "redundant same-type constraint %0 == %1", (Type, Type))
 NOTE(same_type_redundancy_here,none,
@@ -1732,6 +1752,9 @@ WARNING(inherited_associated_type_redecl,none,
 WARNING(typealias_override_associated_type,none,
         "typealias overriding associated type %0 from protocol %1 is better "
         "expressed as same-type constraint on the protocol", (DeclName, Type))
+WARNING(associated_type_override_typealias,none,
+        "associated type %0 is redundant with type %0 declared in inherited "
+        "%1 %2", (DeclName, DescriptiveDeclKind, Type))
 
 ERROR(generic_param_access,none,
       "%0 %select{must be declared %select{"
@@ -1914,6 +1937,8 @@ WARNING(override_swift3_objc_inference,none,
 // Inheritance
 ERROR(duplicate_inheritance,none,
   "duplicate inheritance from %0", (Type))
+WARNING(duplicate_anyobject_class_inheritance,none,
+  "redundant inheritance from 'AnyObject' and Swift 3 'class' keyword", ())
 ERROR(multiple_inheritance,none,
   "multiple inheritance from classes %0 and %1", (Type, Type))
 ERROR(non_class_inheritance,none,
@@ -2069,6 +2094,20 @@ NOTE(codable_codingkeys_type_is_not_an_enum_here,none,
      "cannot automatically synthesize %0 because 'CodingKeys' is not an enum", (Type))
 NOTE(codable_codingkeys_type_does_not_conform_here,none,
      "cannot automatically synthesize %0 because 'CodingKeys' does not conform to CodingKey", (Type))
+NOTE(decodable_no_super_init_here,none,
+     "cannot automatically synthesize %0 because superclass does not have a callable %1", (DeclName, DeclName))
+NOTE(decodable_super_init_not_designated_here,none,
+     "cannot automatically synthesize %0 because implementation would need to call %1, which is not designated", (DeclName, DeclName))
+NOTE(decodable_inaccessible_super_init_here,none,
+     "cannot automatically synthesize %0 because implementation would need to call %1, which is inaccessible due to "
+     "'%select{private|fileprivate|internal|%error|%error}2' protection level",
+     (DeclName, DeclName, Accessibility))
+NOTE(decodable_super_init_is_failable_here,none,
+     "cannot automatically synthesize %0 because implementation would need to call %1, which is failable", (DeclName, DeclName))
+NOTE(decodable_suggest_overriding_init_here,none,
+     "did you mean to override 'init(from:)'?", ())
+NOTE(codable_suggest_overriding_init_here,none,
+     "did you mean to override 'init(from:)' and 'encode(to:)'?", ())
 
 // Dynamic Self
 ERROR(dynamic_self_non_method,none,
@@ -2904,7 +2943,11 @@ ERROR(single_tuple_parameter_mismatch,none,
 ERROR(unknown_single_tuple_parameter_mismatch,none,
       "single parameter of type %0 is expected in call", (Type))
 
-
+ERROR(enum_element_pattern_assoc_values_mismatch,none,
+      "pattern with associated values does not match enum case %0",
+      (Identifier))
+NOTE(enum_element_pattern_assoc_values_remove,none,
+     "remove associated values to make the pattern match", ())
 ERROR(tuple_pattern_length_mismatch,none,
       "tuple pattern has the wrong length for tuple type %0", (Type))
 ERROR(tuple_pattern_label_mismatch,none,
@@ -3292,6 +3335,8 @@ ERROR(objc_invalid_on_func_curried,none,
       "cannot be represented in Objective-C", (unsigned))
 ERROR(objc_observing_accessor, none,
       "observing accessors are not allowed to be marked @objc", ())
+ERROR(objc_addressor, none,
+      "addressors are not allowed to be marked @objc", ())
 ERROR(objc_invalid_on_func_variadic,none,
       "method cannot be %" OBJC_ATTR_SELECT "0 because it has a variadic "
       "parameter", (unsigned))

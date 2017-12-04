@@ -2111,14 +2111,15 @@ KeyPathExpr::resolveComponents(ASTContext &C,
 
 KeyPathExpr::Component
 KeyPathExpr::Component::forSubscript(ASTContext &ctx,
-                                     ConcreteDeclRef subscript,
-                                     SourceLoc lSquareLoc,
-                                     ArrayRef<Expr *> indexArgs,
-                                     ArrayRef<Identifier> indexArgLabels,
-                                     ArrayRef<SourceLoc> indexArgLabelLocs,
-                                     SourceLoc rSquareLoc,
-                                     Expr *trailingClosure,
-                                     Type elementType) {
+                             ConcreteDeclRef subscript,
+                             SourceLoc lSquareLoc,
+                             ArrayRef<Expr *> indexArgs,
+                             ArrayRef<Identifier> indexArgLabels,
+                             ArrayRef<SourceLoc> indexArgLabelLocs,
+                             SourceLoc rSquareLoc,
+                             Expr *trailingClosure,
+                             Type elementType,
+                             ArrayRef<ProtocolConformanceRef> indexHashables) {
   SmallVector<Identifier, 4> indexArgLabelsScratch;
   SmallVector<SourceLoc, 4> indexArgLabelLocsScratch;
   Expr *index = packSingleArgument(ctx, lSquareLoc, indexArgs, indexArgLabels,
@@ -2126,8 +2127,11 @@ KeyPathExpr::Component::forSubscript(ASTContext &ctx,
                                    trailingClosure, /*implicit*/ false,
                                    indexArgLabelsScratch,
                                    indexArgLabelLocsScratch);
-  return forSubscriptWithPrebuiltIndexExpr(subscript, index, elementType,
-                                           lSquareLoc);
+  return forSubscriptWithPrebuiltIndexExpr(subscript, index,
+                                           indexArgLabels,
+                                           elementType,
+                                           lSquareLoc,
+                                           indexHashables);
 }
 
 KeyPathExpr::Component
@@ -2145,5 +2149,52 @@ KeyPathExpr::Component::forUnresolvedSubscript(ASTContext &ctx,
                                    trailingClosure, /*implicit*/ false,
                                    indexArgLabelsScratch,
                                    indexArgLabelLocsScratch);
-  return forUnresolvedSubscriptWithPrebuiltIndexExpr(index, lSquareLoc);
+  return forUnresolvedSubscriptWithPrebuiltIndexExpr(ctx, index,
+                                               indexArgLabels,
+                                               lSquareLoc);
+}
+
+KeyPathExpr::Component::Component(ASTContext *ctxForCopyingLabels,
+                     DeclNameOrRef decl,
+                     Expr *indexExpr,
+                     ArrayRef<Identifier> subscriptLabels,
+                     ArrayRef<ProtocolConformanceRef> indexHashables,
+                     Kind kind,
+                     Type type,
+                     SourceLoc loc)
+    : Decl(decl), SubscriptIndexExprAndKind(indexExpr, kind),
+      SubscriptLabels(subscriptLabels.empty()
+                       ? subscriptLabels
+                       : ctxForCopyingLabels->AllocateCopy(subscriptLabels)),
+      SubscriptHashableConformances(indexHashables),
+      ComponentType(type), Loc(loc)
+  {}
+
+KeyPathExpr::Component
+KeyPathExpr::Component::forSubscriptWithPrebuiltIndexExpr(
+       ConcreteDeclRef subscript, Expr *index, ArrayRef<Identifier> labels,
+       Type elementType, SourceLoc loc,
+       ArrayRef<ProtocolConformanceRef> indexHashables) {
+  return Component(&elementType->getASTContext(),
+                   subscript, index, labels, indexHashables,
+                   Kind::Subscript, elementType, loc);
+}
+
+void KeyPathExpr::Component::setSubscriptIndexHashableConformances(
+    ArrayRef<ProtocolConformanceRef> hashables) {
+  switch (getKind()) {
+  case Kind::Subscript:
+    SubscriptHashableConformances = getComponentType()->getASTContext()
+      .AllocateCopy(hashables);
+    return;
+    
+  case Kind::UnresolvedSubscript:
+  case Kind::Invalid:
+  case Kind::OptionalChain:
+  case Kind::OptionalWrap:
+  case Kind::OptionalForce:
+  case Kind::UnresolvedProperty:
+  case Kind::Property:
+    llvm_unreachable("no hashable conformances for this kind");
+  }
 }

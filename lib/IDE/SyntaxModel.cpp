@@ -63,6 +63,9 @@ SyntaxModelContext::SyntaxModelContext(SourceFile &SrcFile)
   auto LiteralStartLoc = Optional<SourceLoc>();
   for (unsigned I = 0, E = Tokens.size(); I != E; ++I) {
     auto &Tok = Tokens[I];
+    // Ignore empty string literals between interpolations, e.g. "\(1)\(2)"
+    if (!Tok.getLength())
+        continue;
     SyntaxNodeKind Kind;
     SourceLoc Loc;
     Optional<unsigned> Length;
@@ -204,15 +207,6 @@ SyntaxModelContext::SyntaxModelContext(SourceFile &SrcFile)
           continue;
         Kind = SyntaxNodeKind::StringInterpolationAnchor;
         break;
-      }
-
-      case tok::unknown: {
-        if (Tok.getRawText().startswith("\"")) {
-          // This is an invalid string literal
-          Kind = SyntaxNodeKind::String;
-          break;
-        }
-        continue;
       }
 
       default:

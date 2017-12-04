@@ -58,6 +58,13 @@ def emit_fixits_path
   : Separate<["-"], "emit-fixits-path">, MetaVarName<"<path>">,
     HelpText<"Output compiler fixits as source edits to <path>">;
 
+def tbd_install_name
+  : Separate<["-"], "tbd-install_name">, MetaVarName<"<path>">,
+    HelpText<"The install_name to use in an emitted TBD file">;
+
+def tbd_install_name_EQ : Joined<["-"], "tbd-install_name=">,
+  Alias<tbd_install_name>;
+
 def verify : Flag<["-"], "verify">,
   HelpText<"Verify diagnostics against expected-{error|warning|note} "
            "annotations">;
@@ -272,10 +279,6 @@ def enable_experimental_property_behaviors :
   Flag<["-"], "enable-experimental-property-behaviors">,
   HelpText<"Enable experimental property behaviors">;
   
-def enable_experimental_keypath_components :
-  Flag<["-"], "enable-experimental-keypath-components">,
-  HelpText<"Enable unimplemented keypath component kinds">;
-
 def enable_deserialization_recovery :
   Flag<["-"], "enable-deserialization-recovery">,
   HelpText<"Attempt to recover from missing xrefs (etc) in swiftmodules">;
@@ -293,6 +296,9 @@ def disable_availability_checking : Flag<["-"],
 def disable_tsan_inout_instrumentation : Flag<["-"],
   "disable-tsan-inout-instrumentation">,
   HelpText<"Disable treatment of inout parameters as Thread Sanitizer accesses">;
+
+def report_errors_to_debugger : Flag<["-"], "report-errors-to-debugger">,
+  HelpText<"Invoke the debugger hook on fatalError calls">;
 
 def enable_infer_import_as_member :
   Flag<["-"], "enable-infer-import-as-member">,
@@ -368,6 +374,9 @@ def sil_link_all : Flag<["-"], "sil-link-all">,
 def sil_serialize_all : Flag<["-"], "sil-serialize-all">,
   HelpText<"Serialize all generated SIL">;
 
+def sil_serialize_witness_tables : Flag<["-"], "sil-serialize-witness-tables">,
+  HelpText<"Serialize eligible SIL witness tables">;
+
 def sil_verify_all : Flag<["-"], "sil-verify-all">,
   HelpText<"Verify SIL after each transform">;
 
@@ -407,6 +416,9 @@ def verify_type_layout : JoinedOrSeparate<["-"], "verify-type-layout">,
 def external_pass_pipeline_filename : Separate<["-"], "external-pass-pipeline-filename">,
     HelpText<"Use the pass pipeline defined by <pass_pipeline_file>">,
     MetaVarName<"<pass_pipeline_file>">;
+
+def index_system_modules : Flag<["-"], "index-system-modules">,
+  HelpText<"Emit index data for imported serialized swift system modules">;
 
 def dump_interface_hash : Flag<["-"], "dump-interface-hash">,
    HelpText<"Parse input file(s) and dump interface token hash(es)">,

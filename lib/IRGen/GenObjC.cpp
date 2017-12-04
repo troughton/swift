@@ -210,25 +210,32 @@ llvm::Value *irgen::emitObjCAutoreleaseReturnValue(IRGenFunction &IGF,
 }
 
 namespace {
-  /// A type-info implementation suitable for an ObjC pointer type.
-  class ObjCTypeInfo : public HeapTypeInfo<ObjCTypeInfo> {
+  /// A type-info implementation suitable for Builtin.UnknownObject.
+  class UnknownTypeInfo : public HeapTypeInfo<UnknownTypeInfo> {
   public:
-    ObjCTypeInfo(llvm::PointerType *storageType, Size size,
+    UnknownTypeInfo(llvm::PointerType *storageType, Size size,
                  SpareBitVector spareBits, Alignment align)
       : HeapTypeInfo(storageType, size, spareBits, align) {
     }
 
     /// Builtin.UnknownObject requires ObjC reference-counting.
     ReferenceCounting getReferenceCounting() const {
-      return ReferenceCounting::ObjC;
+      return ReferenceCounting::Unknown;
     }
   };
 } // end anonymous namespace
 
 const LoadableTypeInfo *TypeConverter::convertBuiltinUnknownObject() {
-  return new ObjCTypeInfo(IGM.ObjCPtrTy, IGM.getPointerSize(),
-                          IGM.getHeapObjectSpareBits(),
-                          IGM.getPointerAlignment());
+  // UnknownObject is only interestingly different from NativeObject on
+  // platforms with ObjC interop.
+  if (IGM.Context.LangOpts.EnableObjCInterop) {
+    return new UnknownTypeInfo(IGM.ObjCPtrTy, IGM.getPointerSize(),
+                               IGM.getHeapObjectSpareBits(),
+                               IGM.getPointerAlignment());
+  }
+  
+  // Without ObjC interop, UnknownObject handles just like a NativeObject.
+  return convertBuiltinNativeObject();
 }
 
 namespace {
@@ -889,8 +896,8 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
     // Otherwise, we have a loadable type that can either be passed directly or
     // indirectly.
     assert(info.getSILStorageType().isObject());
-    auto &ti =
-        cast<LoadableTypeInfo>(IGM.getTypeInfo(info.getSILStorageType()));
+    auto curSILType = info.getSILStorageType();
+    auto &ti = cast<LoadableTypeInfo>(IGM.getTypeInfo(curSILType));
 
     // Load the indirectly passed parameter.
     auto &nativeSchema = ti.nativeParameterValueSchema(IGM);
@@ -899,8 +906,16 @@ static llvm::Function *emitObjCPartialApplicationForwarder(IRGenModule &IGM,
       ti.loadAsTake(subIGF, paramAddr, translatedParams);
       continue;
     }
+    // Map from the native calling convention into the explosion schema.
+    auto &nativeParamSchema = ti.nativeParameterValueSchema(IGM);
+    Explosion nativeParam;
+    params.transferInto(nativeParam, nativeParamSchema.size());
+    Explosion nonNativeParam = nativeParamSchema.mapFromNative(
+        subIGF.IGM, subIGF, nativeParam, curSILType);
+    assert(nativeParam.empty());
+
     // Pass along the value.
-    ti.reexplode(subIGF, params, translatedParams);
+    ti.reexplode(subIGF, nonNativeParam, translatedParams);
   }
 
   // Prepare the call to the underlying method.

@@ -665,6 +665,28 @@ Type TypeChecker::applyUnboundGenericArguments(
   // type.
   if (auto parentType = unboundType->getParent()) {
     if (parentType->hasUnboundGenericType()) {
+      // If we're working with a nominal type declaration, just construct
+      // a bound generic type without checking the generic arguments.
+      if (auto *nominalDecl = dyn_cast<NominalTypeDecl>(decl)) {
+        SmallVector<Type, 2> args;
+        for (auto &genericArg : genericArgs) {
+          // Propagate failure.
+          if (validateType(genericArg, dc, options, resolver,
+                           unsatisfiedDependency))
+            return ErrorType::get(Context);
+
+          auto substTy = genericArg.getType();
+
+          // Unsatisfied dependency case.
+          if (!substTy)
+            return nullptr;
+
+          args.push_back(substTy);
+        }
+
+        return BoundGenericType::get(nominalDecl, parentType, args);
+      }
+
       assert(!resultType->hasTypeParameter());
       return resultType;
     }
@@ -3183,6 +3205,14 @@ Type TypeChecker::substMemberTypeWithBase(ModuleDecl *module,
   }
 
   if (auto *aliasDecl = dyn_cast<TypeAliasDecl>(member)) {
+    // FIXME: If this is a protocol typealias and we haven't built the
+    // protocol's generic environment yet, do so now, to ensure the
+    // typealias's underlying type has fully resoved dependent
+    // member types.
+    if (auto *protoDecl = dyn_cast<ProtocolDecl>(aliasDecl->getDeclContext()))
+      if (protoDecl->getGenericEnvironment() == nullptr)
+        validateDecl(protoDecl);
+
     if (aliasDecl->getGenericParams()) {
       return UnboundGenericType::get(
           aliasDecl, baseTy,
@@ -3503,17 +3533,36 @@ bool TypeChecker::isRepresentableInObjC(
         return false;
       }
 
-      // willSet/didSet implementations are never exposed to objc, they are
-      // always directly dispatched from the synthesized setter.
-      if (FD->isObservingAccessor()) {
+      switch (FD->getAccessorKind()) {
+      case AccessorKind::NotAccessor:
+        llvm_unreachable("already checking for accessor-ness");
+
+      case AccessorKind::IsDidSet:
+      case AccessorKind::IsWillSet:
+          // willSet/didSet implementations are never exposed to objc, they are
+          // always directly dispatched from the synthesized setter.
         if (Diagnose) {
           diagnose(AFD->getLoc(), diag::objc_observing_accessor);
           describeObjCReason(*this, AFD, Reason);
         }
         return false;
+
+      case AccessorKind::IsGetter:
+      case AccessorKind::IsSetter:
+        return true;
+
+      case AccessorKind::IsMaterializeForSet:
+        // materializeForSet is synthesized, so never complain about it
+        return false;
+
+      case AccessorKind::IsAddressor:
+      case AccessorKind::IsMutableAddressor:
+        if (Diagnose) {
+          diagnose(AFD->getLoc(), diag::objc_addressor);
+          describeObjCReason(*this, AFD, Reason);
+        }
+        return false;
       }
-      assert(FD->isGetterOrSetter() && "missing diags for other accessors");
-      return true;
     }
 
     unsigned ExpectedParamPatterns = 1;

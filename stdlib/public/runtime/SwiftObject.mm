@@ -80,6 +80,51 @@ const ClassMetadata *swift::_swift_getClass(const void *object) {
 }
 
 #if SWIFT_OBJC_INTEROP
+/// \brief Replacement for ObjC object_isClass(), which is unavailable on
+/// deployment targets macOS 10.9 and iOS 7.
+static bool objcObjectIsClass(id object) {
+  // same as object_isClass(object)
+  return class_isMetaClass(object_getClass(object));
+}
+#endif
+
+/// \brief Fetch the type metadata associated with the formal dynamic
+/// type of the given (possibly Objective-C) object.  The formal
+/// dynamic type ignores dynamic subclasses such as those introduced
+/// by KVO.
+///
+/// The object pointer may be a tagged pointer, but cannot be null.
+const Metadata *swift::swift_getObjectType(HeapObject *object) {
+  auto classAsMetadata = _swift_getClass(object);
+
+#if !SWIFT_OBJC_INTEROP
+  assert(classAsMetadata &&
+         classAsMetadata->isTypeMetadata() &&
+         !classAsMetadata->isArtificialSubclass());
+  return classAsMetadata;
+#else
+  // Walk up the superclass chain skipping over artifical Swift classes.
+  // If we find a non-Swift class use the result of [object class] instead.
+
+  while (classAsMetadata && classAsMetadata->isTypeMetadata()) {
+    if (!classAsMetadata->isArtificialSubclass())
+      return classAsMetadata;
+    classAsMetadata = classAsMetadata->SuperClass;
+  }
+
+  id objcObject = reinterpret_cast<id>(object);
+  Class objcClass = [objcObject class];
+  if (objcObjectIsClass(objcObject)) {
+    // Original object is a class. We want a
+    // metaclass but +class doesn't give that to us.
+    objcClass = object_getClass(objcClass);
+  }
+  classAsMetadata = reinterpret_cast<const ClassMetadata *>(objcClass);
+  return swift_getObjCClassMetadata(classAsMetadata);
+#endif
+}
+
+#if SWIFT_OBJC_INTEROP
 static SwiftObject *_allocHelper(Class cls) {
   // XXX FIXME
   // When we have layout information, do precise alignment rounding
@@ -362,13 +407,16 @@ static NSString *_getClassDescription(Class cls) {
 
 // Foundation collections expect these to be implemented.
 - (BOOL)isNSArray__      { return NO; }
-- (BOOL)isNSDictionary__ { return NO; }
-- (BOOL)isNSSet__        { return NO; }
-- (BOOL)isNSOrderedSet__ { return NO; }
-- (BOOL)isNSNumber__     { return NO; }
+- (BOOL)isNSCFConstantString__  { return NO; }
 - (BOOL)isNSData__       { return NO; }
 - (BOOL)isNSDate__       { return NO; }
+- (BOOL)isNSDictionary__ { return NO; }
+- (BOOL)isNSObject__     { return NO; }
+- (BOOL)isNSOrderedSet__ { return NO; }
+- (BOOL)isNSNumber__     { return NO; }
+- (BOOL)isNSSet__        { return NO; }
 - (BOOL)isNSString__     { return NO; }
+- (BOOL)isNSTimeZone__   { return NO; }
 - (BOOL)isNSValue__      { return NO; }
 
 @end
@@ -1458,7 +1506,7 @@ void swift_objc_swift3ImplicitObjCEntrypoint(id self, SEL selector,
   uintptr_t runtime_error_flags = RuntimeErrorFlagNone;
   if (reporter == swift::fatalError)
     runtime_error_flags = RuntimeErrorFlagFatal;
-  reportToDebugger(runtime_error_flags, message, &details);
+  _swift_reportToDebugger(runtime_error_flags, message, &details);
 
   reporter(flags,
            "*** %s:%zu:%zu: %s; add explicit '@objc' to the declaration to "

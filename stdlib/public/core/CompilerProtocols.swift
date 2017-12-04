@@ -673,30 +673,8 @@ public protocol ExpressibleByDictionaryLiteral {
 /// Conforming to the ExpressibleByStringInterpolation Protocol
 /// ===========================================================
 ///
-/// To use string interpolation to initialize instances of your custom type,
-/// implement the required initializers for `ExpressibleByStringInterpolation`
-/// conformance. String interpolation is a multiple-step initialization
-/// process. When you use string interpolation, the following steps occur:
-///
-/// 1. The string literal is broken into pieces. Each segment of the string
-///    literal before, between, and after any included expressions, along with
-///    the individual expressions themselves, are passed to the
-///    `init(stringInterpolationSegment:)` initializer.
-/// 2. The results of those calls are passed to the
-///    `init(stringInterpolation:)` initializer in the order in which they
-///    appear in the string literal.
-///
-/// In other words, initializing the `message` constant in the example above
-/// using string interpolation is equivalent to the following code:
-///
-///     let message = String(stringInterpolation:
-///           String(stringInterpolationSegment: "One cookie: $"),
-///           String(stringInterpolationSegment: price),
-///           String(stringInterpolationSegment: ", "),
-///           String(stringInterpolationSegment: number),
-///           String(stringInterpolationSegment: " cookies: $"),
-///           String(stringInterpolationSegment: price * number),
-///           String(stringInterpolationSegment: "."))
+/// The `ExpressibleByStringInterpolation` protocol is deprecated. Do not add
+/// new conformances to the protocol.
 @available(*, deprecated, message: "it will be replaced or redesigned in Swift 4.0.  Instead of conforming to 'ExpressibleByStringInterpolation', consider adding an 'init(_:String)'")
 public typealias ExpressibleByStringInterpolation = _ExpressibleByStringInterpolation
 public protocol _ExpressibleByStringInterpolation {
@@ -744,7 +722,18 @@ public protocol _ExpressibleByColorLiteral {
   ///
   /// Do not call this initializer directly. Instead, initialize a variable or
   /// constant using a color literal.
-  init(colorLiteralRed red: Float, green: Float, blue: Float, alpha: Float)
+  init(_colorLiteralRed red: Float, green: Float, blue: Float, alpha: Float)
+}
+
+extension _ExpressibleByColorLiteral {
+  @available(swift, deprecated: 3.2, obsoleted: 4.0,
+    message: "This initializer is only meant to be used by color literals")
+  public init(
+    colorLiteralRed red: Float, green: Float, blue: Float, alpha: Float
+  ) {
+    self.init(
+      _colorLiteralRed: red, green: green, blue: blue, alpha: alpha)
+  }
 }
 
 /// A type that can be initialized using an image literal (e.g.

@@ -248,10 +248,12 @@ struct S27515965 : P27515965 {
 
 struct V27515965 {
   init<T : P27515965>(_ tp: T) where T.R == Float {}
+  // expected-note@-1 {{candidate requires that the types 'Any' and 'Float' be equivalent (requirement specified as 'T.R' == 'Float' [with T = S27515965])}}
 }
 
 func test(x: S27515965) -> V27515965 {
-  return V27515965(x) // expected-error {{generic parameter 'T' could not be inferred}}
+  return V27515965(x)
+  // expected-error@-1 {{cannot invoke initializer for type 'init(_:)' with an argument list of type '(S27515965)'}}
 }
 
 protocol BaseProto {}
@@ -416,7 +418,7 @@ extension Array where Element: Hashable {
     }
 }
 
-func rdar29633747(characters: String.CharacterView) {
+func rdar29633747(characters: String) {
   let _ = Array(characters).trimmed(["("])
 }
 
@@ -445,4 +447,36 @@ func sr3525_3<T>(t: SR_3525<T>) {
 
 class testStdlibType {
   let _: Array // expected-error {{reference to generic type 'Array' requires arguments in <...>}} {{15-15=<Any>}}
+}
+
+// rdar://problem/32697033
+protocol P3 {
+    associatedtype InnerAssoc
+}
+
+protocol P4 {
+    associatedtype OuterAssoc: P3
+}
+
+struct S3 : P3 {
+  typealias InnerAssoc = S4
+}
+
+struct S4: P4 {
+  typealias OuterAssoc = S3
+}
+
+public struct S5 {
+    func f<Model: P4, MO> (models: [Model])
+        where Model.OuterAssoc == MO, MO.InnerAssoc == Model {
+    }
+
+    func g<MO, Model: P4> (models: [Model])
+        where Model.OuterAssoc == MO, MO.InnerAssoc == Model {
+    }
+
+    func f(arr: [S4]) {
+        f(models: arr)
+        g(models: arr)
+    }
 }
