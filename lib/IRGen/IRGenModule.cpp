@@ -379,6 +379,7 @@ IRGenModule::IRGenModule(IRGenerator &irgen,
   C_CC = llvm::CallingConv::C;
   // TODO: use "tinycc" on platforms that support it
   DefaultCC = SWIFT_LLVM_CC(DefaultCC);
+  VectorCallCC = SWIFT_LLVM_CC(VectorCallCC);
   // If it is an interpreter, don't use try to use any
   // advanced calling conventions and use instead a
   // more conservative C calling convention. This
@@ -590,6 +591,9 @@ llvm::Constant *swift::getWrapperFn(llvm::Module &Module,
 #define FUNCTION_FOR_CONV_C_CC(ID, NAME, CC, RETURNS, ARGS, ATTRS)             \
   FUNCTION_IMPL(ID, NAME, CC, QUOTE(RETURNS), QUOTE(ARGS), QUOTE(ATTRS))
 
+#define FUNCTION_FOR_CONV_VectorCallCC(ID, NAME, CC, RETURNS, ARGS, ATTRS)             \
+  FUNCTION_IMPL(ID, NAME, CC, QUOTE(RETURNS), QUOTE(ARGS), QUOTE(ATTRS))
+
 #define FUNCTION_FOR_CONV_SwiftCC(ID, NAME, CC, RETURNS, ARGS, ATTRS)          \
   FUNCTION_IMPL(ID, NAME, CC, QUOTE(RETURNS), QUOTE(ARGS), QUOTE(ATTRS))
 
@@ -608,6 +612,10 @@ llvm::Constant *swift::getWrapperFn(llvm::Module &Module,
 
 #define FUNCTION_WITH_GLOBAL_SYMBOL_FOR_CONV_C_CC(ID, NAME, SYMBOL, CC,        \
                                                   RETURNS, ARGS, ATTRS)        \
+  FUNCTION_IMPL(ID, NAME, CC, QUOTE(RETURNS), QUOTE(ARGS), QUOTE(ATTRS))
+
+#define FUNCTION_WITH_GLOBAL_SYMBOL_FOR_CONV_VectorCallCC(ID, NAME, SYMBOL,     \
+                                                  CC, RETURNS, ARGS, ATTRS)     \
   FUNCTION_IMPL(ID, NAME, CC, QUOTE(RETURNS), QUOTE(ARGS), QUOTE(ATTRS))
 
 #define FUNCTION_WITH_GLOBAL_SYMBOL_FOR_CONV_RegisterPreservingCC(             \

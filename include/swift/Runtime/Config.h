@@ -107,11 +107,13 @@
 
 #if SWIFT_USE_SWIFTCALL
 #define SWIFT_CC_swift __attribute__((swiftcall))
+#define SWIFT_CC_swift_vectorcall SWIFT_CC_swift
 #define SWIFT_CONTEXT __attribute__((swift_context))
 #define SWIFT_ERROR_RESULT __attribute__((swift_error_result))
 #define SWIFT_INDIRECT_RESULT __attribute__((swift_indirect_result))
 #else
 #define SWIFT_CC_swift
+#define SWIFT_CC_swift_vectorcall SWIFT_VECTORCALL
 #define SWIFT_CONTEXT
 #define SWIFT_ERROR_RESULT
 #define SWIFT_INDIRECT_RESULT
@@ -132,6 +134,16 @@
 #define SWIFT_LLVM_CC_DefaultCC llvm::CallingConv::C
 
 #define SWIFT_LLVM_CC_RegisterPreservingCC llvm::CallingConv::PreserveMost
+
+#if defined(_WIN64) && !defined(_M_ARM64)
+#define SWIFT_CC_VectorCallCC SWIFT_VECTORCALL
+#define SWIFT_CC_VectorCallCC_Impl SWIFT_VECTORCALL
+#define SWIFT_LLVM_CC_VectorCallCC llvm::CallingConv::X86_VectorCall
+#else
+#define SWIFT_CC_VectorCallCC SWIFT_CC_DefaultCC
+#define SWIFT_CC_VectorCallCC_Impl SWIFT_CC_DefaultCC
+#define SWIFT_LLVM_CC_VectorCallCC SWIFT_LLVM_CC_DefaultCC
+#endif
 
 #if SWIFT_USE_SWIFTCALL
 #define SWIFT_LLVM_CC_SwiftCC llvm::CallingConv::Swift

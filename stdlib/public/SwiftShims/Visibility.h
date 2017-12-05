@@ -109,6 +109,11 @@
 #define SWIFT_RUNTIME_EXPORT SWIFT_EXPORT_ATTRIBUTE
 #endif
 
+#if defined(_WIN64) && !defined(_M_ARM64)
+#define SWIFT_VECTORCALL __vectorcall
+#else
+#define SWIFT_VECTORCALL
+#endif
 
 /// Attributes for runtime-stdlib interfaces.
 /// Use these for C implementations that are imported into Swift via SwiftShims

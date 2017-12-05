@@ -25,6 +25,10 @@
 #include <objc/objc.h>
 #endif /* SWIFT_OBJC_INTEROP */
 
+#if defined(_WIN64)
+#include <xmmintrin.h>
+#endif
+
 // Bring in the definition of HeapObject 
 #include "../../../stdlib/public/SwiftShims/HeapObject.h"
 
@@ -115,9 +119,13 @@ struct TwoWordPair {
   // in registers, so cram the result into an unsigned long long.
   // Use an enum class with implicit conversions so we don't dirty C callers
   // too much.
-#if __arm__ || __i386__ || defined(__CYGWIN__) || defined(_MSC_VER)
+#if (__arm__ || __i386__ || defined(__CYGWIN__) || defined(_MSC_VER)) && !defined(_M_ARM64) 
 #if defined(__CYGWIN__)
   enum class Return : unsigned __int128 {};
+#elif defined(_WIN64)
+  // __m128 is passed in registers using the __vectorcall calling convention.
+  // It's unavailable on ARM
+  typedef __m128 Return; 
 #else
   enum class Return : unsigned long long {};
 #endif
@@ -158,6 +166,9 @@ inline TwoWordPair<A,B>::TwoWordPair(A first, B second)
   
 using BoxPair = TwoWordPair<HeapObject *, OpaqueValue *>;
 
+static_assert(sizeof(BoxPair) == sizeof(BoxPair::Return),
+                "TwoWordPair::Return must be the same size as TwoWordPair.");
+
 /// Allocates a heap object that can contain a value of the given type.
 /// Returns a Box structure containing a HeapObject* pointer to the
 /// allocated object, and a pointer to the value inside the heap object.
@@ -165,10 +176,10 @@ using BoxPair = TwoWordPair<HeapObject *, OpaqueValue *>;
 /// appropriate to store a value of the given type.
 /// The heap object has an initial retain count of 1, and its metadata is set
 /// such that destroying the heap object destroys the contained value.
-SWIFT_RUNTIME_EXPORT
+SWIFT_RUNTIME_EXPORT SWIFT_VECTORCALL
 BoxPair::Return swift_allocBox(Metadata const *type);
 
-SWIFT_RUNTIME_EXPORT
+SWIFT_RUNTIME_EXPORT SWIFT_VECTORCALL
 BoxPair::Return (*_swift_allocBox)(Metadata const *type);
 
 /// Performs a uniqueness check on the pointer to a box structure. If the check
@@ -176,7 +187,7 @@ BoxPair::Return (*_swift_allocBox)(Metadata const *type);
 ///
 ///  if (!isUnique(buffer[0]))
 ///    buffer[0] = swift_allocBox(type)
-SWIFT_RUNTIME_EXPORT
+SWIFT_RUNTIME_EXPORT SWIFT_VECTORCALL
 BoxPair::Return swift_makeBoxUnique(OpaqueValue *buffer, Metadata const *type,
                                     size_t alignMask);
 
@@ -1245,7 +1256,7 @@ static inline bool swift_unknownUnownedIsEqual(UnownedReference *ref,
 /// Return the name of a Swift type represented by a metadata object.
 /// func _getTypeName(_ type: Any.Type, qualified: Bool)
 ///   -> (UnsafePointer<UInt8>, Int)
-SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_API
+SWIFT_CC(swift_vectorcall) SWIFT_RUNTIME_STDLIB_API
 TwoWordPair<const char *, uintptr_t>::Return
 swift_getTypeName(const Metadata *type, bool qualified);  
 

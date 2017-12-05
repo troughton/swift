@@ -36,6 +36,7 @@
 // implementations.
 #define FOR_CONV_DefaultCC(...)
 #define FOR_CONV_C_CC(...)
+#define FOR_CONV_VectorCallCC(...)
 
 // Entry points implemented in swift using the swift calling convention.
 #define FOR_CONV_SwiftCC(...)
@@ -50,8 +51,8 @@ typedef void (*RuntimeEntry)();
 // Define a global symbol referring to this implementation.
 
 #define DEFINE_SYMBOL(SymbolName, Name, CC)                                    \
-  SWIFT_RT_ENTRY_IMPL_VISIBILITY extern "C" void Name()                        \
-      SWIFT_CC(CC);                                                            \
+  SWIFT_RT_ENTRY_IMPL_VISIBILITY extern "C"  SWIFT_CC(CC) void Name();         \
+                                                                 \
   SWIFT_RUNTIME_EXPORT RuntimeEntry SymbolName =                    \
       reinterpret_cast<RuntimeEntry>(Name);
 

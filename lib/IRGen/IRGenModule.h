@@ -507,6 +507,8 @@ public:
   
   llvm::CallingConv::ID C_CC;          /// standard C calling convention
   llvm::CallingConv::ID DefaultCC;     /// default calling convention
+  llvm::CallingConv::ID VectorCallCC;  /// calling convention for passing in registers
+                                       /// on x86-64 Windows.
   llvm::CallingConv::ID RegisterPreservingCC; /// lightweight calling convention
   llvm::CallingConv::ID SwiftCC;     /// swift calling convention
   bool UseSwiftCC;
