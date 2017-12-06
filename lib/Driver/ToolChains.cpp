@@ -1608,54 +1608,6 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
                           + getTriple().getArchName()));
   }
 
-  // If we're cross-compiling, we likely already have some library paths set
-  // up through environment variables.
-  // Pass them through to the linker here for convenience.
-  const char *VCToolsInstallDir = ::getenv("VCToolsInstallDir");
-  const char *UniversalCRTSdkDir = ::getenv("UniversalCRTSdkDir");
-  const char *UCRTVersion = ::getenv("UCRTVersion");
-
-  StringRef tripleWinArchName;
-  switch (getTriple().getArch()) {
-  case llvm::Triple::x86:
-    tripleWinArchName = "x86";
-    break;
-  case llvm::Triple::x86_64:
-    tripleWinArchName = "x64";
-    break;
-  case llvm::Triple::arm:
-    tripleWinArchName = "arm";
-    break;
-  case llvm::Triple::aarch64:
-    tripleWinArchName = "arm64";
-    break;
-  default:
-    tripleWinArchName = getTriple().getArchName();
-    break;
-  }
-
-  StringRef VCToolsDir(VCToolsInstallDir);
-
-  if (!VCToolsDir.empty()) {
-    Arguments.push_back("-L");
-    Arguments.push_back(context.Args.MakeArgString(
-        llvm::Twine(VCToolsInstallDir) + "/Lib/" + tripleWinArchName));
-  }
-
-  StringRef UCRTDir(UniversalCRTSdkDir);
-  StringRef UCRTVer(UCRTVersion);
-
-  if (!UCRTDir.empty() && !UCRTVer.empty()) {
-    Arguments.push_back("-L");
-    Arguments.push_back(context.Args.MakeArgString(
-        llvm::Twine(UCRTDir) + "/Lib/" + llvm::Twine(UCRTVer) + "/ucrt/" +
-        tripleWinArchName));
-    Arguments.push_back("-L");
-    Arguments.push_back(context.Args.MakeArgString(
-        llvm::Twine(UCRTDir) + "/Lib/" + llvm::Twine(UCRTVer) + "/um/" +
-        tripleWinArchName));
-  }
-
   addPrimaryInputsOfType(Arguments, context.Inputs, types::TY_Object);
   addInputsOfType(Arguments, context.InputActions, types::TY_Object);
 
