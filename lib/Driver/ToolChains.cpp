@@ -1589,24 +1589,14 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
     Arguments.push_back(context.Args.MakeArgString(Target));
   }
 
-  bool staticExecutable = context.Args.hasFlag(
-      options::OPT_static_executable, options::OPT_no_static_executable, false);
-  bool staticStdlib = context.Args.hasFlag(
-      options::OPT_static_stdlib, options::OPT_no_static_stdlib, false);
-
   SmallString<128> SharedRuntimeLibPath;
   getRuntimeLibraryPath(SharedRuntimeLibPath, context.Args, *this);
 
-  SmallString<128> StaticRuntimeLibPath;
-  getRuntimeStaticLibraryPath(StaticRuntimeLibPath, context.Args, *this);
-
   // Add the runtime library link path, which is platform-specific and found
   // relative to the compiler.
-  if (!(staticExecutable || staticStdlib)) {
-    Arguments.push_back("-L");
-    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/"
+  Arguments.push_back("-L");
+  Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/"
                           + getTriple().getArchName()));
-  }
 
   addPrimaryInputsOfType(Arguments, context.Inputs, types::TY_Object);
   addInputsOfType(Arguments, context.InputActions, types::TY_Object);
@@ -1623,38 +1613,6 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   if (!context.OI.SDKPath.empty()) {
     Arguments.push_back("--sysroot");
     Arguments.push_back(context.Args.MakeArgString(context.OI.SDKPath));
-  }
-
-  // Link the standard library.
-  Arguments.push_back("-L");
-
-  if (staticExecutable) {
-    Arguments.push_back(context.Args.MakeArgString(StaticRuntimeLibPath));
-
-    SmallString<128> linkFilePath = StaticRuntimeLibPath;
-    llvm::sys::path::append(linkFilePath, "static-executable-args.lnk");
-    auto linkFile = linkFilePath.str();
-
-    if (llvm::sys::fs::is_regular_file(linkFile)) {
-      Arguments.push_back(context.Args.MakeArgString(Twine("@") + linkFile));
-    } else {
-      llvm::report_fatal_error(
-          "-static-executable not supported on this platform");
-    }
-  } else if (staticStdlib) {
-    Arguments.push_back(context.Args.MakeArgString(StaticRuntimeLibPath));
-
-    SmallString<128> linkFilePath = StaticRuntimeLibPath;
-    llvm::sys::path::append(linkFilePath, "static-stdlib-args.lnk");
-    auto linkFile = linkFilePath.str();
-    if (llvm::sys::fs::is_regular_file(linkFile)) {
-      Arguments.push_back(context.Args.MakeArgString(Twine("@") + linkFile));
-    } else {
-      llvm::report_fatal_error(linkFile + " not found");
-    }
-  } else {
-    Arguments.push_back(
-        context.Args.MakeArgString(SharedRuntimeLibPath + "/swiftCore.lib"));
   }
 
   if (job.getKind() == LinkKind::Executable) {
