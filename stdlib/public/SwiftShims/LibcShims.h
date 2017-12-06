@@ -115,7 +115,7 @@ double _swift_stdlib_squareRoot(double _self) {
 
 #if defined(__ANDROID__)
 typedef int __swift_pthread_key_t;
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__MINGW32__)
 typedef unsigned int __swift_pthread_key_t;
 #elif defined(__FreeBSD__)
 typedef int __swift_pthread_key_t;
