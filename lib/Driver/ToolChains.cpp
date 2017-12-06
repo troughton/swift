@@ -1210,7 +1210,7 @@ static void addLinkRuntimeLibForWindows(const ArgList &Args,
                                         StringRef WindowsLibName,
                                         const ToolChain &TC) {
   SmallString<128> P;
-  getClangLibraryPathOnWindows(P);
+  getClangLibraryPathOnWindows(P, Args, TC);
   llvm::sys::path::append(P, WindowsLibName);
   Arguments.push_back(Args.MakeArgString(P));
 }
@@ -1220,7 +1220,7 @@ addLinkRuntimeLibForLinux(const ArgList &Args, ArgStringList &Arguments,
                            StringRef LinuxLibName,
                            const ToolChain &TC) {
   SmallString<128> P;
-  getClangLibraryPathOnLinux(P);
+  getClangLibraryPathOnLinux(P, Args, TC);
   llvm::sys::path::append(P, LinuxLibName);
   Arguments.push_back(Args.MakeArgString(P));
 }
