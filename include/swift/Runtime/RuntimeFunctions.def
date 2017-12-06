@@ -49,8 +49,14 @@
   FUNCTION_ID(Id)
 #endif
 
+#if defined(VectorCallMangling)
+#define ALLOC_BOX_IMPL swift_allocBox
+#else
+#define ALLOC_BOX_IMPL _swift_allocBox_
+#endif
+
 FUNCTION_WITH_GLOBAL_SYMBOL_AND_IMPL(AllocBox, swift_allocBox,
-         _swift_allocBox, _swift_allocBox_, VectorCallCC,
+         _swift_allocBox, ALLOC_BOX_IMPL, VectorCallCC,
          RETURNS(RefCountedPtrTy, OpaquePtrTy),
          ARGS(TypeMetadataPtrTy),
          ATTRS(NoUnwind))

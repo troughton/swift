@@ -29,6 +29,8 @@
 // case it is needed. For example, _swift_isDeallocating is required by
 // Instruments.
 
+#include <stdint.h>
+
 #include "swift/Runtime/Config.h"
 
 // Entry points using a standard C calling convention or not using the new
@@ -50,14 +52,39 @@ typedef void (*RuntimeEntry)();
 // Generate a forward declaration of the runtime entry implementation.
 // Define a global symbol referring to this implementation.
 
-#define DEFINE_SYMBOL(SymbolName, Name, CC)                                    \
+#define Int1Ty bool
+#define Int32Ty uint32_t
+#define OpaquePtrTy void*
+#define RefCountedPtrTy void*
+#define SizeTy size_t
+#define TypeMetadataPatternPtrTy void*
+#define TypeMetadataPtrTy void*
+#define Int8PtrTy void*
+#define Int8PtrPtrTy void**
+#define VoidTy void
+#define WeakReferencePtrTy void*
+#define WitnessTablePtrTy void*
+#define ARGS //(...) __VA_ARGS__
+
+#define DEFINE_SYMBOL(SymbolName, Name, CC, ArgTys)                                \
   SWIFT_RT_ENTRY_IMPL_VISIBILITY extern "C"  SWIFT_CC(CC) void Name();         \
                                                                  \
   SWIFT_RUNTIME_EXPORT RuntimeEntry SymbolName =                    \
       reinterpret_cast<RuntimeEntry>(Name);
 
+#define DEFINE_SYMBOL_DefaultCC(SymbolName, Name, CC, ArgTys) \
+  DEFINE_SYMBOL(SymbolName, Name, CC, ArgTys)
+#define DEFINE_SYMBOL_RegisterPreservingCC(SymbolName, Name, CC, ArgTys) \
+  DEFINE_SYMBOL(SymbolName, Name, CC, ArgTys)
+
+#define DEFINE_SYMBOL_VectorCallCC(SymbolName, Name, CC, ArgTys)                                \
+  SWIFT_RT_ENTRY_IMPL_VISIBILITY extern "C"  SWIFT_CC(CC) void Name ArgTys ;         \
+                                                                 \
+  SWIFT_RUNTIME_EXPORT RuntimeEntry SymbolName =                    \
+      reinterpret_cast<RuntimeEntry>(Name);
+
 #define FUNCTION1(Id, Name, CC, ReturnTys, ArgTys, Attrs)                      \
-  DEFINE_SYMBOL(SWIFT_RT_ENTRY_REF(Name), Name, CC)
+  DEFINE_SYMBOL_##CC(SWIFT_RT_ENTRY_REF(Name), Name, CC, ArgTys)
 
 #if defined(SWIFT_RT_USE_WRAPPERS)
 // Automatically generate a global symbol name if it is required by the calling
@@ -72,7 +99,7 @@ typedef void (*RuntimeEntry)();
 // Allow for a custom global symbol name and implementation.
 #define FUNCTION_WITH_GLOBAL_SYMBOL_AND_IMPL(Id, Name, GlobalSymbolName, Impl, \
                                              CC, ReturnTys, ArgTys, Attrs)     \
-  DEFINE_SYMBOL(GlobalSymbolName, Impl, CC)
+  DEFINE_SYMBOL_##CC(GlobalSymbolName, Impl, CC, ArgTys)
 
 // Indicate that we are going to generate the global symbols for those runtime
 // functions that require it.

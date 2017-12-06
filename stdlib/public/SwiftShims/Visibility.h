@@ -111,6 +111,8 @@
 
 #if defined(_WIN64) && !defined(_M_ARM64)
 #define SWIFT_VECTORCALL __vectorcall
+#define VectorCall X86_FastCall // to match llvm::CallingConv::Id
+#define VectorCallMangling 1
 #else
 #define SWIFT_VECTORCALL
 #endif
