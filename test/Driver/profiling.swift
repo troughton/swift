@@ -48,9 +48,9 @@
 // LINUX: lib/swift/clang/lib/linux/libclang_rt.profile-x86_64.a
 // LINUX: -u__llvm_profile_runtime
 
-// LINUX: clang++{{"? }}
-// LINUX: lib/swift/clang/lib/windows/clang_rt.profile-x86_64.lib
-// LINUX: -u__llvm_profile_runtime
+// WINDOWS: clang++{{"? }}
+// WINDOWS: lib/swift/clang/lib/windows/clang_rt.profile-x86_64.lib
+// WINDOWS: -u__llvm_profile_runtime
 
 // RUN: not %swiftc_driver -driver-print-jobs -profile-generate -profile-use=/dev/null %s 2>&1 | %FileCheck -check-prefix=MIX_GEN_USE %s
 // MIX_GEN_USE: conflicting options '-profile-generate' and '-profile-use'
