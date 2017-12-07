@@ -1610,15 +1610,6 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
   if (job.getKind() == LinkKind::Executable) {
     if (context.OI.SelectedSanitizers & SanitizerKind::Address)
       addLinkSanitizerLibArgsForWindows(context.Args, Arguments, "asan", *this);
-
-    if (context.OI.SelectedSanitizers & SanitizerKind::Thread)
-      addLinkSanitizerLibArgsForWindows(context.Args, Arguments, "tsan", *this);
-
-    if (context.OI.SelectedSanitizers & SanitizerKind::Fuzzer)
-      addLinkRuntimeLibForWindows(
-          context.Args, Arguments,
-          getSanitizerRuntimeLibNameForWindows("fuzzer", this->getTriple()),
-          *this);
   }
 
   if (context.Args.hasArg(options::OPT_profile_generate)) {
