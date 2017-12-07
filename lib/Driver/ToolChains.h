@@ -40,8 +40,6 @@ public:
 
 class LLVM_LIBRARY_VISIBILITY Windows : public ToolChain {
 protected:
-  InvocationInfo constructInvocation(const InterpretJobAction &job,
-                                     const JobContext &context) const override;
   InvocationInfo constructInvocation(const LinkJobAction &job,
                                      const JobContext &context) const override;
 
