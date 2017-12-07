@@ -18,6 +18,7 @@
 // RUN: %swiftc_driver -driver-print-jobs -profile-generate -target armv7k-apple-watchos2.0 -resource-dir %S/Inputs/fake-resource-dir/lib/swift/ %s | %FileCheck -check-prefix=CHECK -check-prefix=watchOS %s
 
 // RUN: %swiftc_driver -driver-print-jobs -profile-generate -target x86_64-unknown-linux-gnu %s | %FileCheck -check-prefix=CHECK -check-prefix=LINUX %s
+// RUN: %swiftc_driver -driver-print-jobs -profile-generate -target x86_64-unknown-windows-msvc %s | %FileCheck -check-prefix=CHECK -check-prefix=WINDOWS %s
 
 // CHECK: swift
 // CHECK: -profile-generate
@@ -45,6 +46,10 @@
 
 // LINUX: clang++{{"? }}
 // LINUX: lib/swift/clang/lib/linux/libclang_rt.profile-x86_64.a
+// LINUX: -u__llvm_profile_runtime
+
+// LINUX: clang++{{"? }}
+// LINUX: lib/swift/clang/lib/windows/clang_rt.profile-x86_64.lib
 // LINUX: -u__llvm_profile_runtime
 
 // RUN: not %swiftc_driver -driver-print-jobs -profile-generate -profile-use=/dev/null %s 2>&1 | %FileCheck -check-prefix=MIX_GEN_USE %s
