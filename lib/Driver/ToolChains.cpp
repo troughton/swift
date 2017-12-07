@@ -1535,14 +1535,6 @@ toolchains::Darwin::constructInvocation(const LinkJobAction &job,
 }
 
 ToolChain::InvocationInfo
-toolchains::Windows::constructInvocation(const InterpretJobAction &job,
-                                         const JobContext &context) const {
-  InvocationInfo II = ToolChain::constructInvocation(job, context);
-
-  return II;
-}
-
-ToolChain::InvocationInfo
 toolchains::Windows::constructInvocation(const LinkJobAction &job,
                                          const JobContext &context) const {
   assert(context.Output.getPrimaryOutputType() == types::TY_Image &&
