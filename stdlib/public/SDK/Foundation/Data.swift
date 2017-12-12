@@ -38,6 +38,22 @@ internal func __NSDataIsCompact(_ data: NSData) -> Bool {
 import _SwiftFoundationOverlayShims
 import _SwiftCoreFoundationOverlayShims
     
+internal func __NSDataIsCompact(_ data: NSData) -> Bool {
+    if #available(OSX 10.10, iOS 8.0, tvOS 9.0, watchOS 2.0, *) {
+        return data._isCompact()
+    } else {
+        var compact = true
+        let len = data.length
+        data.enumerateBytes { (_, byteRange, stop) in
+            if byteRange.length != len {
+                compact = false
+            }
+            stop.pointee = true
+        }
+        return compact
+    }
+}
+
 @_silgen_name("__NSDataWriteToURL")
 internal func __NSDataWriteToURL(_ data: NSData, _ url: NSURL, _ options: UInt, _ error: NSErrorPointer) -> Bool
     
@@ -130,7 +146,7 @@ public final class _DataStorage {
         case .mutable:
             return try apply(UnsafeRawBufferPointer(start: _bytes?.advanced(by: range.lowerBound - _offset), count: Swift.min(range.count, _length)))
         case .customReference(let d):
-            if d._isCompact() {
+            if __NSDataIsCompact(d) {
                 let len = d.length
                 guard len > 0 else {
                     return try apply(UnsafeRawBufferPointer(start: nil, count: 0))
@@ -161,7 +177,7 @@ public final class _DataStorage {
                 return try apply(UnsafeRawBufferPointer(buffer))
             }
         case .customMutableReference(let d):
-            if d._isCompact() {
+            if __NSDataIsCompact(d) {
                 let len = d.length
                 guard len > 0 else {
                     return try apply(UnsafeRawBufferPointer(start: nil, count: 0))
@@ -505,7 +521,7 @@ public final class _DataStorage {
         case .mutable:
             return _bytes!.advanced(by: index - _offset).assumingMemoryBound(to: UInt8.self).pointee
         case .customReference(let d):
-            if d._isCompact() {
+            if __NSDataIsCompact(d) {
                 return d.bytes.advanced(by: index - _offset).assumingMemoryBound(to: UInt8.self).pointee
             } else {
                 var byte: UInt8 = 0
@@ -519,7 +535,7 @@ public final class _DataStorage {
                 return byte
             }
         case .customMutableReference(let d):
-            if d._isCompact() {
+            if __NSDataIsCompact(d) {
                 return d.bytes.advanced(by: index - _offset).assumingMemoryBound(to: UInt8.self).pointee
             } else {
                 var byte: UInt8 = 0
@@ -1928,27 +1944,11 @@ extension NSData : _HasCustomAnyHashableRepresentation {
 
 extension Data : Codable {
     public init(from decoder: Decoder) throws {
-        // FIXME: This is a hook for bypassing a conditional conformance implementation to apply a strategy (see SR-5206). Remove this once conditional conformance is available.
-        do {
-            let singleValueContainer = try decoder.singleValueContainer()
-            if let decoder = singleValueContainer as? _JSONDecoder {
-                switch decoder.options.dataDecodingStrategy {
-                case .deferredToData:
-                    break /* fall back to default implementation below; this would recurse */
-
-                default:
-                    // _JSONDecoder has a hook for Datas; this won't recurse since we're not going to defer back to Data in _JSONDecoder.
-                    self = try singleValueContainer.decode(Data.self)
-                    return
-                }
-            }
-        } catch { /* fall back to default implementation below */ }
-
         var container = try decoder.unkeyedContainer()
         
         // It's more efficient to pre-allocate the buffer if we can.
         if let count = container.count {
-            self = Data(count: count)
+            self.init(count: count)
             
             // Loop only until count, not while !container.isAtEnd, in case count is underestimated (this is misbehavior) and we haven't allocated enough space.
             // We don't want to write past the end of what we allocated.
@@ -1957,7 +1957,7 @@ extension Data : Codable {
                 self[i] = byte
             }
         } else {
-            self = Data()
+            self.init()
         }
         
         while !container.isAtEnd {
@@ -1967,21 +1967,6 @@ extension Data : Codable {
     }
     
     public func encode(to encoder: Encoder) throws {
-        // FIXME: This is a hook for bypassing a conditional conformance implementation to apply a strategy (see SR-5206). Remove this once conditional conformance is available.
-        // We are allowed to request this container as long as we don't encode anything through it when we need the unkeyed container below.
-        var singleValueContainer = encoder.singleValueContainer()
-        if let encoder = singleValueContainer as? _JSONEncoder {
-            switch encoder.options.dataEncodingStrategy {
-            case .deferredToData:
-                break /* fall back to default implementation below; this would recurse */
-
-            default:
-                // _JSONEncoder has a hook for Datas; this won't recurse since we're not going to defer back to Data in _JSONEncoder.
-                try singleValueContainer.encode(self)
-                return
-            }
-        }
-
         var container = encoder.unkeyedContainer()
         
         // Since enumerateBytes does not rethrow, we need to catch the error, stow it away, and rethrow if we stopped.
