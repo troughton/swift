@@ -16,13 +16,23 @@ add_custom_command(
 set(outputs)
 
 foreach(input ${datafiles})
-  add_custom_command(
-      OUTPUT "${output_dir}/${input}"
-      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
-      COMMAND
-        "${CMAKE_COMMAND}" "-E" "create_symlink"
-        "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
-        "${output_dir}/${input}")
+  if(MINGW STREQUAL "1")
+    add_custom_command(
+        OUTPUT "${output_dir}/${input}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
+        COMMAND
+          "${CMAKE_COMMAND}" "-E" "copy"
+          "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
+          "${output_dir}/${input}")
+  else()
+    add_custom_command(
+        OUTPUT "${output_dir}/${input}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
+        COMMAND
+          "${CMAKE_COMMAND}" "-E" "create_symlink"
+          "${CMAKE_CURRENT_SOURCE_DIR}/${input}"
+          "${output_dir}/${input}")
+  endif()
   list(APPEND outputs "${output_dir}/${input}")
 endforeach()
 list(APPEND outputs "${output_dir}")

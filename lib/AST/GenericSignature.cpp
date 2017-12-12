@@ -763,7 +763,8 @@ getBestRequirementSource(ArrayRef<GSBConstraint<ProtocolDecl *>> constraints) {
   const RequirementSource *bestSource = nullptr;
   for (const auto &constraint : constraints) {
     auto source = constraint.source;
-#if defined(__MINGW32__)
+//#if defined(__MINGW32__)
+#if 0
 // FIXME: Workaround to build Swift.obj and SwiftPrivate.obj for MinGW
     if (!bestSource || bestSource->compare(source) > 0)
       bestSource = source;

@@ -20,7 +20,7 @@
 // WIN32 doesn't natively support <uuid/uuid.h>. Instead, we use Win32 APIs.
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+#define NOMINMAX 1
 #include <objbase.h>
 #include <string>
 #else
@@ -92,19 +92,43 @@ Optional<swift::UUID> swift::UUID::fromString(const char *s) {
 void swift::UUID::toString(llvm::SmallVectorImpl<char> &out) const {
   out.resize(UUID::StringBufferSize);
 #if defined(_WIN32)
-  ::GUID uuid;
-  memcpy(&uuid, Value, Size);
-
-  LPOLESTR unicodeStr;
-  StringFromCLSID(uuid, &unicodeStr);
-
-  char str[StringBufferSize];
-  int strLen = wcstombs(str, unicodeStr, sizeof(str));
-
-  assert(strLen == 37 && "expected ascii convertible output from StringFromCLSID.");
-  (void)strLen;
-
-  memcpy(out.data(), str, StringBufferSize);
+  struct uuid {
+    uint32_t   time_low;
+    uint16_t   time_mid;
+    uint16_t   time_hi_and_version;
+    uint16_t   clock_seq;
+    uint8_t    node[6];
+   } uuid;
+  
+  // from e2p_unpack_uuid
+  uint8_t    *ptr = (uint8_t *)&Value[0];
+  uint32_t   tmp;
+  
+  tmp = *ptr++;
+  tmp = (tmp << 8) | *ptr++;
+  tmp = (tmp << 8) | *ptr++;
+  tmp = (tmp << 8) | *ptr++;
+  uuid.time_low = tmp;
+  
+  tmp = *ptr++;
+  tmp = (tmp << 8) | *ptr++;
+  uuid.time_mid = tmp;
+  
+  tmp = *ptr++;
+  tmp = (tmp << 8) | *ptr++;
+  uuid.time_hi_and_version = tmp;
+  
+  tmp = *ptr++;
+  tmp = (tmp << 8) | *ptr++;
+  uuid.clock_seq = tmp;
+  
+  memcpy(uuid.node, ptr, 6);  
+  
+  sprintf(out.data(), "%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+        uuid.time_low, uuid.time_mid, uuid.time_hi_and_version,
+        uuid.clock_seq >> 8, uuid.clock_seq & 0xFF,
+        uuid.node[0], uuid.node[1], uuid.node[2],
+        uuid.node[3], uuid.node[4], uuid.node[5]);
 #else
   uuid_unparse_upper(Value, out.data());
 #endif
