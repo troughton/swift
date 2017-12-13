@@ -63,23 +63,16 @@ swift::UUID::UUID() {
 
 Optional<swift::UUID> swift::UUID::fromString(const char *s) {
 #if defined(_WIN32)
-  int length = strlen(s) + 1;
-  wchar_t *unicodeString = new wchar_t[length];
-
-  size_t convertedChars = 0;
-  errno_t conversionResult =
-    mbstowcs_s(&convertedChars, unicodeString, length, s, length);
-  assert(conversionResult == 0 &&
-    "expected successful conversion of char* to wchar_t*");
-
-  ::GUID uuid;
-  HRESULT parseResult = CLSIDFromString(unicodeString, &uuid);
-  if (parseResult != 0) {
+  swift::UUID result;
+  int n = 0;
+  sscanf(s,
+    "%2hhx%2hhx%2hhx%2hhx-%2hhx%2hhx-%2hhx%2hhx-%2hhx%2hhx-%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%n",
+    &result.Value[0], &result.Value[1], &result.Value[2], &result.Value[3],
+    &result.Value[4], &result.Value[5], &result.Value[6], &result.Value[7],
+    &result.Value[8], &result.Value[9], &result.Value[10], &result.Value[11],
+    &result.Value[12], &result.Value[13], &result.Value[14], &result.Value[15], &n);
+  if (n != 36 || s[n] != '\0')
     return None;
-  }
-
-  swift::UUID result = UUID();
-  memcpy(result.Value, &uuid, Size);
   return result;
 #else
   swift::UUID result;
@@ -92,43 +85,12 @@ Optional<swift::UUID> swift::UUID::fromString(const char *s) {
 void swift::UUID::toString(llvm::SmallVectorImpl<char> &out) const {
   out.resize(UUID::StringBufferSize);
 #if defined(_WIN32)
-  struct uuid {
-    uint32_t   time_low;
-    uint16_t   time_mid;
-    uint16_t   time_hi_and_version;
-    uint16_t   clock_seq;
-    uint8_t    node[6];
-   } uuid;
-  
-  // from e2p_unpack_uuid
-  uint8_t    *ptr = (uint8_t *)&Value[0];
-  uint32_t   tmp;
-  
-  tmp = *ptr++;
-  tmp = (tmp << 8) | *ptr++;
-  tmp = (tmp << 8) | *ptr++;
-  tmp = (tmp << 8) | *ptr++;
-  uuid.time_low = tmp;
-  
-  tmp = *ptr++;
-  tmp = (tmp << 8) | *ptr++;
-  uuid.time_mid = tmp;
-  
-  tmp = *ptr++;
-  tmp = (tmp << 8) | *ptr++;
-  uuid.time_hi_and_version = tmp;
-  
-  tmp = *ptr++;
-  tmp = (tmp << 8) | *ptr++;
-  uuid.clock_seq = tmp;
-  
-  memcpy(uuid.node, ptr, 6);  
-  
-  sprintf(out.data(), "%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
-        uuid.time_low, uuid.time_mid, uuid.time_hi_and_version,
-        uuid.clock_seq >> 8, uuid.clock_seq & 0xFF,
-        uuid.node[0], uuid.node[1], uuid.node[2],
-        uuid.node[3], uuid.node[4], uuid.node[5]);
+  sprintf(out.data(),
+    "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+    Value[0], Value[1], Value[2], Value[3],
+    Value[4], Value[5], Value[6], Value[7],
+    Value[8], Value[9], Value[10], Value[11],
+    Value[12], Value[13], Value[14], Value[15]);
 #else
   uuid_unparse_upper(Value, out.data());
 #endif
