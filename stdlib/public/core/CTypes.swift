@@ -35,11 +35,7 @@ public typealias CUnsignedLong = UInt
 #endif
 
 /// The C 'unsigned long long' type.
-#if os(Windows) && !os(Cygwin) && arch(x86_64)
-public typealias CUnsignedLongLong = UInt
-#else
 public typealias CUnsignedLongLong = UInt64
-#endif
 
 /// The C 'signed char' type.
 public typealias CSignedChar = Int8
@@ -58,11 +54,7 @@ public typealias CLong = Int
 #endif
 
 /// The C 'long long' type.
-#if os(Windows) && !os(Cygwin) && arch(x86_64)
-public typealias CLongLong = Int
-#else
 public typealias CLongLong = Int64
-#endif
 
 /// The C 'float' type.
 public typealias CFloat = Float

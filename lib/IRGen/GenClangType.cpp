@@ -315,6 +315,23 @@ ClangTypeConverter::reverseBuiltinTypeMapping(IRGenModule &IGM,
   cacheStdlibType(#SWIFT_TYPE_NAME, clang::BuiltinType::CLANG_BUILTIN_KIND);
 #include "swift/ClangImporter/BuiltinMappedTypes.def"
 
+  // For LLP64 systems(for example, Windows 64bit), the Cache doesn't have both 'Int64' and 'Int'.
+  // If the Cache has not 'Int' on 64bit system, insert 'Int' with the value of 'Int64',
+  // and insert 'UInt' with the value of 'UInt64'.
+  CanType swiftIntType = getNamedSwiftType(stdlib, "Int");
+  auto int_it = Cache.find(swiftIntType);
+  if (int_it == Cache.end() && IGM.getClangASTContext().getTargetInfo().getRegisterWidth() == 64) {
+    auto int64_it = Cache.find(getNamedSwiftType(stdlib, "Int64"));
+    if (int64_it != Cache.end()) {
+      auto ret = Cache.insert({swiftIntType, int64_it->second});
+    }
+    auto uint64_it = Cache.find(getNamedSwiftType(stdlib, "UInt64"));
+    if (uint64_it != Cache.end()) {
+      auto swiftUIntType = getNamedSwiftType(stdlib, "UInt");
+      auto ret = Cache.insert({swiftUIntType, uint64_it->second});
+    }
+  }
+
   // The above code sets up a bunch of mappings in the cache; just
   // assume that we hit one of them.
   auto it = Cache.find(type);
