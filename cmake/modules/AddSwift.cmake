@@ -1152,10 +1152,6 @@ function(_add_swift_library_single target name)
   # import library targets when the library was added.  Use that to adjust the
   # link libraries.
   if("${SWIFTLIB_SINGLE_SDK}" STREQUAL "WINDOWS")
-    # We need to set the C++ standard from C++11 to C++14 on Windows
-    # for compilers using the GCC driver.
-    set_property(TARGET "${target}" PROPERTY CXX_STANDARD 14)
-
     foreach(library_list LINK_LIBRARIES INTERFACE_LINK_LIBRARIES PRIVATE_LINK_LIBRARIES)
       set(import_libraries)
       foreach(library ${SWIFTLIB_SINGLE_${library_list}})
@@ -1458,7 +1454,7 @@ function(add_swift_library name)
         continue()
       endif()
 
-      # TODO Support SwiftPrivate on Windows (SR-6489)
+      # TODO: Currently SwiftPrivate runs into linker problems on Windows. See SR-6489.
       if ("${sdk}" STREQUAL "WINDOWS" AND "${name}" MATCHES "SwiftPrivate")
         continue()
       endif()
@@ -1602,6 +1598,7 @@ function(add_swift_library name)
          endif()
        endif()
 
+       # Windows doesn't support the -z,defs flag and RemoteMirror needs to build with undefined symbols.
        if(NOT "${sdk}" STREQUAL "WINDOWS" AND NOT "${name}" STREQUAL "swiftRemoteMirror")
           # Add back the flags we removed from the call to HandleLLVMOptions 
           # in SwiftSharedCMakeConfig.cmake.
