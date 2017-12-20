@@ -140,6 +140,16 @@ BUILD_DIR=Build
 DSTROOT=/
 PREFIX=/usr/ 
 /usr/bin/python ./configure Release -DXCTEST_BUILD_DIR=/c/Work/swift_msvc/build/NinjaMinGW/xctest-mingw-x86_64
+
+// Fix for building Foundation.swiftmodule, libFoundation.dll, libFoundation.a
+// Replace Build/Foundation/Foundation/ --> bld_found/
+// Replace Build/Foundation/CoreFoundation/ --> bld_co/
+ln -s Build/Foundation/CoreFoundation bld_co
+ln -s Build/Foundation/Foundation bld_found
+sed -e '/partials =/s#Build/Foundation/Foundation/#bld_found/#g' -e '/^build.Build.Foundation.libFoundation./{s#Build/Foundation/CoreFoundation/#bld_co/#g;s#Build/Foundation/Foundation/#bld_found/#g}' build.ninja > build_dll.ninja
+
+rm `find Build -name *.d`; ninja CompileSources CompileSwiftSources
+rm `find Build -name *.d`; ninja -f build_dll.ninja
 ```
 
 Install Foundation
@@ -175,14 +185,6 @@ Not implemented Foundation features
 
 Build hint
 ----------
-Fix for building Foundation.swiftmodule, libFoundation.dll, libFoundation.a
-  // Replace Build/Foundation/Foundation/ --> bld_found/
-  // Replace Build/Foundation/CoreFoundation/ --> bld_co/
-  ln -s Build/Foundation/CoreFoundation bld_co
-  ln -s Build/Foundation/Foundation bld_found
-  sed -e '/partials =/s#Build/Foundation/Foundation/#bld_found/#g' -e '/^build.Build.Foundation.libFoundation./{s#Build/Foundation/CoreFoundation/#bld_co/#g;s#Build/Foundation/Foundation/#bld_found/#g}' build.ninja
-
-rm `find Build -name *.d`; ninja 
   
 /* OLD */
 /*
