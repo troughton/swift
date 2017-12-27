@@ -154,5 +154,9 @@ module SwiftMinGWCrt [system] {
       header "${MINGW_ARCH_INCLUDE_PATH}/utime.h"
       export *
     }
+    module _timeval {
+      header "${MINGW_ARCH_INCLUDE_PATH}/_timeval.h"
+      export *
+    }
   }
 }
