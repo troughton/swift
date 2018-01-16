@@ -39,12 +39,9 @@ Patch gcc header
 -void    _EXFUN(encrypt, (char *__block, int __edflag)); 
 +void    _EXFUN(encrypt, (char *, int __edflag));
 ```
-c:/msys64/mingw64/include/c++/6.3.0/type_traits
-#if !defined(__STRICT_ANSI__) && defined(_GLIBCXX_USE_FLOAT128)
-//  template<>
-//    struct __is_floating_point_helper<__float128>
-//    : public true_type { };
-#endif
+
+sed -i 's;defined(_GLIBCXX_USE_FLOAT128)$;defined(_GLIBCXX_USE_FLOAT128) \&\& !defined\(__clang__\);' %MINGW64_DIR%/include/c++/*/type_traits
+
 
 Download sources
 ----------------
@@ -81,7 +78,7 @@ ninja
 
 cd src
 cp -p libcmark.dll.a libcmark.a
-cp -p libcmark.a  $WORK_DIR/swift/libcmark.a
+//cp -p libcmark.a  $WORK_DIR/swift/libcmark.a
 ```
 
 Build clang
@@ -101,8 +98,8 @@ ninja
 ```
 
 // Change Clang compiler
-cp -p clang clang++ /mingw64/bin
-cp -rp ../../llvm/lib/clang/4.0.0 /mingw64/lib/clang
+//cp -p clang clang++ /mingw64/bin
+//cp -rp ../../llvm/lib/clang/4.0.0 /mingw64/lib/clang
 
 
 
@@ -122,7 +119,7 @@ cp $WORK_DIR/build/NinjaMinGW/cmark/src/libcmark.dll $WORK_DIR/build/NinjaMinGW/
 
 cd $WORK_DIR/build/NinjaMinGW/swift
 
-cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang  -DCMAKE_CXX_COMPILER=clang++ -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config -DICU_UC_INCLUDE_DIR=/mingw64/include -DICU_UC_LIBRARY=/mingw64/lib/libicuuc.dll.a -DICU_I18N_INCLUDE_DIR=/mingw64/include -DICU_I18N_LIBRARY=/mingw64/lib/libicuin.dll.a -DSWIFT_INCLUDE_DOCS=FALSE -DSWIFT_PATH_TO_CMARK_BUILD=$WORK_DIR/build/NinjaMinGW/cmark -DSWIFT_PATH_TO_CMARK_SOURCE=$WORK_DIR/cmark -DSWIFT_PATH_TO_LLVM_SOURCE=$WORK_DIR/llvm -DSWIFT_PATH_TO_LLVM_BUILD=$WORK_DIR/build/NinjaMinGW/llvm -DSWIFT_STDLIB_ASSERTIONS:BOOL=TRUE ../../../swift
+cmake -G "Ninja" ../../../swift -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=$WORK_DIR/build/NinjaMinGW/llvm/bin/clang.exe  -DCMAKE_CXX_COMPILER=$WORK_DIR/build/NinjaMinGW/llvm/bin/clang++.exe -DCMAKE_ASM_COMPILER=$WORK_DIR/build/NinjaMinGW/llvm/bin/clang.exe -DPKG_CONFIG_EXECUTABLE=/mingw64/bin/pkg-config -DICU_UC_INCLUDE_DIR=/mingw64/include -DICU_UC_LIBRARY=/mingw64/lib/libicuuc.dll.a -DICU_I18N_INCLUDE_DIR=/mingw64/include -DICU_I18N_LIBRARY=/mingw64/lib/libicuin.dll.a -DSWIFT_INCLUDE_DOCS=FALSE -DSWIFT_PATH_TO_CMARK_BUILD=$WORK_DIR/build/NinjaMinGW/cmark -DSWIFT_PATH_TO_CMARK_SOURCE=$WORK_DIR/cmark -DSWIFT_PATH_TO_LLVM_SOURCE=$WORK_DIR/llvm -DSWIFT_PATH_TO_LLVM_BUILD=$WORK_DIR/build/NinjaMinGW/llvm -DSWIFT_STDLIB_ASSERTIONS:BOOL=TRUE ../../../swift
 
 ninja
 ```
@@ -130,49 +127,49 @@ ninja
 Build Foundation
 ----------------
 ```
-export PATH=$PATH:$WORK_DIR/build/NinjaMinGW/swift/bin
-SWIFTC=/c/Work/swift_msvc/build/NinjaMinGW/swift/bin/swiftc 
-CLANG=/c/Work/swift_msvc/build/NinjaMinGW/llvm/bin/clang 
-SWIFT=/c/Work/swift_msvc/build/NinjaMinGW/swift/bin/swift 
-SDKROOT=/c/Work/swift_msvc/build/NinjaMinGW/swift 
-#BUILD_DIR=/c/Work/swift_msvc/build/NinjaMinGW/foundation
-BUILD_DIR=Build
-DSTROOT=/
-PREFIX=/usr/ 
-/usr/bin/python ./configure Release -DXCTEST_BUILD_DIR=/c/Work/swift_msvc/build/NinjaMinGW/xctest-mingw-x86_64
+  cd %WORK_DIR%/swift-corelibs-foundation
+  SET SWIFTC=%WORK_DIR%/build/NinjaMinGW/swift/bin/swiftc 
+  SET CLANG=%WORK_DIR%/build/NinjaMinGW/llvm/bin/clang 
+  SET SWIFT=%WORK_DIR%/build/NinjaMinGW/swift/bin/swift 
+  SET SDKROOT=%WORK_DIR%/build/NinjaMinGW/swift
+  SET BUILD_DIR=Build
+  SET DSTROOT=/
+  SET PREFIX=/usr/
+  SET MSYSTEM=MINGW64
+  c:/msys64//usr/bin/python ./configure Release -DXCTEST_BUILD_DIR=%WORK_DIR%/build/NinjaMinGW/xctest-mingw-x86_64
+  SET SDKROOT=
+  
+  // FIXEM: Workaround for ninja to work. We should these commands to only one command 'ninja'.
+  c:/msys64/usr/bin/mkdir -p Build/Foundation/CoreFoundation Build/Foundation/Foundation
+  MKLINK /d BFC Build\Foundation\CoreFoundation
+  MKLINK /d BFF Build\Foundation\Foundation
+  sed -i -e "s;Build/Foundation/CoreFoundation/;BFC/;g"  -e "s;Build/Foundation/Foundation/;BFF/;g"  build.ninja
+  ninja
 
-// Fix for building Foundation.swiftmodule, libFoundation.dll, libFoundation.a
-// Replace Build/Foundation/Foundation/ --> bld_found/
-// Replace Build/Foundation/CoreFoundation/ --> bld_co/
-ln -s Build/Foundation/CoreFoundation bld_co
-ln -s Build/Foundation/Foundation bld_found
-sed -e '/partials =/s#Build/Foundation/Foundation/#bld_found/#g' -e '/^build.Build.Foundation.libFoundation./{s#Build/Foundation/CoreFoundation/#bld_co/#g;s#Build/Foundation/Foundation/#bld_found/#g}' build.ninja > build_dll.ninja
-
-rm `find Build -name *.d`; ninja CompileSources CompileSwiftSources
-rm `find Build -name *.d`; ninja -f build_dll.ninja
+//  find Build -name *.d | xargs rm
 ```
 
 Install Foundation
 ------------------
 ```
-  export INSTALL_DIR=$WORK_DIR/build/NinjaMinGW/swift
+  SET INSTALL_DIR=%WORK_DIR%/build/NinjaMinGW/swift
 
-  cd $WORK_DIR/swift-corelibs-foundation/Build/Foundation
-  cp -p libFoundation.dll $INSTALL_DIR/bin
-  cp -rp usr/lib/swift/CoreFoundation $INSTALL_DIR/lib/swift
-  cp -p libFoundation.dll $INSTALL_DIR/lib/swift/mingw
-  cp -p Foundation.swiftdoc Foundation.swiftmodule $INSTALL_DIR/lib/swift/mingw/x86_64
+  cd %WORK_DIR%/swift-corelibs-foundation/Build/Foundation
+  cp -p libFoundation.dll %INSTALL_DIR%/bin
+  cp -rp usr/lib/swift/CoreFoundation %INSTALL_DIR%/lib/swift
+  cp -p libFoundation.dll %INSTALL_DIR%/lib/swift/mingw
+  cp -p Foundation.swiftdoc Foundation.swiftmodule %INSTALL_DIR%/lib/swift/mingw/x86_64
 ```
 
 Unintall Foundation
 -------------------
 ```
-  export INSTALL_DIR=$WORK_DIR/build/NinjaMinGW/swift
+  SET INSTALL_DIR=%WORK_DIR%/build/NinjaMinGW/swift
 
-  rm $INSTALL_DIR/bin/libFoundation.dll
-  rm -rf $INSTALL_DIR/lib/swift/CoreFoundation
-  rm $INSTALL_DIR/lib/swift/mingw/libFoundation.dll
-  rm $INSTALL_DIR/lib/swift/mingw/x86_64/Foundation.swift*
+  rm %INSTALL_DIR%/bin/libFoundation.dll
+  rm -rf %INSTALL_DIR%/lib/swift/CoreFoundation
+  rm %INSTALL_DIR%/lib/swift/mingw/libFoundation.dll
+  rm %INSTALL_DIR%/lib/swift/mingw/x86_64/Foundation.swift*
 ```
 
 
