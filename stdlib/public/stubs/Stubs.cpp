@@ -171,11 +171,23 @@ static inline locale_t getCLocale() {
 #elif defined(__CYGWIN__)
 // In Cygwin, getCLocale() is not used.
 #elif defined(_WIN32)
+typedef _locale_t (*CreateLocaleFuncPtr)(int category, const char *locale);
 static locale_t makeCLocale() {
-  locale_t CLocale = _create_locale(LC_ALL, "C");
-  if (!CLocale) {
-    swift::crash("makeCLocale: _create_locale() returned a null pointer");
+
+  _locale_t CLocale = NULL;
+  // On Windows 7 MinGW environment, _create_locale() function may not be exist.
+  // We dynamically link the function only if it exist.
+  HMODULE handle = GetModuleHandleA("msvcrt.dll");
+  if (handle != NULL) {
+    CreateLocaleFuncPtr CreateLocaleFunc = (CreateLocaleFuncPtr) GetProcAddress(handle, "_create_locale");
+    if (CreateLocaleFunc != NULL) {
+      CLocale = CreateLocaleFunc(LC_ALL, "C");
+      if (!CLocale) {
+        swift::crash("makeCLocale: _create_locale() returned a null pointer");
+      }
+    }
   }
+	
   return CLocale;
 }
 
