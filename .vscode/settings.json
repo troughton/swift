@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "*.inc": "cpp",
+        "system_error": "cpp",
+        "algorithm": "cpp",
+        "deque": "cpp",
+        "list": "cpp",
+        "vector": "cpp",
+        "xstring": "cpp"
+    }
+}

@@ -217,7 +217,7 @@ long double swift::_stdlib_lgammal_r(long double x, int *psigngam) {
 #endif // defined(__APPLE__)
 
 
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(__MINGW32__)
 static_assert(std::is_same<__swift_thread_key_t, DWORD>::value,
               "__swift_thread_key_t is not a DWORD");
 

@@ -444,9 +444,6 @@ namespace RuntimeConstants {
   const auto FirstParamReturned = llvm::Attribute::Returned;
 } // namespace RuntimeConstants
 
-// FIXME: temporarial patch for MSVC
-extern bool EnabledDllImport();
-
 // We don't use enough attributes to justify generalizing the
 // RuntimeFunctions.def FUNCTION macro. Instead, special case the one attribute
 // associated with the return type not the function type.
@@ -559,8 +556,7 @@ llvm::Constant *swift::getWrapperFn(llvm::Module &Module,
     auto *globalFnPtr = new llvm::GlobalVariable(
         Module, fnPtrTy, false, llvm::GlobalValue::ExternalLinkage, nullptr,
         symbol);
-    if (::useDllStorage(llvm::Triple(Module.getTargetTriple())) &&
-        EnabledDllImport())
+    if (::useDllStorage(llvm::Triple(Module.getTargetTriple())))
       globalFnPtr->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
 
     // Forward all arguments.

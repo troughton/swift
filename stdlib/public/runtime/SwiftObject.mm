@@ -123,14 +123,11 @@ const Metadata *swift::swift_getObjectType(HeapObject *object) {
   }
   classAsMetadata = reinterpret_cast<const ClassMetadata *>(objcClass);
   return swift_getObjCClassMetadata(classAsMetadata);
-<<<<<<< HEAD
-=======
 #else
   assert(classAsMetadata &&
          classAsMetadata->isTypeMetadata() &&
          !classAsMetadata->isArtificialSubclass());
   return classAsMetadata;
->>>>>>> swift-4.1-branch
 #endif
 }
 

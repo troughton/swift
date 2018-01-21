@@ -429,11 +429,7 @@ module SwiftGlibc [system] {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/select.h"
         export *
       }
-<<<<<<< HEAD
-% if CMAKE_SDK == "LINUX":
-=======
 % if CMAKE_SDK != "FREEBSD" and CMAKE_SDK != "HAIKU":
->>>>>>> swift-4.1-branch
       module sendfile {
         header "${GLIBC_ARCH_INCLUDE_PATH}/sys/sendfile.h"
         export *

@@ -1243,28 +1243,6 @@ static bool isUninitializedMetatypeInst(SILInstruction *I) {
   // Sometimes we get an upcast whose sole usage is a value_metatype_inst,
   // for example when calling a convenience initializer from a superclass.
   if (auto *UCI = dyn_cast<UpcastInst>(I)) {
-    for (auto *Op : UCI->getUses()) {
-      auto *User = Op->getUser();
-      if (isa<ValueMetatypeInst>(User))
-        continue;
-      return false;
-    }
-
-    return true;
-  }
-
-  return false;
-}
-
-static bool isUninitializedMetatypeInst(SILInstruction *I) {
-  // A simple reference to "type(of:)" is always fine,
-  // even if self is uninitialized.
-  if (isa<ValueMetatypeInst>(I))
-    return true;
-
-  // Sometimes we get an upcast whose sole usage is a value_metatype_inst,
-  // for example when calling a convenience initializer from a superclass.
-  if (auto *UCI = dyn_cast<UpcastInst>(I)) {
     for (auto *UI : UCI->getUses()) {
       auto *User = UI->getUser();
       if (isa<ValueMetatypeInst>(User))

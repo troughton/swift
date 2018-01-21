@@ -3878,9 +3878,6 @@ namespace {
   };
 } // end anonymous namespace
 
-// FIXME: temporarial patch for MSVC
-extern bool EnabledDllStorage();
-
 /// Emit the ObjC-compatible class symbol for a class.
 /// Since LLVM and many system linkers do not have a notion of relative symbol
 /// references, we emit the symbol as a global asm block.
@@ -3901,7 +3898,7 @@ static void emitObjCClassSymbol(IRGenModule &IGM,
                                           IGM.getModule());
   alias->setVisibility(metadata->getVisibility());
 
-  if (IGM.useDllStorage() && EnabledDllStorage())
+  if (IGM.useDllStorage())
     alias->setDLLStorageClass(metadata->getDLLStorageClass());
 }
 

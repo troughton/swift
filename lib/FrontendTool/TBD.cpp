@@ -119,7 +119,6 @@ static bool validateSymbolSet(DiagnosticEngine &diags,
 
 bool swift::validateTBD(ModuleDecl *M, llvm::Module &IRModule,
                         bool hasMultipleIRGenThreads,
-                        bool silSerializeWitnessTables,
                         bool diagnoseExtraSymbolsInTBD) {
   llvm::StringSet<> symbols;
   enumeratePublicSymbols(M, symbols, hasMultipleIRGenThreads);
@@ -130,7 +129,6 @@ bool swift::validateTBD(ModuleDecl *M, llvm::Module &IRModule,
 
 bool swift::validateTBD(FileUnit *file, llvm::Module &IRModule,
                         bool hasMultipleIRGenThreads,
-                        bool silSerializeWitnessTables,
                         bool diagnoseExtraSymbolsInTBD) {
   llvm::StringSet<> symbols;
   enumeratePublicSymbols(file, symbols, hasMultipleIRGenThreads);

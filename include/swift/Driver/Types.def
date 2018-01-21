@@ -63,10 +63,6 @@ TYPE("module-trace",    ModuleTrace,        "trace.json",      "")
 TYPE("index-data",      IndexData,          "",                "")
 TYPE("opt-record",      OptRecord,          "opt.yaml",        "")
 
-// BEGIN APPLE-ONLY OUTPUT TYPES
-TYPE("index-data",      IndexData,          "",                "")
-// END APPLE-ONLY OUTPUT TYPES
-
 // Misc types
 TYPE("pcm",             ClangModuleFile,    "pcm",             "")
 TYPE("pch",             PCH,                "pch",             "")

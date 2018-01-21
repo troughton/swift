@@ -426,6 +426,7 @@ public var SIG_IGN: _crt_signal_t {
 public var SIG_ERR: _crt_signal_t {
   return unsafeBitCast(-1, to: _crt_signal_t.self)
 }
+#endif
 #else
 internal var _ignore = _UnsupportedPlatformError()
 #endif

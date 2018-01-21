@@ -572,8 +572,9 @@ class ExecutionContext(object):
                 # We can only insert the line directive at a line break
                 if len(self.result_text) == 0 \
                    or self.result_text[-1].endswith('\n'):
-                    self.result_text.append('%s(file: "%s", line: %d)\n' % (
-                        self.line_directive, file, line + 1))
+                      pass
+                    # self.result_text.append('%s(file: "%s", line: %d)\n' % (
+                        # self.line_directive, file, line + 1))
                 # But if the new text contains any line breaks, we can create
                 # one
                 elif '\n' in text:

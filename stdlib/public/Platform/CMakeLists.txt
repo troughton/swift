@@ -47,13 +47,9 @@ set(glibc_modulemap_target_list)
 foreach(sdk ${SWIFT_SDKS})
   if(NOT "${sdk}" STREQUAL "LINUX" AND
      NOT "${sdk}" STREQUAL "FREEBSD" AND
-<<<<<<< HEAD
-     NOT "${sdk}" STREQUAL "ANDROID")
-=======
      NOT "${sdk}" STREQUAL "ANDROID" AND
      NOT "${sdk}" STREQUAL "CYGWIN" AND
      NOT "${sdk}" STREQUAL "HAIKU")
->>>>>>> swift-4.1-branch
     continue()
   endif()
 

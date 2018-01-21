@@ -1071,7 +1071,7 @@ void IRGenModule::emitVTableStubs() {
     if (F.getEffectiveSymbolLinkage() == SILLinkage::Hidden)
       alias->setVisibility(llvm::GlobalValue::HiddenVisibility);
 
-    if (useDllStorage() && EnabledDllExport())
+    if (useDllStorage())
       alias->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
   }
 }
@@ -1402,10 +1402,10 @@ getIRLinkage(const UniversalLinkageInfo &info, SILLinkage linkage,
       info.IsELFObject ? llvm::GlobalValue::ProtectedVisibility
                        : llvm::GlobalValue::DefaultVisibility;
   llvm::GlobalValue::DLLStorageClassTypes ExportedStorage =
-      info.UseDLLStorage && EnabledDllExport() ? llvm::GlobalValue::DLLExportStorageClass
+      info.UseDLLStorage ? llvm::GlobalValue::DLLExportStorageClass
                          : llvm::GlobalValue::DefaultStorageClass;
   llvm::GlobalValue::DLLStorageClassTypes ImportedStorage =
-      info.UseDLLStorage && EnabledDllImport() ? llvm::GlobalValue::DLLImportStorageClass
+      info.UseDLLStorage ? llvm::GlobalValue::DLLImportStorageClass
                          : llvm::GlobalValue::DefaultStorageClass;
 
   switch (linkage) {

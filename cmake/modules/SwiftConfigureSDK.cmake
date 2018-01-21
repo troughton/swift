@@ -146,7 +146,7 @@ macro(configure_sdk_unix
   set(SWIFT_SDK_${prefix}_VERSION_MIN_NAME "")
   set(SWIFT_SDK_${prefix}_TRIPLE_NAME "${triple_name}")
   set(SWIFT_SDK_${prefix}_ARCHITECTURES "${arch}")
-  if("${prefix}" STREQUAL "CYGWIN")
+  if("${prefix}" STREQUAL "CYGWIN" OR "${prefix}" STREQUAL "MINGW")
     set(SWIFT_SDK_${prefix}_OBJECT_FORMAT "COFF")
   else()
     set(SWIFT_SDK_${prefix}_OBJECT_FORMAT "ELF")

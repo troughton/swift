@@ -1533,9 +1533,6 @@ void Serializer::writeNormalConformance(
   unsigned numSignatureConformances =
       conformance->getSignatureConformances().size();
 
-  unsigned numSignatureConformances =
-      conformance->getSignatureConformances().size();
-
   unsigned abbrCode
     = DeclTypeAbbrCodes[NormalProtocolConformanceLayout::Code];
   auto ownerID = addDeclContextRef(conformance->getDeclContext());

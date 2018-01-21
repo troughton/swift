@@ -151,32 +151,8 @@ static inline locale_t getCLocale() {
   // as C locale.
   return nullptr;
 }
-#elif defined(__CYGWIN__) || defined(__HAIKU__)
+#elif defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
 // In Cygwin, getCLocale() is not used.
-#elif defined(_WIN32)
-typedef _locale_t (*CreateLocaleFuncPtr)(int category, const char *locale);
-static locale_t makeCLocale() {
-
-  _locale_t CLocale = NULL;
-  // On Windows 7 MinGW environment, _create_locale() function may not be exist.
-  // We dynamically link the function only if it exist.
-  HMODULE handle = GetModuleHandleA("msvcrt.dll");
-  if (handle != NULL) {
-    CreateLocaleFuncPtr CreateLocaleFunc = (CreateLocaleFuncPtr) GetProcAddress(handle, "_create_locale");
-    if (CreateLocaleFunc != NULL) {
-      CLocale = CreateLocaleFunc(LC_ALL, "C");
-      if (!CLocale) {
-        swift::crash("makeCLocale: _create_locale() returned a null pointer");
-      }
-    }
-  }
-	
-  return CLocale;
-}
-
-static locale_t getCLocale() {
-  return SWIFT_LAZY_CONSTANT(makeCLocale());
-}
 #else
 static locale_t makeCLocale() {
   locale_t CLocale = newlocale(LC_ALL_MASK, "C", nullptr);
@@ -473,11 +449,7 @@ static bool swift_stringIsSignalingNaN(const char *nptr) {
   return strcasecmp(nptr, "snan") == 0;
 }
 
-<<<<<<< HEAD
-#if defined(__CYGWIN__)
-=======
 #if defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
->>>>>>> swift-4.1-branch
 // Cygwin does not support uselocale(), but we can use the locale feature 
 // in stringstream object.
 template <typename T>

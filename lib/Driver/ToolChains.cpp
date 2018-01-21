@@ -1629,7 +1629,7 @@ toolchains::GenericUnix::constructInvocation(const LinkJobAction &job,
   llvm::sys::path::append(swiftrtPath,
                           swift::getMajorArchitectureName(getTriple()));
   llvm::sys::path::append(swiftrtPath, "swiftrt.o");
-  Arguments.push_back(context.Args.MakeArgString(swiftrtPath));
+  // Arguments.push_back(context.Args.MakeArgString(swiftrtPath));
 
   addPrimaryInputsOfType(Arguments, context.Inputs, types::TY_Object);
   addInputsOfType(Arguments, context.InputActions, types::TY_Object);
@@ -1790,18 +1790,6 @@ std::string toolchains::Cygwin::getDefaultLinker() const {
 }
 
 std::string toolchains::Cygwin::getTargetForLinker() const {
-  return "";
-}
-
-std::string toolchains::Cygwin::getPreInputObjectPath(
-    StringRef RuntimeLibraryPath) const {
-  // Cygwin does not add "begin" and "end" objects.
-  return "";
-}
-
-std::string toolchains::Cygwin::getPostInputObjectPath(
-    StringRef RuntimeLibraryPath) const {
-  // Cygwin does not add "begin" and "end" objects.
   return "";
 }
 

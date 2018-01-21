@@ -4462,14 +4462,6 @@ void CodeCompletionCallbacksImpl::completeForEachSequenceBeginning(
   CodeCompleteTokenExpr = E;
 }
 
-void CodeCompletionCallbacksImpl::completeForEachSequenceBeginning(
-    CodeCompletionExpr *E) {
-  assert(P.Tok.is(tok::code_complete));
-  Kind = CompletionKind::ForEachSequence;
-  CurDeclContext = P.CurDeclContext;
-  CodeCompleteTokenExpr = E;
-}
-
 void CodeCompletionCallbacksImpl::completePostfixExpr(Expr *E, bool hasSpace) {
   assert(P.Tok.is(tok::code_complete));
 

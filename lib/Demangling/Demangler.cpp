@@ -140,31 +140,6 @@ namespace swift {
 namespace Demangle {
 
 //////////////////////////////////
-// Public utility functions    //
-//////////////////////////////////
-
-int getManglingPrefixLength(const char *mangledName) {
-  // Check for the swift-4 prefix
-  if (mangledName[0] == '_' && mangledName[1] == 'T' && mangledName[2] == '0')
-    return 3;
-
-  // Check for the swift > 4 prefix
-  unsigned Offset = (mangledName[0] == '_' ? 1 : 0);
-  if (mangledName[Offset] == '$' && mangledName[Offset + 1] == 'S')
-    return Offset + 2;
-
-  return 0;
-}
-
-bool isSwiftSymbol(const char *mangledName) {
-  // The old mangling.
-  if (mangledName[0] == '_' && mangledName[1] == 'T')
-    return true;
-
-  return getManglingPrefixLength(mangledName) != 0;
-}
-
-//////////////////////////////////
 // Node member functions        //
 //////////////////////////////////
 
