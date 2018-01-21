@@ -12,11 +12,10 @@
 
 #if os(OSX) || os(iOS) || os(watchOS) || os(tvOS)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
 import Glibc
-#elseif os(Cygwin)
-import Newlib
-#elseif MINGW
+#elseif os(Windows)
+#if MINGW
 import MinGWCrt
 #endif
 
@@ -101,10 +100,10 @@ public func _stdlib_pthread_barrier_destroy(
     // FIXME: leaking memory.
     return -1
   }
-  barrier.pointee.cond!.deinitialize()
-  barrier.pointee.cond!.deallocate(capacity: 1)
-  barrier.pointee.mutex!.deinitialize()
-  barrier.pointee.mutex!.deallocate(capacity: 1)
+  barrier.pointee.cond!.deinitialize(count: 1)
+  barrier.pointee.cond!.deallocate()
+  barrier.pointee.mutex!.deinitialize(count: 1)
+  barrier.pointee.mutex!.deallocate()
   return 0
 }
 

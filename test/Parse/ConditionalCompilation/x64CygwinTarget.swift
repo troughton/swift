@@ -5,3 +5,4 @@ class C {}
 var x = C()
 #endif
 var y = x
+

@@ -39,7 +39,7 @@ static std::vector<StringRef> sortSymbols(llvm::StringSet<> &symbols) {
 }
 
 bool swift::writeTBD(ModuleDecl *M, bool hasMultipleIRGenThreads,
-                     bool silSerializeWitnessTables, StringRef OutputFilename,
+                     StringRef OutputFilename,
                      StringRef installName) {
   std::error_code EC;
   llvm::raw_fd_ostream OS(OutputFilename, EC, llvm::sys::fs::F_None);
@@ -49,8 +49,7 @@ bool swift::writeTBD(ModuleDecl *M, bool hasMultipleIRGenThreads,
     return true;
   }
 
-  writeTBDFile(M, OS, hasMultipleIRGenThreads, silSerializeWitnessTables,
-               installName);
+  writeTBDFile(M, OS, hasMultipleIRGenThreads, installName);
 
   return false;
 }
@@ -123,8 +122,7 @@ bool swift::validateTBD(ModuleDecl *M, llvm::Module &IRModule,
                         bool silSerializeWitnessTables,
                         bool diagnoseExtraSymbolsInTBD) {
   llvm::StringSet<> symbols;
-  enumeratePublicSymbols(M, symbols, hasMultipleIRGenThreads,
-                         silSerializeWitnessTables);
+  enumeratePublicSymbols(M, symbols, hasMultipleIRGenThreads);
 
   return validateSymbolSet(M->getASTContext().Diags, symbols, IRModule,
                            diagnoseExtraSymbolsInTBD);
@@ -135,8 +133,7 @@ bool swift::validateTBD(FileUnit *file, llvm::Module &IRModule,
                         bool silSerializeWitnessTables,
                         bool diagnoseExtraSymbolsInTBD) {
   llvm::StringSet<> symbols;
-  enumeratePublicSymbols(file, symbols, hasMultipleIRGenThreads,
-                         silSerializeWitnessTables);
+  enumeratePublicSymbols(file, symbols, hasMultipleIRGenThreads);
 
   return validateSymbolSet(file->getParentModule()->getASTContext().Diags,
                            symbols, IRModule, diagnoseExtraSymbolsInTBD);

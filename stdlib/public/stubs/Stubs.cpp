@@ -26,44 +26,24 @@
 #define NOMINMAX
 #include <windows.h>
 #else
-#include <sys/resource.h>
+#if !defined(__HAIKU__)
 #include <sys/errno.h>
+#else
+#include <errno.h>
+#endif
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 #include <climits>
+#include <clocale>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#if defined(__CYGWIN__)
-#include <iostream>
+#if defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
 #include <sstream>
 #include <cmath>
-#define fmodl(lhs, rhs) std::fmod(lhs, rhs)
-#elif defined(_WIN32)
-#include <iostream>
-#include <sstream>
-#include <cmath>
-#define fmodl(lhs, rhs) std::fmod(lhs, rhs)
-#include <locale.h>
-typedef _locale_t locale_t;
-#define strtod_l _strtod_l
-#if defined(_MSC_VER)
-#define strtof_l _strtof_l
-#define strtold_l _strtold_l
-#elif defined(__MINGW32__)
-static float swift_strtof_l(const char *nptr, char **endptr, locale_t loc) {
-  return _strtod_l(nptr, endptr, loc);
-}
-static long double swift_strtold_l(const char *nptr,
-                                   char **endptr,
-                                   locale_t loc) {
-  return _strtod_l(nptr, endptr, loc);
-}
-#define strtof_l swift_strtof_l
-#define strtold_l swift_strtold_l
-#endif
 #elif defined(__ANDROID__)
 // Android's libc implementation Bionic currently only supports the "C" locale
 // (https://android.googlesource.com/platform/bionic/+/ndk-r11c/libc/bionic/locale.cpp#40).
@@ -84,6 +64,8 @@ static long double swift_strtold_l(const char *nptr,
 #define strtod_l swift_strtod_l
 #define strtof_l swift_strtof_l
 #define strtold_l swift_strtold_l
+#elif defined(__linux__)
+#include <locale.h>
 #else
 #include <xlocale.h>
 #endif
@@ -94,6 +76,7 @@ static long double swift_strtold_l(const char *nptr,
 #include "swift/Runtime/Debug.h"
 #include "swift/Basic/Lazy.h"
 
+#include "../SwiftShims/LibcShims.h"
 #include "../SwiftShims/RuntimeShims.h"
 #include "../SwiftShims/RuntimeStubs.h"
 
@@ -168,7 +151,7 @@ static inline locale_t getCLocale() {
   // as C locale.
   return nullptr;
 }
-#elif defined(__CYGWIN__)
+#elif defined(__CYGWIN__) || defined(__HAIKU__)
 // In Cygwin, getCLocale() is not used.
 #elif defined(_WIN32)
 typedef _locale_t (*CreateLocaleFuncPtr)(int category, const char *locale);
@@ -210,7 +193,7 @@ static locale_t getCLocale() {
 
 #if defined(__APPLE__)
 #define swift_snprintf_l snprintf_l
-#elif defined(__CYGWIN__) || defined(_WIN32)
+#elif defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
 // In Cygwin, swift_snprintf_l() is not used.
 #else
 static int swift_snprintf_l(char *Str, size_t StrSize, locale_t Locale,
@@ -243,7 +226,7 @@ static uint64_t swift_floatingPointToString(char *Buffer, size_t BufferLength,
     Precision = std::numeric_limits<T>::max_digits10;
   }
 
-#if defined(__CYGWIN__) || defined(_WIN32)
+#if defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
   // Cygwin does not support uselocale(), but we can use the locale feature 
   // in stringstream object.
   std::ostringstream ValueStream;
@@ -311,7 +294,8 @@ uint64_t swift_float80ToString(char *Buffer, size_t BufferLength,
 ///
 /// \returns Size of character data returned in \c LinePtr, or -1
 /// if an error occurred, or EOF was reached.
-ssize_t swift::swift_stdlib_readLine_stdin(unsigned char **LinePtr) {
+swift::__swift_ssize_t
+swift::swift_stdlib_readLine_stdin(unsigned char **LinePtr) {
 #if defined(_WIN32)
   if (LinePtr == nullptr)
     return -1;
@@ -361,21 +345,6 @@ ssize_t swift::swift_stdlib_readLine_stdin(unsigned char **LinePtr) {
   size_t Capacity = 0;
   return getline((char **)LinePtr, &Capacity, stdin);
 #endif
-}
-
-SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-float _swift_fmodf(float lhs, float rhs) {
-    return fmodf(lhs, rhs);
-}
-
-SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-double _swift_fmod(double lhs, double rhs) {
-    return fmod(lhs, rhs);
-}
-
-SWIFT_CC(swift) SWIFT_RUNTIME_STDLIB_INTERFACE
-long double _swift_fmodl(long double lhs, long double rhs) {
-    return fmodl(lhs, rhs);
 }
 
 
@@ -504,7 +473,11 @@ static bool swift_stringIsSignalingNaN(const char *nptr) {
   return strcasecmp(nptr, "snan") == 0;
 }
 
+<<<<<<< HEAD
 #if defined(__CYGWIN__)
+=======
+#if defined(__CYGWIN__) || defined(_WIN32) || defined(__HAIKU__)
+>>>>>>> swift-4.1-branch
 // Cygwin does not support uselocale(), but we can use the locale feature 
 // in stringstream object.
 template <typename T>

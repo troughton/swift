@@ -18,13 +18,6 @@ if(SWIFT_RUNTIME_ENABLE_LEAK_CHECKER)
   set(swift_runtime_leaks_sources Leaks.mm)
 endif()
 
-if(SWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS)
-  list(APPEND swift_runtime_compile_flags
-    "-DSWIFT_RUNTIME_ENABLE_COW_EXISTENTIALS=1")
-endif()
-
-set(section_magic_compile_flags ${swift_runtime_compile_flags})
-
 list(APPEND swift_runtime_compile_flags
      "-D__SWIFT_CURRENT_DYLIB=swiftCore")
 
@@ -38,6 +31,7 @@ set(swift_runtime_objc_sources
 
 set(swift_runtime_sources
     AnyHashableSupport.cpp
+    Array.cpp
     Casting.cpp
     CygwinPort.cpp
     Demangle.cpp
@@ -62,6 +56,7 @@ set(swift_runtime_sources
     ProtocolConformance.cpp
     RefCount.cpp
     RuntimeEntrySymbols.cpp
+    RuntimeInvocationsTracking.cpp
     "${SWIFT_SOURCE_DIR}/lib/Demangling/OldDemangler.cpp"
     "${SWIFT_SOURCE_DIR}/lib/Demangling/Demangler.cpp"
     "${SWIFT_SOURCE_DIR}/lib/Demangling/NodePrinter.cpp"
@@ -71,20 +66,19 @@ set(swift_runtime_sources
 
 # Acknowledge that the following sources are known.
 set(LLVM_OPTIONAL_SOURCES
-#    swift_sections.S
     MutexPThread.cpp
     MutexWin32.cpp
     CygwinPort.cpp
-    ImageInspectionInit.cpp
     ImageInspectionELF.cpp
-    ImageInspectionStatic.cpp
     StaticBinaryELF.cpp
+    SwiftRT-ELF.cpp
     ${swift_runtime_sources}
     ${swift_runtime_objc_sources}
     ${swift_runtime_leaks_sources})
 
 set(swift_runtime_library_compile_flags ${swift_runtime_compile_flags})
 list(APPEND swift_runtime_library_compile_flags -DswiftCore_EXPORTS)
+list(APPEND swift_runtime_library_compile_flags -I${SWIFT_SOURCE_DIR}/include)
 
 set(sdk "${SWIFT_HOST_VARIANT_SDK}")
 if(SWIFT_BUILD_STATIC_STDLIB AND "${sdk}" STREQUAL "LINUX")
@@ -93,24 +87,12 @@ if(SWIFT_BUILD_STATIC_STDLIB AND "${sdk}" STREQUAL "LINUX")
   string(TOLOWER "${sdk}" lowercase_sdk)
 
   # These two libraries are only used with the static swiftcore
-  add_swift_library(swiftImageInspectionStatic STATIC
-    ImageInspectionStatic.cpp
-    StaticBinaryELF.cpp
-    C_COMPILE_FLAGS ${swift_runtime_library_compile_flags}
-    LINK_FLAGS ${swift_runtime_linker_flags})
-  set_target_properties(swiftImageInspectionStatic PROPERTIES
-    ARCHIVE_OUTPUT_DIRECTORY "${SWIFTSTATICLIB_DIR}/${lowercase_sdk}")
-
   add_swift_library(swiftImageInspectionShared STATIC
     ImageInspectionELF.cpp
     C_COMPILE_FLAGS ${swift_runtime_library_compile_flags}
     LINK_FLAGS ${swift_runtime_linker_flags})
   set_target_properties(swiftImageInspectionShared PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${SWIFTSTATICLIB_DIR}/${lowercase_sdk}")
-
-  swift_install_in_component(stdlib
-    TARGETS swiftImageInspectionStatic swiftImageInspectionShared
-    DESTINATION "lib/swift_static/${lowercase_sdk}")
 
   # Generate the static-executable-args.lnk file used for ELF systems (eg linux)
   set(linkfile "${lowercase_sdk}/static-executable-args.lnk")
@@ -148,35 +130,48 @@ add_swift_library(swiftRuntime OBJECT_LIBRARY TARGET_LIBRARY
 set(ELFISH_SDKS)
 foreach(sdk ${SWIFT_CONFIGURED_SDKS})
   if("${SWIFT_SDK_${sdk}_OBJECT_FORMAT}" STREQUAL "ELF")
-    list(APPEND ELFISH_SDKS "${sdk}")
+    list(APPEND ELFISH_SDKS ${sdk})
   endif()
 endforeach()
 
-# Windows including MinGW does not need the begin, end sections.
-if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Windows")
-elseif ("${CMAKE_SYSTEM_NAME}" STREQUAL "CYGWIN")
-else()
-  add_swift_library(section_magic_loader OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
-      ImageInspectionInit.cpp
-      C_COMPILE_FLAGS ${section_magic_compile_flags}
-      TARGET_SDKS "${ELFISH_SDKS}"
-      LINK_FLAGS ${swift_runtime_linker_flags}
-      INSTALL_IN_COMPONENT never_install)
-  add_swift_library(section_magic_begin OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
-      swift_sections.S
-      C_COMPILE_FLAGS ${section_magic_compile_flags} "-DSWIFT_BEGIN"
-      TARGET_SDKS "${ELFISH_SDKS}"
-      LINK_FLAGS ${swift_runtime_linker_flags}
-      INSTALL_IN_COMPONENT never_install)
-  add_swift_library(section_magic_end OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
-      swift_sections.S
-      C_COMPILE_FLAGS ${section_magic_compile_flags} "-DSWIFT_END"
-      LINK_FLAGS ${swift_runtime_linker_flags}
-      TARGET_SDKS "${ELFISH_SDKS}"
-      INSTALL_IN_COMPONENT never_install)
-endif()
+add_swift_library(swiftImageRegistrationObject
+                  OBJECT_LIBRARY IS_STDLIB IS_STDLIB_CORE
+                  SwiftRT-ELF.cpp
+                  C_COMPILE_FLAGS ${SWIFT_RUNTIME_CORE_CXX_FLAGS}
+                  LINK_FLAGS ${SWIFT_RUNTIME_CORE_LINK_FLAGS}
+                  TARGET_SDKS ${ELFISH_SDKS}
+                  INSTALL_IN_COMPONENT none)
 
+foreach(sdk ${SWIFT_CONFIGURED_SDKS})
+  foreach(arch ${SWIFT_SDK_${sdk}_ARCHITECTURES})
+    set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
+    set(arch_suffix "${SWIFT_SDK_${sdk}_LIB_SUBDIR}-${arch}")
 
-set(object_target_list)
+    if("${SWIFT_SDK_${sdk}_OBJECT_FORMAT}" STREQUAL "ELF")
+      # TODO(compnerd) switch to the generator expression when cmake is upgraded
+      # to a version which supports it.
+      # set(swiftrtObject "$<TARGET_OBJECTS:swiftImageRegistrationObject-${arch_suffix}>")
+      set(swiftrtObject ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/swiftImageRegistrationObject-${arch_suffix}.dir/SwiftRT-ELF.cpp${CMAKE_C_OUTPUT_EXTENSION})
+      set(swiftrtPath "${SWIFTLIB_DIR}/${arch_subdir}/swiftrt${CMAKE_C_OUTPUT_EXTENSION}")
 
-add_custom_target(section_magic ALL DEPENDS ${object_target_list})
+      add_custom_command_target(swiftImageRegistration-${arch_suffix}
+                                COMMAND
+                                  "${CMAKE_COMMAND}" -E copy "${swiftrtObject}" "${swiftrtPath}"
+                                OUTPUT
+                                  "${swiftrtPath}"
+                                DEPENDS
+                                  "${swiftrtObject}")
+      swift_install_in_component(stdlib
+                                 FILES
+                                   "${swiftrtPath}"
+                                 DESTINATION
+                                   "lib/swift/${arch_subdir}")
+      add_dependencies(swift-stdlib-${arch_suffix} ${swiftImageRegistration-${arch_suffix}})
+
+      add_custom_target(swiftImageRegistration-${arch_suffix}
+                        ALL DEPENDS
+                          ${swiftImageRegistration-${arch_suffix}})
+    endif()
+  endforeach()
+endforeach()
+

@@ -41,12 +41,10 @@ import SwiftPrivateLibcExtras
 import SwiftPrivatePthreadExtras
 #if os(OSX) || os(iOS)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
+#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android) || os(Cygwin) || os(Haiku)
 import Glibc
-#elseif os(Cygwin)
-import Newlib
 #elseif MINGW
-import LegacyMsvcrt
+import MinGWCrt
 #endif
 
 #if _runtime(_ObjC)

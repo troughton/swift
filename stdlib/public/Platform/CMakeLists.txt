@@ -2,7 +2,6 @@ set(swift_platform_name)
 set(swift_platform_flags)
 set(swift_platform_sources
     Platform.swift
-    Misc.c
     TiocConstants.swift
     tgmath.swift.gyb)
 
@@ -23,7 +22,7 @@ add_swift_library(swiftGlibc ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
 
     SWIFT_COMPILE_FLAGS "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
     LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
-    TARGET_SDKS ANDROID FREEBSD LINUX
+    TARGET_SDKS ANDROID CYGWIN FREEBSD LINUX HAIKU
     DEPENDS glibc_modulemap)
 
 add_swift_library(swiftMSVCRT ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
@@ -33,15 +32,6 @@ add_swift_library(swiftMSVCRT ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
     SWIFT_COMPILE_FLAGS "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
     LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
     TARGET_SDKS WINDOWS)
-
-add_swift_library(swiftNewlib ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
-    Newlib.swift
-    ${swift_platform_sources}
-
-    SWIFT_COMPILE_FLAGS "${SWIFT_RUNTIME_SWIFT_COMPILE_FLAGS}"
-    LINK_FLAGS "${SWIFT_RUNTIME_SWIFT_LINK_FLAGS}"
-    TARGET_SDKS CYGWIN
-    DEPENDS newlib_modulemap)
 
 set(MINGW_SYSROOT "c:/msys64/mingw64")
 add_swift_library(swiftMinGWCrt ${SWIFT_STDLIB_LIBRARY_BUILD_TYPES} IS_SDK_OVERLAY
@@ -57,7 +47,13 @@ set(glibc_modulemap_target_list)
 foreach(sdk ${SWIFT_SDKS})
   if(NOT "${sdk}" STREQUAL "LINUX" AND
      NOT "${sdk}" STREQUAL "FREEBSD" AND
+<<<<<<< HEAD
      NOT "${sdk}" STREQUAL "ANDROID")
+=======
+     NOT "${sdk}" STREQUAL "ANDROID" AND
+     NOT "${sdk}" STREQUAL "CYGWIN" AND
+     NOT "${sdk}" STREQUAL "HAIKU")
+>>>>>>> swift-4.1-branch
     continue()
   endif()
 
@@ -65,17 +61,27 @@ foreach(sdk ${SWIFT_SDKS})
     set(arch_subdir "${SWIFT_SDK_${sdk}_LIB_SUBDIR}/${arch}")
     set(module_dir "${SWIFTLIB_DIR}/${arch_subdir}")
 
-    # Determine the location of glibc headers based on the target.
-    set(GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH "/usr/include")
-    set(GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH ${GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH})
+    if("${sdk}" STREQUAL "HAIKU")
+      # Haiku doesn't have /usr/include, instead the headers are located
+      # at /system/develop/headers.
+      set(GLIBC_INCLUDE_PATH "/system/develop/headers/posix")
+      set(GLIBC_ARCH_INCLUDE_PATH "/system/develop/headers/posix")
+      set(GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH "/system/develop/headers/")
+    else()
+      # Determine the location of glibc headers based on the target.
+      set(GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH "/usr/include")
+      set(GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH ${GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH})
+    endif()
 
     # Some SDKs place their headers in architecture-specific subfolders.
     if((${sdk} STREQUAL "LINUX" OR ${sdk} STREQUAL "FREEBSD") AND CMAKE_LIBRARY_ARCHITECTURE)
       set(GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH "${GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH}/${CMAKE_LIBRARY_ARCHITECTURE}")
     endif()
 
-    set(GLIBC_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH}")
-    set(GLIBC_ARCH_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH}")
+    if(NOT "${sdk}" STREQUAL "HAIKU")
+      set(GLIBC_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_INCLUDE_PATH}")
+      set(GLIBC_ARCH_INCLUDE_PATH "${SWIFT_SDK_${sdk}_PATH}/${GLIBC_SYSROOT_RELATIVE_ARCH_INCLUDE_PATH}")
+    endif()
 
     set(glibc_modulemap_source "glibc.modulemap.gyb")
     set(glibc_modulemap_out "${module_dir}/glibc.modulemap")
