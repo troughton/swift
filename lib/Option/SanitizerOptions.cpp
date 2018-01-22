@@ -138,7 +138,7 @@ OptionSet<SanitizerKind> swift::parseSanitizerArgValues(
     }
   }
 
-  // Sanitizers are only supported on Linux or Darwin.
+  // Check that we're one of the known supported targets for sanitizers.
   if (!(Triple.isOSDarwin() || Triple.isOSLinux() || Triple.isOSWindows())) {
     SmallString<128> b;
     Diags.diagnose(SourceLoc(), diag::error_unsupported_opt_for_target,
