@@ -81,6 +81,8 @@ macro(swift_common_standalone_build_config_llvm product is_cross_compiling)
   # HACK: this ugly tweaking is to prevent the propagation of the flag from LLVM
   # into swift.  The use of this flag pollutes all targets, and we are not able
   # to remove it on a per-target basis which breaks cross-compilation.
+  # Therefore, we always remove it here and then selectively re-add it to the
+  # link flags.
   string(REGEX REPLACE "-Wl,-z,defs" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
 
   set(PACKAGE_VERSION "${LLVM_PACKAGE_VERSION}")
