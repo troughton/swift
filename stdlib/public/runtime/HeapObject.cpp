@@ -248,6 +248,7 @@ BoxPair swift::swift_makeBoxUnique(OpaqueValue *buffer, const Metadata *type,
   }
 }
 
+SWIFT_CC(swift)
 SWIFT_RT_ENTRY_IMPL_VISIBILITY
 extern "C"
 BoxPair SWIFT_RT_ENTRY_IMPL(swift_allocBox)(const Metadata *type) {
