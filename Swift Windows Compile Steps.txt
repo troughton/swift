@@ -10,7 +10,10 @@ export VCToolsInstallDir="/mnt/c/swift-source/VCToolsInstallDir"
 
 Modify CMakeLists.txt to remove Windows archs other than x86_64.
 
-Rename kernel32.Lib to kernel32.lib, and other files as appropriate
+Rename kernel32.Lib to kernel32.lib, and other files as appropriate.
+
+Add SwifTCC to MicrosoftMangle.cpp in Clang
+Remove -fno-rtti from LLVM options.
 
 64-bit:
 
