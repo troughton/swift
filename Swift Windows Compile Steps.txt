@@ -1,0 +1,65 @@
+Download Ubuntu for Windows
+
+Install Swift dependencies via apt
+
+#export UCRTVersion=10.0.15063.0
+export UCRTVersion=10.0.10586.0
+
+export UniversalCRTSdkDir="/mnt/c/swift-source/Windows Kits/10"
+export VCToolsInstallDir="/mnt/c/swift-source/VCToolsInstallDir"
+
+Modify CMakeLists.txt to remove Windows archs other than x86_64.
+
+Rename kernel32.Lib to kernel32.lib, and other files as appropriate
+
+64-bit:
+
+utils/build-script -R --build-swift-static-stdlib --extra-cmake-options=-DCMAKE_AR="/usr/bin/llvm-ar",-DCMAKE_RANLIB="/usr/bin/llvm-ranlib",-DSWIFT_SDKS="LINUX;WINDOWS",-DSWIFT_WINDOWS_ICU_I18N_INCLUDE="/mnt/c/swift-source/windows-icu/include",-DSWIFT_WINDOWS_ICU_UC_INCLUDE="/mnt/c/swift-source/windows-icu/include",-DSWIFT_WINDOWS_ICU_I18N="/mnt/c/swift-source/windows-icu/lib64/icuin.lib",-DSWIFT_WINDOWS_ICU_UC="/mnt/c/swift-source/windows-icu/lib64/icuuc.lib"
+
+/usr/bin/cmake --build /mnt/c/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64 -- -j8 swift-stdlib-windows-x86_64
+
+Add clang_rt.builtins lib from Windows Clang installation.
+
+
+For static linking: go to Visibility.h and comment out dllimport.
+Disable irgen::useDllStorage() unconditionally.
+
+Build Swift (ignoring the last failures of the dynamically linked core libs). Run the build commands a few times and stop when it keeeps hitting the same point.
+Then, rename .a files to .lib files. **May also need to hex-editor .pdata to .qdata in swiftCore and ONoneSupport.**
+Possibly generate a new swiftCore.lib by linking the generated one statically with libicuuc and libicuin.
+Need to use a modified version of lld-link that allows multiple definitions.
+
+
+# To Build Swift code:
+
+Run build command: 
+
+```
+swiftc -target x86_64-unknown-windows-msvc -use-ld=lld main.swift -o SwiftTest.exe
+swiftc -static-stdlib -target x86_64-unknown-windows-msvc -use-ld=lld main.swift -o SwiftTest.exe
+
+swiftc -static-stdlib -target x86_64-unknown-windows-msvc -use-ld=lld main.swift -o SwiftTest.exe -Xlinker -L/mnt/c/swift-source/windows-icu/lib64 -Xlinker -licuuc -Xlinker -licuin
+```
+
+Make sure environment variables are set.
+
+ Copy Swift and ICU DLLs to program directory.
+ 
+# Miscellaneous commands.
+
+lib /out:newSwiftCore.lib swiftCore.lib "C:\swift-source\windows-icu\lib64\icuuc.lib" C:\swift-source\windows-icu\lib64\icuin.lib
+
+/mnt/c/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/bin/swift -frontend -c -primary-file main.swift -target x86_64-unknown-windows-msvc -disable-objc-interop -color-diagnostics -module-name SwiftTest -o SwiftTest.o
+
+/usr/bin/clang++ -fuse-ld=lld -target x86_64-unknown-windows-msvc -L /mnt/c/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift_static/windows/x86_64 -Wl,/MERGE:.rdata=.rodata -Xlinker /force -Wl,/NODEFAULTLIB:libcmt,msvcrtd.lib -Xlinker /IGNORE:4006,4049,4217 SwiftTest.o -o SwiftTest.exe
+
+clang++ -target x86_64-unknown-windows-msvc -L C:/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift_static/windows/x86_64 -Wl,/MERGE:.rdata=.rodata -Xlinker /FORCE:MULTIPLE -Wl,/NODEFAULTLIB:libcmt,msvcrtd.lib -Xlinker /IGNORE:4006,4049,4217 SwiftTest.o -o SwiftTest.exe
+
+clang++ -target x86_64-unknown-windows-msvc -L C:/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift_static/windows/x86_64 -Xlinker /MERGE:.rdata=.rodata -Wl,--allow-multiple-definition -Xlinker /FORCE:MULTIPLE -Wl,/NODEFAULTLIB:libcmt,msvcrtd.lib -Xlinker /IGNORE:4006,4049,4217 -LC:\swift-source\windows-icu\lib64 -licuuc -licuin C:\swift-source\build\Ninja-ReleaseAssert\swift-linux-x86_64\lib\swift\windows\x86_64\swiftrt.o  SwiftTest.o -o SwiftTest.exe
+
+
+
+"/mnt/c/Program Files/LLVM/bin/clang++" -target x86_64-unknown-windows-msvc -L C:/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift_static/windows/x86_64 -Xlinker /MERGE:.rdata=.rodata -Wl,--allow-multiple-definition -Xlinker /FORCE:MULTIPLE -Wl,/NODEFAULTLIB:libcmt,msvcrtd.lib -Xlinker /IGNORE:4006,4049,4217 -LC:\swift-source\windows-icu\lib64 -licuuc -licuin C:\swift-source\build\Ninja-ReleaseAssert\swift-linux-x86_64\lib\swift\windows\x86_64\swiftrt.o  SwiftTest.o -o SwiftTest.exe
+
+
+/usr/bin/clang++ -fuse-ld=lld -target x86_64-unknown-windows-msvc -L /mnt/c/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift_static/windows/x86_64 -Wl,/MERGE:.rdata=.rodata -Xlinker /force -Wl,/NODEFAULTLIB:libcmt,msvcrtd.lib -Xlinker /IGNORE:4006,4049,4217 /mnt/c/swift-source/build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift/windows/x86_64/swiftrt.o SwiftTest.o -L/mnt/c/swift-source/windows-icu/lib64 -licuuc -licuin -o SwiftTest.exe

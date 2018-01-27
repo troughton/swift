@@ -28,7 +28,7 @@ using namespace irgen;
 using namespace Mangle;
 
 bool swift::irgen::useDllStorage(const llvm::Triple &triple) {
-  return triple.isOSBinFormatCOFF() && !triple.isOSCygMing();
+  return false; //triple.isOSBinFormatCOFF() && !triple.isOSCygMing();
 }
 
 UniversalLinkageInfo::UniversalLinkageInfo(IRGenModule &IGM)
