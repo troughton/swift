@@ -1581,18 +1581,39 @@ toolchains::Windows::constructInvocation(const LinkJobAction &job,
     Arguments.push_back(context.Args.MakeArgString(Target));
   }
 
+
   SmallString<128> SharedRuntimeLibPath;
   getRuntimeLibraryPath(SharedRuntimeLibPath, context.Args, *this);
-
-  // Add the runtime library link path, which is platform-specific and found
-  // relative to the compiler.
+    
+  // Link the standard library.
   Arguments.push_back("-L");
-  Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/"
-                          + getTriple().getArchName()));
+  if (context.Args.hasFlag(options::OPT_static_stdlib,
+                            options::OPT_no_static_stdlib,
+                            false)) {
+    SmallString<128> StaticRuntimeLibPath;
+    getRuntimeStaticLibraryPath(StaticRuntimeLibPath, context.Args, *this);
+    
+    // Since Windows has separate libraries per architecture, link against the
+    // architecture specific version of the static library.
+    Arguments.push_back(context.Args.MakeArgString(StaticRuntimeLibPath + "/"
+                                                    + getTriple().getArchName()));
 
+    Arguments.push_back("-Xlinker");
+    Arguments.push_back("/NODEFAULTLIB:libcmt");
+  } else {
+    Arguments.push_back(context.Args.MakeArgString(SharedRuntimeLibPath + "/"
+                          + getTriple().getArchName()));
+  }
+
+  SmallString<128> swiftrtPath = SharedRuntimeLibPath;
+  llvm::sys::path::append(swiftrtPath,
+                          swift::getMajorArchitectureName(getTriple()));
+  llvm::sys::path::append(swiftrtPath, "swiftrt.o");
+  Arguments.push_back(context.Args.MakeArgString(swiftrtPath));
+    
   addPrimaryInputsOfType(Arguments, context.Inputs, types::TY_Object);
   addInputsOfType(Arguments, context.InputActions, types::TY_Object);
-
+    
   for (const Arg *arg : context.Args.filtered(options::OPT_F,
                                               options::OPT_Fsystem)) {
     if (arg->getOption().matches(options::OPT_Fsystem))

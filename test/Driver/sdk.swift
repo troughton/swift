@@ -40,7 +40,7 @@
 // WINDOWS: -sdk {{.*}}/Inputs/clang-importer-sdk
 // WINDOWS-NEXT: bin/swift
 // WINDOWS: -sdk {{.*}}/Inputs/clang-importer-sdk
-// WINDOWS: bin/{{.+}} {{.*}}.o{{[ "]}}
+// WINDOWS: bin/{{.+}} {{.*}}swiftrt.o
 // WINDOWS: {{-syslibroot|--sysroot}} {{.*}}/Inputs/clang-importer-sdk
 
 // RUN: %swift_driver -driver-print-jobs -repl -sdk %S/Inputs/nonexistent-sdk 2>&1 | %FileCheck %s --check-prefix=SDKWARNING
