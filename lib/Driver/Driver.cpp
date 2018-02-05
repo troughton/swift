@@ -214,17 +214,19 @@ Driver::buildToolChain(const llvm::opt::InputArgList &ArgList) {
     return llvm::make_unique<toolchains::Darwin>(*this, target);
     break;
   case llvm::Triple::Linux:
-    if (target.isAndroid()) {
+    if (target.isAndroid())
       return llvm::make_unique<toolchains::Android>(*this, target);
-    } else {
+    else
       return llvm::make_unique<toolchains::GenericUnix>(*this, target);
-    }
     break;
   case llvm::Triple::FreeBSD:
     return llvm::make_unique<toolchains::GenericUnix>(*this, target);
     break;
-  case llvm::Triple::Win32:
-    return llvm::make_unique<toolchains::Cygwin>(*this, target);
+  case llvm::Triple::Win32: 
+    if (target.isWindowsCygwinEnvironment())
+      return llvm::make_unique<toolchains::Cygwin>(*this, target);
+    else
+      return llvm::make_unique<toolchains::Windows>(*this, target);
     break;
   case llvm::Triple::Haiku:
     return llvm::make_unique<toolchains::GenericUnix>(*this, target);
