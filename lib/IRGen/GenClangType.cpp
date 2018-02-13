@@ -315,6 +315,15 @@ ClangTypeConverter::reverseBuiltinTypeMapping(IRGenModule &IGM,
   cacheStdlibType(#SWIFT_TYPE_NAME, clang::BuiltinType::CLANG_BUILTIN_KIND);
 #include "swift/ClangImporter/BuiltinMappedTypes.def"
 
+
+  // On 64-bit Windows, no C type is imported as an Int or UInt; CLong is
+  // an Int32, and CLongLong maps to Int64. Therefore, manually add a 
+  // mapping back to a `long long`.
+  if (IGM.Triple.isOSWindows() && IGM.Triple.isArch64Bit()) {
+    cacheStdlibType("UInt", clang::BuiltinType::ULongLong);
+    cacheStdlibType("Int", clang::BuiltinType::LongLong);
+  }
+
   // The above code sets up a bunch of mappings in the cache; just
   // assume that we hit one of them.
   auto it = Cache.find(type);
