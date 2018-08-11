@@ -97,8 +97,10 @@
 
 #  if defined(swiftCore_EXPORTS)
 #   define SWIFT_EXPORT_ATTRIBUTE __declspec(dllexport)
-#  else
+#  elif defined(_USRDLL)
 #   define SWIFT_EXPORT_ATTRIBUTE __declspec(dllimport)
+#  else
+#   define SWIFT_EXPORT_ATTRIBUTE
 #  endif
 
 # endif

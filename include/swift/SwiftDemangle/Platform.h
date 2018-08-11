@@ -30,8 +30,10 @@ extern "C" {
 #   define SWIFT_DEMANGLE_LINKAGE __attribute__((__visibility__("default")))
 # elif defined(__MACH__)
 #   define SWIFT_DEMANGLE_LINKAGE __attribute__((__visibility__("default")))
-# else
+# elif defined(_USRDLL)
 #   define SWIFT_DEMANGLE_LINKAGE __declspec(dllimport)
+# else 
+#   define SWIFT_DEMANGLE_LINKAGE
 # endif
 #endif
 
