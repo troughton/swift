@@ -38,7 +38,15 @@ append("-DLLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1" CMAKE_C_FLAGS CMAKE_CXX_
 
 set(SWIFT_STDLIB_LIBRARY_BUILD_TYPES)
 if(SWIFT_BUILD_DYNAMIC_STDLIB)
-  list(APPEND SWIFT_STDLIB_LIBRARY_BUILD_TYPES SHARED)
+  if(SWIFT_BUILD_STATIC_STDLIB AND "WINDOWS" IN_LIST ${SWIFT_SDKS})
+    # SR-2005: Don't build the shared library. Both the shared and static
+    # libraries build from the same sources, but on Windows shared needs
+    # DLL storage and static does not; therefore, we should ideally
+    # build the standard library sources twice. For now, if the static
+    # stdlib is requested, only build the static variant.
+  else()
+    list(APPEND SWIFT_STDLIB_LIBRARY_BUILD_TYPES SHARED)
+  endif()
 endif()
 if(SWIFT_BUILD_STATIC_STDLIB)
   list(APPEND SWIFT_STDLIB_LIBRARY_BUILD_TYPES STATIC)

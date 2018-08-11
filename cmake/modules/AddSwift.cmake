@@ -1706,15 +1706,15 @@ function(add_swift_library name)
         elseif("${sdk}" STREQUAL "WINDOWS")
           # FIXME(SR2005) static and shared are not mutually exclusive; however
           # since we do a single build of the sources, this doesn't work for
-          # building both simultaneously.  Effectively, only shared builds are
-          # supported on windows currently.
-          if(SWIFTLIB_SHARED)
+          # building both simultaneously. Prioritise static builds since
+          # currently more functionality works with static builds on Windows.
+          if(SWIFTLIB_STATIC)
+            list(APPEND swiftlib_swift_compile_flags_all -D_LIB)
+          elseif(SWIFTLIB_SHARED)
             list(APPEND swiftlib_swift_compile_flags_all -D_USRDLL)
             if(SWIFTLIB_IS_STDLIB_CORE)
               list(APPEND swiftlib_swift_compile_flags_all -DswiftCore_EXPORTS)
             endif()
-          elseif(SWIFTLIB_STATIC)
-            list(APPEND swiftlib_swift_compile_flags_all -D_LIB)
           endif()
         endif()
 
