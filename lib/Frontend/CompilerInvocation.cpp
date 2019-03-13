@@ -502,6 +502,8 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   Opts.EnableObjCInterop =
       Args.hasFlag(OPT_enable_objc_interop, OPT_disable_objc_interop,
                    Target.isOSDarwin());
+  // FIXME: Disabled by default until this is fully baked.
+  Opts.EnableCXXInterop = Args.hasArg(OPT_enable_cxx_interop);
   Opts.EnableSILOpaqueValues |= Args.hasArg(OPT_enable_sil_opaque_values);
 
   Opts.UseDarwinPreStableABIBit =
