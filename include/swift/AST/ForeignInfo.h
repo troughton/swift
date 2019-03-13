@@ -27,6 +27,7 @@ namespace swift {
 struct ForeignInfo {
   ImportAsMemberStatus Self;
   Optional<ForeignErrorConvention> Error;
+  bool HasReferenceSemantics;
 };
 
 } // end namespace swift
