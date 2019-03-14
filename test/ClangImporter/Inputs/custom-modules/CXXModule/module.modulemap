@@ -1,0 +1,3 @@
+module CXXModule {
+    header "BankAccount.h"
+}
