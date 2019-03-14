@@ -3079,6 +3079,11 @@ namespace {
       // gets a memberwise initializer.
       bool hasMemberwiseInitializer = true;
 
+      // If it's a C++ record, don't synthesize default or memberwise
+      // initializers; we'll pick up the constructors declared on the type.
+      // FIXME: But maybe we should still synthesize these in some cases.
+      bool isCXXRecord = isa<clang::CXXRecordDecl>(decl);
+
       if (decl->isUnion()) {
         hasUnreferenceableStorage = true;
 
@@ -3266,6 +3271,8 @@ namespace {
                                       /*wantBody=*/!Impl.hasFinishedTypeChecking());
             ctors.push_back(valueCtor);
           }
+        } else if (auto CD = dyn_cast<ConstructorDecl>(member)) {
+          ctors.push_back(CD);
         } else if (auto MD = dyn_cast<FuncDecl>(member)) {
           methods.push_back(MD);
         }
@@ -3273,12 +3280,12 @@ namespace {
 
       bool hasReferenceableFields = !members.empty();
 
-      if (hasZeroInitializableStorage) {
+      if (hasZeroInitializableStorage && !isCXXRecord) {
         // Add constructors for the struct.
         ctors.push_back(createDefaultConstructor(Impl, result));
       }
 
-      if (hasReferenceableFields && hasMemberwiseInitializer) {
+      if (hasReferenceableFields && hasMemberwiseInitializer && !isCXXRecord) {
         // The default zero initializer suppresses the implicit value
         // constructor that would normally be formed, so we have to add that
         // explicitly as well.
@@ -3673,6 +3680,67 @@ namespace {
 
       DeclName name = importedName.getDeclName();
       return importCXXMethodDecl(decl, name, dc, correctSwiftName);
+    }
+
+    Decl *VisitCXXConstructorDecl(const clang::CXXConstructorDecl *decl) {
+      // TODO: Support copy/move constructors.
+      if (decl->isCopyOrMoveConstructor()) {
+        return nullptr;
+      }
+
+      // Import the name of the function.
+      Optional<ImportedName> correctSwiftName;
+      auto importedName = importFullName(decl, correctSwiftName);
+      if (!importedName)
+        return nullptr;
+
+      auto dc =
+          Impl.importDeclContextOf(decl, importedName.getEffectiveContext());
+      if (!dc)
+        return nullptr;
+
+      bool allowNSUIntegerAsInt =
+          Impl.shouldAllowNSUIntegerAsInt(isInSystemModule(dc), decl);
+
+      DeclName name = importedName.getDeclName();
+      ArrayRef<Identifier> argNames = name.getArgumentNames();
+
+      ParameterList *parameterList = nullptr;
+      if (argNames.size() == 1 && decl->getNumParams() == 0) {
+        // Special case: We need to create an empty first parameter for our
+        // argument label
+        auto *paramDecl =
+            new (Impl.SwiftContext) ParamDecl(
+                VarDecl::Specifier::Default, SourceLoc(), SourceLoc(), argNames.front(),
+                SourceLoc(), argNames.front(), dc);
+        paramDecl->setInterfaceType(Impl.SwiftContext.TheEmptyTupleType);
+        paramDecl->setValidationToChecked();
+
+        parameterList = ParameterList::createWithoutLoc(paramDecl);
+      } else {
+        parameterList = Impl.importFunctionParameterList(
+            dc, decl, {decl->param_begin(), decl->param_end()}, decl->isVariadic(),
+            allowNSUIntegerAsInt, argNames);
+      }
+      if (!parameterList)
+        return nullptr;
+
+      auto result = Impl.createDeclWithClangNode<ConstructorDecl>(
+          decl, AccessLevel::Public, name, /*NameLoc=*/SourceLoc(),
+          OTK_None, /*FailabilityLoc=*/SourceLoc(),
+          /*Throws=*/false, /*ThrowsLoc=*/SourceLoc(), parameterList,
+          /*GenericParams=*/nullptr, dc);
+      result->setInitKind(CtorInitializerKind::Designated);
+      result->setImportAsStaticMember();
+
+      // Set the constructor's type.
+      result->computeType();
+      result->setOverriddenDecls({ });
+      result->setIsObjC(false);
+      result->setIsDynamic(false);
+
+      finishFuncDecl(decl, result);
+      return result;
     }
 
     Decl *VisitFieldDecl(const clang::FieldDecl *decl) {
@@ -7612,7 +7680,7 @@ void ClangImporter::Implementation::importAttributes(
   // Ban CFRelease|CFRetain|CFAutorelease(CFTypeRef) as well as custom ones
   // such as CGColorRelease(CGColorRef).
   if (auto FD = dyn_cast<clang::FunctionDecl>(ClangDecl)) {
-    if (FD->getNumParams() == 1 &&
+    if (FD->getNumParams() == 1 && FD->getDeclName().isIdentifier() &&
          (FD->getName().endswith("Release") ||
           FD->getName().endswith("Retain") ||
           FD->getName().endswith("Autorelease")) &&

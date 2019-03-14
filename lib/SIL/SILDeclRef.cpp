@@ -675,6 +675,8 @@ std::string SILDeclRef::mangle(ManglingKind MKind) const {
   ASTMangler mangler;
 
   // As a special case, Clang functions and globals don't get mangled at all.
+  // TODO: But for C++, we probably should, because we need to support
+  // overloads.
   if (hasDecl()) {
     if (auto clangDecl = getDecl()->getClangDecl()) {
       if (!isForeignToNativeThunk() && !isNativeToForeignThunk()
@@ -690,6 +692,9 @@ std::string SILDeclRef::mangle(ManglingKind MKind) const {
             // FIXME: When we can import C++, use Clang's mangler all the time.
             mangleClangDecl(SS, namedClangDecl, getDecl()->getASTContext());
             return SS.str();
+          } else if (!namedClangDecl->getDeclName().isIdentifier()) {
+            // TODO: This should be something else, like "init"?
+            return namedClangDecl->getNameAsString();
           }
           return namedClangDecl->getName();
         }

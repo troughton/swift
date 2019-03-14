@@ -1397,7 +1397,6 @@ ImportedName NameImporter::importNameImpl(const clang::NamedDecl *D,
   SmallString<16> selectorSplitScratch;
   ArrayRef<const clang::ParmVarDecl *> params;
   switch (D->getDeclName().getNameKind()) {
-  case clang::DeclarationName::CXXConstructorName:
   case clang::DeclarationName::CXXConversionFunctionName:
   case clang::DeclarationName::CXXDestructorName:
   case clang::DeclarationName::CXXLiteralOperatorName:
@@ -1411,9 +1410,16 @@ ImportedName NameImporter::importNameImpl(const clang::NamedDecl *D,
       llvm_unreachable("unhandled C++ interoperability");
     }
 
+  case clang::DeclarationName::CXXConstructorName:
   case clang::DeclarationName::Identifier:
-    // Map the identifier.
-    baseName = D->getDeclName().getAsIdentifierInfo()->getName();
+    if (D->getDeclName().getNameKind()
+        == clang::DeclarationName::CXXConstructorName) {
+      baseName = "init";
+      isInitializer = true;
+    } else {
+      // Map the identifier.
+      baseName = D->getDeclName().getAsIdentifierInfo()->getName();
+    }
 
     if (givenName) {
       if (!givenName.isIdentifier())
