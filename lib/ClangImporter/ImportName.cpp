@@ -1405,7 +1405,11 @@ ImportedName NameImporter::importNameImpl(const clang::NamedDecl *D,
   case clang::DeclarationName::CXXUsingDirective:
   case clang::DeclarationName::CXXDeductionGuideName:
     // Handling these is part of C++ interoperability.
-    llvm_unreachable("unhandled C++ interoperability");
+    if (getContext().LangOpts.EnableCXXInterop) {
+      return ImportedName();
+    } else {
+      llvm_unreachable("unhandled C++ interoperability");
+    }
 
   case clang::DeclarationName::Identifier:
     // Map the identifier.
