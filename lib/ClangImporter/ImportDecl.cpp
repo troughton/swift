@@ -2292,8 +2292,24 @@ namespace {
     }
 
     Decl *VisitNamespaceDecl(const clang::NamespaceDecl *decl) {
-      // FIXME: Implement once Swift has namespaces.
-      return nullptr;
+      Optional<ImportedName> correctSwiftName;
+      auto importedName = importFullName(decl, correctSwiftName);
+      if (!importedName)
+        return nullptr;
+      auto dc =
+          Impl.importDeclContextOf(decl, importedName.getEffectiveContext());
+      if (!dc)
+        return nullptr;
+
+      auto name = importedName.getDeclName().getBaseIdentifier();
+
+      auto result = CXXNamespaceDecl::create(Impl.SwiftContext, decl,
+                                             dc, name,
+                                 Impl.importSourceLoc(decl->getLocation()));
+
+      Impl.ImportedDecls[{decl->getCanonicalDecl(), getVersion()}] = result;
+
+      return result;
     }
 
     Decl *VisitUsingDirectiveDecl(const clang::UsingDirectiveDecl *decl) {
@@ -8097,6 +8113,8 @@ DeclContext *ClangImporter::Implementation::importDeclContextImpl(
     return constructor;
   if (auto destructor = dyn_cast<DestructorDecl>(swiftDecl))
     return destructor;
+  if (auto ns = dyn_cast<CXXNamespaceDecl>(swiftDecl))
+    return ns;
   return nullptr;
 }
 

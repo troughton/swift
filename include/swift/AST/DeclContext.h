@@ -90,7 +90,8 @@ enum class DeclContextKind : unsigned {
   FileUnit,
   GenericTypeDecl,
   ExtensionDecl,
-  Last_DeclContextKind = ExtensionDecl
+  CXXNamespaceDecl,
+  Last_DeclContextKind = CXXNamespaceDecl,
 };
 
 /// Kinds of DeclContexts after deserialization.
@@ -239,6 +240,7 @@ class alignas(1 << DeclContextAlignInBits) DeclContext {
     case DeclContextKind::EnumElementDecl:
     case DeclContextKind::GenericTypeDecl:
     case DeclContextKind::ExtensionDecl:
+    case DeclContextKind::CXXNamespaceDecl:
       return ASTHierarchy::Decl;
     }
     llvm_unreachable("Unhandled DeclContextKind");

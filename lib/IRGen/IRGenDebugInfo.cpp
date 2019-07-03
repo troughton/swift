@@ -542,6 +542,7 @@ private:
     case DeclContextKind::SubscriptDecl:
     case DeclContextKind::EnumElementDecl:
     case DeclContextKind::TopLevelCodeDecl:
+    case DeclContextKind::CXXNamespaceDecl:
       return getOrCreateContext(DC->getParent());
 
     case DeclContextKind::Module:

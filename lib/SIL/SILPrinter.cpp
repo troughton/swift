@@ -204,6 +204,10 @@ static void printFullContext(const DeclContext *Context, raw_ostream &Buffer) {
     // FIXME
     Buffer << "<top level code>";
     return;
+  case DeclContextKind::CXXNamespaceDecl:
+    // FIXME
+    Buffer << "<c++ namespace>";
+    return;
   case DeclContextKind::AbstractFunctionDecl:
     // FIXME
     Buffer << "<abstract function>";

@@ -813,6 +813,7 @@ void DiagnosticEngine::emitDiagnostic(const Diagnostic &diagnostic) {
 
             case DeclContextKind::FileUnit:
             case DeclContextKind::TopLevelCodeDecl:
+            case DeclContextKind::CXXNamespaceDecl:
               break;
 
             case DeclContextKind::ExtensionDecl:

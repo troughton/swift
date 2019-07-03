@@ -1700,6 +1700,10 @@ void Remangler::mangleAnyNominalType(Node *node, EntityContext &ctx) {
   }
 }
 
+void Remangler::mangleCXXNamespace(Node *node, EntityContext &ctx) {
+  mangleAnyNominalType(node, ctx);
+}
+
 void Remangler::mangleStructure(Node *node, EntityContext &ctx) {
   mangleAnyNominalType(node, ctx);
 }

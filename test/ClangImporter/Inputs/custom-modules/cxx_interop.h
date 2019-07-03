@@ -11,3 +11,14 @@ struct Basic {
 };
 
 Basic makeA();
+
+namespace nested_struct_problem {
+
+struct NamespacedStruct {
+  int b;
+};
+
+}  // namespace nested_struct_problem
+
+using NSStruct = nested_struct_problem::NamespacedStruct;
+nested_struct_problem::NamespacedStruct* makeNamespacedStruct();

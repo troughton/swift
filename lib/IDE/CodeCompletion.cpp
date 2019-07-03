@@ -446,6 +446,7 @@ CodeCompletionResult::getCodeCompletionDeclKind(const Decl *D) {
   case DeclKind::PatternBinding:
   case DeclKind::EnumCase:
   case DeclKind::TopLevelCode:
+  case DeclKind::CXXNamespace:
   case DeclKind::IfConfig:
   case DeclKind::PoundDiagnostic:
   case DeclKind::MissingMember:

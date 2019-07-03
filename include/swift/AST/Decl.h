@@ -44,6 +44,10 @@
 #include "llvm/Support/TrailingObjects.h"
 #include <type_traits>
 
+namespace clang {
+class NamespaceDecl;
+}
+
 namespace swift {
   enum class AccessSemantics : unsigned char;
   class AccessorDecl;
@@ -164,7 +168,8 @@ enum class DescriptiveDeclKind : uint8_t {
   MissingMember,
   Requirement,
   OpaqueResultType,
-  OpaqueVarType
+  OpaqueVarType,
+  CXXNamespace
 };
 
 /// Keeps track of stage of circularity checking for the given protocol.
@@ -7146,6 +7151,31 @@ public:
 
   static bool classof(const Decl *D) {
     return D->getKind() == DeclKind::MissingMember;
+  }
+};
+
+/// Represents a namespace imported from c++.
+class CXXNamespaceDecl : public DeclContext, public ValueDecl {
+ public:
+  CXXNamespaceDecl(DeclContext *Parent, DeclName name, SourceLoc NameLoc) :
+    DeclContext(DeclContextKind::CXXNamespaceDecl, Parent),
+    ValueDecl(DeclKind::CXXNamespace, Parent, name, NameLoc) {}
+
+  static CXXNamespaceDecl* create(ASTContext &ctx,
+                                  const clang::NamespaceDecl *decl,
+                                  DeclContext *Parent, DeclName name, SourceLoc NameLoc);
+
+  SourceLoc getStartLoc() const;
+  SourceLoc getLoc() const { return getStartLoc(); }
+  SourceRange getSourceRange() const;
+
+  static bool classof(const Decl *D) {
+    return D->getKind() == DeclKind::CXXNamespace;
+  }
+  static bool classof(const DeclContext *C) {
+    if (auto D = C->getAsDecl())
+      return classof(D);
+    return false;
   }
 };
 

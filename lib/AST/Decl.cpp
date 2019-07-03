@@ -163,6 +163,7 @@ DescriptiveDeclKind Decl::getDescriptiveKind() const {
   TRIVIAL_KIND(Param);
   TRIVIAL_KIND(Module);
   TRIVIAL_KIND(MissingMember);
+  TRIVIAL_KIND(CXXNamespace);
 
    case DeclKind::Enum:
      return cast<EnumDecl>(this)->getGenericParams()
@@ -328,6 +329,7 @@ StringRef Decl::getDescriptiveKindName(DescriptiveDeclKind K) {
   ENTRY(Requirement, "requirement");
   ENTRY(OpaqueResultType, "result");
   ENTRY(OpaqueVarType, "type");
+  ENTRY(CXXNamespace, "c++ namespace");
   }
 #undef ENTRY
   llvm_unreachable("bad DescriptiveDeclKind");
@@ -965,6 +967,7 @@ ImportKind ImportDecl::getBestImportKind(const ValueDecl *VD) {
   case DeclKind::PoundDiagnostic:
   case DeclKind::PrecedenceGroup:
   case DeclKind::MissingMember:
+  case DeclKind::CXXNamespace:
     llvm_unreachable("not a ValueDecl");
 
   case DeclKind::AssociatedType:
@@ -1643,6 +1646,25 @@ SourceRange TopLevelCodeDecl::getSourceRange() const {
   return Body->getSourceRange();
 }
 
+SourceLoc CXXNamespaceDecl::getStartLoc() const {
+  return SourceLoc();
+}
+
+SourceRange CXXNamespaceDecl::getSourceRange() const {
+  return SourceRange();
+}
+
+CXXNamespaceDecl* CXXNamespaceDecl::create(ASTContext &ctx,
+                                           const clang::NamespaceDecl *decl,
+                                           DeclContext *Parent,
+                                           DeclName name, SourceLoc NameLoc) {
+  void *DeclPtr = allocateMemoryForDecl<CXXNamespaceDecl>(
+      ctx, sizeof(CXXNamespaceDecl), true);
+  auto result = ::new (DeclPtr) CXXNamespaceDecl(Parent, name, NameLoc);
+  result->setClangNode(decl);
+  return result;
+}
+
 SourceRange IfConfigDecl::getSourceRange() const {
   return SourceRange(getLoc(), EndLoc);
 }
@@ -2110,6 +2132,7 @@ bool ValueDecl::isInstanceMember() const {
   case DeclKind::PoundDiagnostic:
   case DeclKind::PrecedenceGroup:
   case DeclKind::MissingMember:
+  case DeclKind::CXXNamespace:
     llvm_unreachable("Not a ValueDecl");
 
   case DeclKind::Class:
@@ -2963,6 +2986,9 @@ getAccessScopeForFormalAccess(const ValueDecl *VD,
     if (isa<TopLevelCodeDecl>(resultDC)) {
       return AccessScope(resultDC->getModuleScopeContext(),
                          access == AccessLevel::Private);
+    }
+    if (isa<CXXNamespaceDecl>(resultDC)) {
+      return AccessScope::getPublic();
     }
 
     if (resultDC->isLocalContext() || access == AccessLevel::Private)

@@ -477,6 +477,8 @@ static const Decl *getDeclForContext(const DeclContext *DC) {
     return cast<ExtensionDecl>(DC);
   case DeclContextKind::TopLevelCodeDecl:
     llvm_unreachable("shouldn't serialize the main module");
+  case DeclContextKind::CXXNamespaceDecl:
+    llvm_unreachable("shouldn't serialize namespaces?");
   case DeclContextKind::AbstractFunctionDecl:
     return cast<AbstractFunctionDecl>(DC);
   case DeclContextKind::SubscriptDecl:
@@ -1640,6 +1642,7 @@ static bool shouldSerializeMember(Decl *D) {
   case DeclKind::PrefixOperator:
   case DeclKind::PostfixOperator:
   case DeclKind::TopLevelCode:
+  case DeclKind::CXXNamespace:
   case DeclKind::Extension:
   case DeclKind::Module:
   case DeclKind::PrecedenceGroup:
@@ -1714,6 +1717,7 @@ void Serializer::writeCrossReference(const DeclContext *DC, uint32_t pathLen) {
   case DeclContextKind::AbstractClosureExpr:
   case DeclContextKind::Initializer:
   case DeclContextKind::TopLevelCodeDecl:
+  case DeclContextKind::CXXNamespaceDecl:
   case DeclContextKind::SerializedLocal:
   case DeclContextKind::EnumElementDecl:
     llvm_unreachable("cannot cross-reference this context");
@@ -2064,6 +2068,7 @@ void Serializer::writeDeclContext(const DeclContext *DC) {
     break;
 
   case DeclContextKind::TopLevelCodeDecl:
+  case DeclContextKind::CXXNamespaceDecl:
   case DeclContextKind::AbstractClosureExpr:
   case DeclContextKind::Initializer:
   case DeclContextKind::SerializedLocal:
@@ -3714,6 +3719,10 @@ public:
 
   void visitTopLevelCodeDecl(const TopLevelCodeDecl *) {
     // Top-level code is ignored; external clients don't need to know about it.
+  }
+
+  void visitCXXNamespaceDecl(const CXXNamespaceDecl *) {
+    // C++ namespaces are ignored; external clients don't need to know about it.
   }
 
   void visitImportDecl(const ImportDecl *) {

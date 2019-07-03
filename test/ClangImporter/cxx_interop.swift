@@ -9,3 +9,12 @@ do {
   tmp.a = 3
   tmp.b = nil
 }
+
+// Basic Struct in a namespace
+func takesNamespacedStruct(_ a: UnsafeMutablePointer<NSStruct>) -> Int {
+  return Int(a.pointee.b)
+}
+
+do {
+  let t : Int = takesNamespacedStruct(makeNamespacedStruct()!)
+}

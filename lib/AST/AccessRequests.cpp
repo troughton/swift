@@ -119,6 +119,8 @@ AccessLevelRequest::evaluate(Evaluator &evaluator, ValueDecl *D) const {
   }
   case DeclContextKind::ExtensionDecl:
     return cast<ExtensionDecl>(DC)->getDefaultAccessLevel();
+  case DeclContextKind::CXXNamespaceDecl:
+    assert(false && "Namespace not handled");
   }
   llvm_unreachable("unhandled kind");
 }

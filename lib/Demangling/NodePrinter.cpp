@@ -295,6 +295,7 @@ private:
     case Node::Kind::SILBoxType:
     case Node::Kind::SILBoxTypeWithLayout:
     case Node::Kind::Structure:
+    case Node::Kind::CXXNamespace:
     case Node::Kind::OtherNominalType:
     case Node::Kind::TupleElementName:
     case Node::Kind::Type:
@@ -1135,6 +1136,7 @@ NodePointer NodePrinter::print(NodePointer Node, bool asPrefixContext) {
     return nullptr;
   case Node::Kind::Class:
   case Node::Kind::Structure:
+  case Node::Kind::CXXNamespace:
   case Node::Kind::Enum:
   case Node::Kind::Protocol:
   case Node::Kind::TypeAlias:

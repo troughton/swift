@@ -299,6 +299,7 @@ void ProvidesEmitter::emitTopLevelDecl(const Decl *const D,
 
   case DeclKind::PatternBinding:
   case DeclKind::TopLevelCode:
+  case DeclKind::CXXNamespace:
   case DeclKind::IfConfig:
   case DeclKind::PoundDiagnostic:
     // No action necessary.

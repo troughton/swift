@@ -938,6 +938,7 @@ ExtractCheckResult checkExtractConditions(ResolvedRangeInfo &RangeInfo,
   case swift::DeclContextKind::AbstractFunctionDecl:
   case swift::DeclContextKind::AbstractClosureExpr:
   case swift::DeclContextKind::TopLevelCodeDecl:
+  case swift::DeclContextKind::CXXNamespaceDecl:
     break;
 
   case swift::DeclContextKind::SerializedLocal:

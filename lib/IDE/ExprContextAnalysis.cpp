@@ -51,6 +51,7 @@ void typeCheckContextImpl(DeclContext *DC, SourceLoc Loc) {
   case DeclContextKind::Module:
   case DeclContextKind::SerializedLocal:
   case DeclContextKind::TopLevelCodeDecl:
+  case DeclContextKind::CXXNamespaceDecl:
   case DeclContextKind::EnumElementDecl:
     // Nothing to do for these.
     break;

@@ -278,6 +278,8 @@ protected:
                              ParameterTypeFlags flags,
                              const ValueDecl *forDecl = nullptr);
 
+  void appendCxxContextOf(const clang::NamedDecl *decl);
+
   /// Append a generic signature to the mangling.
   ///
   /// \param sig The generic signature.

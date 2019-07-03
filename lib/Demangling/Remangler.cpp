@@ -474,6 +474,7 @@ void Remangler::mangleAnyNominalType(Node *node) {
     case Node::Kind::Class: return mangleAnyGenericType(node, "C");
     case Node::Kind::OtherNominalType: return mangleAnyGenericType(node, "XY");
     case Node::Kind::TypeAlias: return mangleAnyGenericType(node, "a");
+    case Node::Kind::CXXNamespace: return mangleAnyGenericType(node, "J");
     default:
       unreachable("bad nominal type kind");
   }
@@ -1969,6 +1970,10 @@ void Remangler::mangleOtherNominalType(Node *node) {
 }
 
 void Remangler::mangleStructure(Node *node) {
+  mangleAnyNominalType(node);
+}
+
+void Remangler::mangleCXXNamespace(Node *node) {
   mangleAnyNominalType(node);
 }
 

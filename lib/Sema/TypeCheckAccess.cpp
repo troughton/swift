@@ -456,6 +456,7 @@ public:
   UNINTERESTING(Var) // Handled at the PatternBinding level.
   UNINTERESTING(Destructor) // Always correct.
   UNINTERESTING(Accessor) // Handled by the Var or Subscript.
+  UNINTERESTING(CXXNamespace) // Does not have access control.
 
   /// \see visitPatternBindingDecl
   void checkNamedPattern(const NamedPattern *NP, bool isTypeContext,
@@ -1051,6 +1052,7 @@ public:
   UNINTERESTING(Destructor) // Always correct.
   UNINTERESTING(Accessor) // Handled by the Var or Subscript.
   UNINTERESTING(OpaqueType) // Handled by the Var or Subscript.
+  UNINTERESTING(CXXNamespace) // Does not have access control.
 
   /// If \p PBD declared stored instance properties in a fixed-contents struct,
   /// return said struct.
@@ -1759,6 +1761,7 @@ public:
   UNINTERESTING(Destructor) // Always correct.
   UNINTERESTING(Accessor) // Handled by the Var or Subscript.
   UNINTERESTING(OpaqueType) // TODO
+  UNINTERESTING(CXXNamespace) // Does not have access control.
 
   // Handled at the PatternBinding level; if the pattern has a simple
   // "name: TheType" form, we can get better results by diagnosing the TypeRepr.

@@ -742,6 +742,7 @@ IRGenModule::getAddrOfContextDescriptorForParent(DeclContext *parent,
   case DeclContextKind::SubscriptDecl:
   case DeclContextKind::EnumElementDecl:
   case DeclContextKind::TopLevelCodeDecl:
+  case DeclContextKind::CXXNamespaceDecl:
   case DeclContextKind::Initializer:
   case DeclContextKind::SerializedLocal:
     return {getAddrOfAnonymousContextDescriptor(
@@ -1977,6 +1978,9 @@ void IRGenModule::emitGlobalDecl(Decl *D) {
   case DeclKind::Accessor:
   case DeclKind::Func:
     // Handled in SIL.
+    return;
+
+  case DeclKind::CXXNamespace:
     return;
   
   case DeclKind::TopLevelCode:
@@ -4012,6 +4016,7 @@ void IRGenModule::emitNestedTypeDecls(DeclRange members) {
     switch (member->getKind()) {
     case DeclKind::Import:
     case DeclKind::TopLevelCode:
+    case DeclKind::CXXNamespace:
     case DeclKind::Protocol:
     case DeclKind::Extension:
     case DeclKind::InfixOperator:

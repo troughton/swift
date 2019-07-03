@@ -2221,6 +2221,8 @@ void PrintAST::visitTopLevelCodeDecl(TopLevelCodeDecl *decl) {
   printASTNodes(decl->getBody()->getElements(), /*NeedIndent=*/false);
 }
 
+void PrintAST::visitCXXNamespaceDecl(CXXNamespaceDecl *decl) {}
+
 void PrintAST::visitIfConfigDecl(IfConfigDecl *ICD) {
   if (!Options.PrintIfConfig)
     return;

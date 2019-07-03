@@ -416,6 +416,9 @@ DeclContext::isCascadingContextForLookup(bool functionsAreNonCascading) const {
     // FIXME: Pattern initializers at top-level scope end up here.
     return true;
 
+  case DeclContextKind::CXXNamespaceDecl:
+    return true;
+
   case DeclContextKind::AbstractFunctionDecl:
     if (functionsAreNonCascading)
       return false;
@@ -479,6 +482,8 @@ bool DeclContext::walkContext(ASTWalker &Walker) {
     return cast<ExtensionDecl>(this)->walk(Walker);
   case DeclContextKind::TopLevelCodeDecl:
     return cast<TopLevelCodeDecl>(this)->walk(Walker);
+  case DeclContextKind::CXXNamespaceDecl:
+    return cast<CXXNamespaceDecl>(this)->walk(Walker);
   case DeclContextKind::AbstractFunctionDecl:
     return cast<AbstractFunctionDecl>(this)->walk(Walker);
   case DeclContextKind::SubscriptDecl:
@@ -568,6 +573,7 @@ unsigned DeclContext::printContext(raw_ostream &OS, const unsigned indent,
     break;
   case DeclContextKind::ExtensionDecl:    Kind = "ExtensionDecl"; break;
   case DeclContextKind::TopLevelCodeDecl: Kind = "TopLevelCodeDecl"; break;
+  case DeclContextKind::CXXNamespaceDecl: Kind = "ICXXNamespaceDecl"; break;
   case DeclContextKind::Initializer:      Kind = "Initializer"; break;
   case DeclContextKind::AbstractFunctionDecl:
     Kind = "AbstractFunctionDecl";
@@ -609,6 +615,9 @@ unsigned DeclContext::printContext(raw_ostream &OS, const unsigned indent,
     break;
   case DeclContextKind::TopLevelCodeDecl:
     OS << " line=" << getLineNumber(cast<TopLevelCodeDecl>(this));
+    break;
+  case DeclContextKind::CXXNamespaceDecl:
+    OS << " line=" << getLineNumber(cast<CXXNamespaceDecl>(this));
     break;
   case DeclContextKind::AbstractFunctionDecl: {
     auto *AFD = cast<AbstractFunctionDecl>(this);
@@ -961,6 +970,8 @@ DeclContextKind DeclContext::getContextKind() const {
       return DeclContextKind::EnumElementDecl;
     case DeclKind::Extension:
       return DeclContextKind::ExtensionDecl;
+    case DeclKind::CXXNamespace:
+      return DeclContextKind::CXXNamespaceDecl;
     default:
       llvm_unreachable("Unhandled Decl kind");
     }

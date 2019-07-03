@@ -748,6 +748,7 @@ recur:
         return demangleIdentifier();
       }
 
+    case 'J': return demangleAnyGenericType(Node::Kind::CXXNamespace);
     case 'I': return demangleImplFunctionType();
     case 'K': return createNode(Node::Kind::ThrowsAnnotation);
     case 'L': return demangleLocalIdentifier();

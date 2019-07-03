@@ -2305,6 +2305,10 @@ public:
     llvm_unreachable("should always be type-checked already");
   }
 
+  void visitCXXNamespaceDecl(CXXNamespaceDecl *decl) {
+    llvm_unreachable("TODO: implement namespaces");
+  }
+
   void visitBoundVariable(VarDecl *VD) {
     // WARNING: Anything you put in this function will only be run when the
     // VarDecl is fully type-checked within its own file. It will NOT be run
@@ -3775,6 +3779,7 @@ void TypeChecker::validateDecl(ValueDecl *D) {
   case DeclKind::PatternBinding:
   case DeclKind::EnumCase:
   case DeclKind::TopLevelCode:
+  case DeclKind::CXXNamespace:
   case DeclKind::InfixOperator:
   case DeclKind::PrefixOperator:
   case DeclKind::PostfixOperator:

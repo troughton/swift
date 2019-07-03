@@ -300,6 +300,9 @@ static void doDynamicLookup(VisibleDeclConsumer &Consumer,
 #include "swift/AST/DeclNodes.def"
         llvm_unreachable("not a ValueDecl!");
 
+      // Namespaces cannot be found by dynamic lookup.
+      case DeclKind::CXXNamespace:
+
       // Types cannot be found by dynamic lookup.
       case DeclKind::GenericTypeParam:
       case DeclKind::AssociatedType:

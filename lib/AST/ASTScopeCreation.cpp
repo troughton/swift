@@ -437,6 +437,10 @@ public:
   }
 
 #pragma mark special-case creation
+  ASTScopeImpl *visitCXXNamespaceDecl(swift::CXXNamespaceDecl *d, ASTScopeImpl *p,
+                                     ScopeCreator &scopeCreator) {
+    llvm_unreachable("C++ namespaces are not supported");
+  }
 
   ASTScopeImpl *visitSourceFile(SourceFile *, ASTScopeImpl *, ScopeCreator &) {
     llvm_unreachable("SourceFiles are orphans.");

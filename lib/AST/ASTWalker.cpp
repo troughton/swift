@@ -192,6 +192,11 @@ class Traversal : public ASTVisitor<Traversal, Expr*, Stmt*,
     return false;
   }
 
+  bool visitCXXNamespaceDecl(CXXNamespaceDecl *TLCD) {
+    // No AST representation.
+    return false;
+  }
+
   bool visitIfConfigDecl(IfConfigDecl *ICD) {
     // By default, just visit the elements that are actually
     // injected into the enclosing context.

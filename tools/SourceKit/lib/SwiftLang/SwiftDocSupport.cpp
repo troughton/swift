@@ -418,6 +418,7 @@ static bool initDocEntityInfo(const Decl *D,
     case DeclContextKind::SerializedLocal:
     case DeclContextKind::ExtensionDecl:
     case DeclContextKind::GenericTypeDecl:
+    case DeclContextKind::CXXNamespaceDecl:
       break;
 
     // We report sub-module information only for top-level decls.

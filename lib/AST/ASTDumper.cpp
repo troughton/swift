@@ -720,6 +720,11 @@ namespace {
       PrintWithColorRAII(OS, ParenthesisColor) << ')';
     }
 
+    void visitCXXNamespaceDecl(CXXNamespaceDecl* NSD) {
+      printCommon(NSD, "cxx_namespace");
+      PrintWithColorRAII(OS, ParenthesisColor) << ')';
+    }
+
     void printCommon(ValueDecl *VD, const char *Name,
                      TerminalColor Color = DeclColor) {
       printCommon((Decl*)VD, Name, Color);
@@ -1361,6 +1366,9 @@ void swift::printContext(raw_ostream &os, DeclContext *dc) {
 
   case DeclContextKind::EnumElementDecl:
     printName(os, cast<EnumElementDecl>(dc)->getFullName());
+    break;
+  case DeclContextKind::CXXNamespaceDecl:
+    os << "c++ namespace";
     break;
   }
 }
