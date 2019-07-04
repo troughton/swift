@@ -19,7 +19,10 @@
 #include "../../../stdlib/public/SwiftShims/Visibility.h"
 
 #ifdef __cplusplus
-namespace swift { extern "C" {
+#ifndef __swift__
+namespace swift {
+#endif
+extern "C" {
 #endif
 
 #if SWIFT_CLASS_IS_SWIFT_MASK_GLOBAL_VARIABLE
@@ -37,7 +40,10 @@ SWIFT_RUNTIME_STDLIB_INTERNAL
 int _swift_isBackDeploying();
 
 #ifdef __cplusplus
-}} // extern "C", namespace swift
+} // extern "C"
+#ifndef __swift__
+} // namespace swift
+#endif
 #endif
 
 #endif // defined(__APPLE__) && defined(__MACH__)

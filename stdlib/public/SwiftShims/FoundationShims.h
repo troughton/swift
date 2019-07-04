@@ -30,7 +30,10 @@
 #include "SwiftStdint.h"
 
 #ifdef __cplusplus
-namespace swift { extern "C" {
+#ifndef __swift__
+namespace swift {
+#endif
+extern "C" {
 #endif
 
 typedef struct {
@@ -58,7 +61,10 @@ SWIFT_RUNTIME_STDLIB_API
 _SwiftNSOperatingSystemVersion _swift_stdlib_operatingSystemVersion() __attribute__((const));
 
 #ifdef __cplusplus
-}} // extern "C", namespace swift
+} // extern "C"
+#ifndef __swift__
+} // namespace swift
+#endif
 #endif
 
 #endif // SWIFT_STDLIB_SHIMS_FOUNDATIONSHIMS_H

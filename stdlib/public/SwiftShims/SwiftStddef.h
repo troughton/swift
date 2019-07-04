@@ -37,7 +37,7 @@ typedef __typeof__(_Generic((__swift_size_t)0,                                 \
                             unsigned short : (short)0,                         \
                             unsigned char : (signed char)0)) __swift_ssize_t;
 #elif defined(__cplusplus)
-#if __has_include (<type_traits>)
+#if __has_include (<type_traits>) && !defined(__swift__)
 #include <type_traits>
 using __swift_ssize_t = std::make_signed<__swift_size_t>::type;
 #else

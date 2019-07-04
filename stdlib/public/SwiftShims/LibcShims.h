@@ -28,7 +28,10 @@
 #endif
 
 #ifdef __cplusplus
-namespace swift { extern "C" {
+#ifndef __swift__
+namespace swift {
+#endif
+extern "C" {
 #endif
 
 // This declaration might not be universally correct.
@@ -465,7 +468,10 @@ long double _swift_stdlib_lgammal(long double x) {
 #endif
 
 #ifdef __cplusplus
-}} // extern "C", namespace swift
+} // extern "C"
+#ifndef __swift__
+} // namespace swift
+#endif
 #endif
 
 #if __has_feature(nullability)

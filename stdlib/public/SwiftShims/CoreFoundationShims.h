@@ -23,7 +23,10 @@
 #include "Visibility.h"
 
 #ifdef __cplusplus
-namespace swift { extern "C" {
+#ifndef __swift__
+namespace swift {
+#endif
+extern "C" {
 #endif
 
 #ifdef __OBJC2__
@@ -145,7 +148,10 @@ _swift_stdlib_unsafeAddressOfClass(id _Nonnull obj);
 #endif // __OBJC2__
 
 #ifdef __cplusplus
-}} // extern "C", namespace swift
+} // extern "C"
+#ifndef __swift__
+} // namespace swift
+#endif
 #endif
 
 #endif // SWIFT_STDLIB_SHIMS_COREFOUNDATIONSHIMS_H

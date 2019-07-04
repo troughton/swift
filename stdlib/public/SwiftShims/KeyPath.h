@@ -20,7 +20,9 @@
 #include "SwiftStdint.h"
 
 #ifdef __cplusplus
+#ifndef __swift__
 namespace swift {
+#endif
 extern "C" {
 #endif
 
@@ -117,7 +119,9 @@ static inline const void *_Nonnull __swift_keyPathGenericWitnessTable_addr(void)
 
 #ifdef __cplusplus
 } // extern "C"
+#ifndef __swift__
 } // namespace swift
+#endif
 #endif
 
 #endif // SWIFT_STDLIB_SHIMS_KEYPATH_H

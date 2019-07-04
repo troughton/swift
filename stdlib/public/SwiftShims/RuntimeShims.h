@@ -23,7 +23,10 @@
 #include "Visibility.h"
 
 #ifdef __cplusplus
-namespace swift { extern "C" {
+#ifndef __swift__
+namespace swift {
+#endif
+extern "C" {
 #endif
 
 /// Return an NSString to be used as the Mirror summary of the object
@@ -80,7 +83,10 @@ __swift_size_t _swift_stdlib_getHardwareConcurrency(void);
 #define _swift_MinAllocationAlignment (__swift_size_t) 16
 
 #ifdef __cplusplus
-}} // extern "C", namespace swift
+} // extern "C"
+#ifndef __swift__
+} // namespace swift
+#endif
 #endif
 
 #endif // SWIFT_STDLIB_SHIMS_RUNTIMESHIMS_H

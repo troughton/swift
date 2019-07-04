@@ -105,9 +105,11 @@ static_assert(
     4 * sizeof(__swift_intptr_t) + sizeof(__swift_int64_t),
   "_SwiftSetBodyStorage has unexpected size");
 
+#ifdef __cplusplus
 } // extern "C"
 #ifndef __swift__
 } // namespace swift
+#endif
 #endif
 #endif
 

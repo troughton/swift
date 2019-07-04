@@ -26,7 +26,10 @@
 #endif
 
 #ifdef __cplusplus
-namespace swift { extern "C" {
+#ifndef __swift__
+namespace swift {
+#endif
+extern "C" {
 #endif
 
 SWIFT_RUNTIME_STDLIB_API
@@ -554,7 +557,10 @@ double __swift_stdlib_u_getNumericValue(__swift_stdlib_UChar32 c);
 
 
 #ifdef __cplusplus
-}} // extern "C", namespace swift
+} // extern "C"
+#ifndef __swift__
+} // namespace swift
+#endif
 #endif
 
 #if __has_feature(nullability)
