@@ -3546,6 +3546,10 @@ namespace {
                                  const clang::FunctionDecl *accessor);
 
     Decl *VisitFunctionDecl(const clang::FunctionDecl *decl) {
+      if (auto definition = decl->getDefinition()) {
+        decl = definition;
+      }
+      
       // Import the name of the function.
       Optional<ImportedName> correctSwiftName;
       auto importedName = importFullName(decl, correctSwiftName);
@@ -3670,6 +3674,10 @@ namespace {
     }
 
     Decl *VisitCXXMethodDecl(const clang::CXXMethodDecl *decl) {
+      if (auto definition = decl->getDefinition()) {
+        decl = static_cast<const clang::CXXMethodDecl *>(definition);
+      }
+      
       // Import the name of the function.
       Optional<ImportedName> correctSwiftName;
       auto importedName = importFullName(decl, correctSwiftName);
@@ -3702,6 +3710,10 @@ namespace {
       // TODO: Support copy/move constructors.
       if (decl->isCopyOrMoveConstructor()) {
         return nullptr;
+      }
+      
+      if (auto definition = decl->getDefinition()) {
+        decl = static_cast<const clang::CXXConstructorDecl *>(definition);
       }
 
       // Import the name of the function.
@@ -3952,9 +3964,11 @@ namespace {
       if (!DC)
         return nullptr;
       
-      Decl *SwiftDecl = Impl.importDecl(decl->getUnderlyingDecl(), getActiveSwiftVersion());
-      const TypeDecl *SwiftTypeDecl = dyn_cast<TypeDecl>(SwiftDecl);
+      Decl *SwiftDecl = Impl.importDecl(decl->getTargetDecl(), getActiveSwiftVersion());
+      if (!SwiftDecl)
+        return nullptr;
       
+      const TypeDecl *SwiftTypeDecl = dyn_cast<TypeDecl>(SwiftDecl);
       if (!SwiftTypeDecl)
         return nullptr;
       
