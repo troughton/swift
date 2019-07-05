@@ -749,6 +749,10 @@ OptionalTypeKind importer::getParamOptionality(version::Version swiftVersion,
   // If it's known non-null, use that.
   if (knownNonNull || param->hasAttr<clang::NonNullAttr>())
     return OTK_None;
+      
+  // C++ reference types can't be null.
+  if (param->getType().getTypePtr()->isReferenceType())
+      return OTK_None;
 
   // Check for the 'static' annotation on C arrays.
   if (const auto *DT = dyn_cast<clang::DecayedType>(paramTy))

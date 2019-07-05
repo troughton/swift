@@ -461,7 +461,70 @@ namespace {
     }
 
     ImportResult VisitReferenceType(const clang::ReferenceType *type) {
-      return Type();
+      auto pointeeQualType = type->getPointeeType();
+      auto quals = pointeeQualType.getQualifiers();
+      
+      // Special case for NSZone*, which has its own Swift wrapper.
+      if (const clang::RecordType *pointee =
+          pointeeQualType->getAsStructureType()) {
+        if (pointee && !pointee->getDecl()->isCompleteDefinition() &&
+            pointee->getDecl()->getName() == "_NSZone") {
+          Identifier Id_ObjectiveC = Impl.SwiftContext.Id_ObjectiveC;
+          ModuleDecl *objCModule = Impl.SwiftContext.getLoadedModule(Id_ObjectiveC);
+          Type wrapperTy = Impl.getNamedSwiftType(
+                                                  objCModule,
+                                                  Impl.SwiftContext.getSwiftName(
+                                                                                 KnownFoundationEntity::NSZone));
+          if (wrapperTy)
+            return {wrapperTy, ImportHint::OtherPointer};
+        }
+      }
+      
+      // All other C pointers to concrete types map to
+      // UnsafeMutablePointer<T> or OpaquePointer (FIXME:, except in
+      // parameter position under the pre-
+      // intrinsic-pointer-conversion regime.)
+      
+      // With pointer conversions enabled, map to the normal pointer types
+      // without special hints.
+      Type pointeeType;
+      if (pointeeQualType->isVoidType())
+        pointeeType = Impl.getNamedSwiftType(Impl.getStdlibModule(), "Void");
+      else
+        pointeeType = Impl.importTypeIgnoreIUO(
+                                               pointeeQualType, ImportTypeKind::Pointee, AllowNSUIntegerAsInt,
+                                               Bridgeability::None);
+      
+      // If the pointed-to type is unrepresentable in Swift, or its C
+      // alignment is greater than the maximum Swift alignment, import as
+      // OpaquePointer.
+      if (!pointeeType || Impl.isOverAligned(pointeeQualType)) {
+        auto opaquePointer = Impl.SwiftContext.getOpaquePointerDecl();
+        if (!opaquePointer)
+          return Type();
+        return {opaquePointer->getDeclaredType(),
+          ImportHint::OtherPointer};
+      }
+      
+      if (pointeeQualType->isFunctionType()) {
+        auto funcTy = pointeeType->castTo<FunctionType>();
+        return {
+          FunctionType::get(funcTy->getParams(), funcTy->getResult(),
+                            funcTy->getExtInfo().withRepresentation(
+                                                                    AnyFunctionType::Representation::CFunctionPointer)),
+          ImportHint::CFunctionPointer
+        };
+      }
+      
+      if (quals.hasConst()) {
+        return {pointeeType,ImportHint::None};
+      }
+      
+      // All other mutable pointers map to UnsafeMutablePointer.
+      return {Impl.getNamedSwiftTypeSpecialization(Impl.getStdlibModule(),
+                                                   "UnsafeMutablePointer",
+                                                   pointeeType),
+        ImportHint::OtherPointer};
     }
 
     ImportResult VisitMemberPointer(const clang::MemberPointerType *type) {
