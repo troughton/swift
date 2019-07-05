@@ -161,10 +161,6 @@ def disable_objc_interop :
   Flag<["-"], "disable-objc-interop">,
   HelpText<"Disable Objective-C interop code generation and config directives">;
 
-def enable_cxx_interop :
-  Flag<["-"], "enable-cxx-interop">,
-  HelpText<"Enable C++ interop code generation and config directives">;
-
 def enable_objc_attr_requires_foundation_module :
   Flag<["-"], "enable-objc-attr-requires-foundation-module">,
   HelpText<"Enable requiring uses of @objc to require importing the "
