@@ -1484,6 +1484,8 @@ ASTMangler::getSpecialManglingContext(const ValueDecl *decl,
         hasNameForLinkage = !clangDecl->getDeclName().isEmpty();
       if (hasNameForLinkage) {
         auto *clangDC = clangDecl->getDeclContext();
+//        assert(clangDC->getRedeclContext()->isTranslationUnit() &&
+//               "non-top-level Clang types not supported yet");
         (void)clangDC;
         return ASTMangler::ObjCContext;
       }
@@ -1499,20 +1501,6 @@ ASTMangler::getSpecialManglingContext(const ValueDecl *decl,
   return None;
 }
 
-void ASTMangler::appendCxxContextOf(const clang::NamedDecl *decl) {
-  auto *clangDC = decl->getDeclContext()->getRedeclContext();
-  if (isa<clang::NamespaceDecl>(clangDC)) {
-    auto nsDecl = cast<clang::NamespaceDecl>(clangDC);
-    appendCxxContextOf(nsDecl);
-    appendIdentifier(nsDecl->getName());
-    appendOperator("J");
-    return;
-  }
-  assert(clangDC->isTranslationUnit() &&
-         "non-top-level Clang types not supported yet");
-  appendOperator("So");
-}
-
 /// Mangle the context of the given declaration as a <context.
 /// This is the top-level entrypoint for mangling <context>.
 void ASTMangler::appendContextOf(const ValueDecl *decl) {
@@ -1522,18 +1510,6 @@ void ASTMangler::appendContextOf(const ValueDecl *decl) {
     case ClangImporterContext:
       return appendOperator("SC");
     case ObjCContext:
-      if (isa<TypeDecl>(decl)) {
-        if (auto *clangDecl = cast_or_null<clang::NamedDecl>(decl->getClangDecl())){
-          bool hasNameForLinkage;
-          if (auto *tagDecl = dyn_cast<clang::TagDecl>(clangDecl))
-            hasNameForLinkage = tagDecl->hasNameForLinkage();
-          else
-            hasNameForLinkage = !clangDecl->getDeclName().isEmpty();
-          if (hasNameForLinkage) {
-            return appendCxxContextOf(clangDecl);
-          }
-        }
-      }
       return appendOperator("So");
     }
   }
@@ -1670,7 +1646,8 @@ void ASTMangler::appendContext(const DeclContext *ctx) {
   }
 
   case DeclContextKind::CXXNamespaceDecl:
-    llvm_unreachable("c++ namespaces not supported here");
+    appendCXXNamespace(cast<CXXNamespaceDecl>(ctx));
+    return;
 
   case DeclContextKind::AbstractClosureExpr:
     return appendClosureEntity(cast<AbstractClosureExpr>(ctx));
@@ -1889,6 +1866,28 @@ void ASTMangler::appendAnyGenericType(const GenericTypeDecl *decl) {
     addTypeSubstitution(nominal->getDeclaredType());
   else
     addSubstitution(cast<TypeAliasDecl>(decl));
+}
+
+void ASTMangler::appendCXXNamespace(const CXXNamespaceDecl *decl) {
+  appendContextOf(decl);
+  
+  // Always use Clang names for imported Clang declarations, unless they don't
+  // have one.
+  auto tryAppendClangName = [this, decl]() -> bool {
+    auto namedDecl = getClangDeclForMangling(decl);
+    if (!namedDecl)
+      return false;
+    
+    appendIdentifier(namedDecl->getName());
+    appendOperator("J");
+    
+    return true;
+  };
+  
+  if (!tryAppendClangName()) {
+    appendDeclName(decl);
+    appendOperator("J");
+  }
 }
 
 void ASTMangler::appendFunction(AnyFunctionType *fn, bool isFunctionMangling,

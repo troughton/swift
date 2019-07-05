@@ -259,6 +259,8 @@ protected:
                           bool allowStandardSubstitution = true);
 
   void appendAnyGenericType(const GenericTypeDecl *decl);
+    
+  void appendCXXNamespace(const CXXNamespaceDecl *decl);
 
   void appendFunction(AnyFunctionType *fn, bool isFunctionMangling = false,
                       const ValueDecl *forDecl = nullptr);
@@ -277,8 +279,6 @@ protected:
   void appendTypeListElement(Identifier name, Type elementType,
                              ParameterTypeFlags flags,
                              const ValueDecl *forDecl = nullptr);
-
-  void appendCxxContextOf(const clang::NamedDecl *decl);
 
   /// Append a generic signature to the mangling.
   ///

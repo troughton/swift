@@ -65,6 +65,11 @@ AccessLevelRequest::evaluate(Evaluator &evaluator, ValueDecl *D) const {
 
   DeclContext *DC = D->getDeclContext();
 
+  // C++ Namespaces are always public.
+  if (auto genericParam = dyn_cast<CXXNamespaceDecl>(D)) {
+      return AccessLevel::Public;
+  }
+    
   // Special case for generic parameters; we just give them a dummy
   // access level.
   if (auto genericParam = dyn_cast<GenericTypeParamDecl>(D)) {

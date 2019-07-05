@@ -2319,6 +2319,11 @@ public:
     }
 
     void verifyChecked(ValueDecl *VD) {
+      if (isa<CXXNamespaceDecl>(VD)) {
+        verifyCheckedBase(VD);
+        return;
+      }
+        
       if (VD->getInterfaceType()->hasError()) {
         Out << "checked decl cannot have error type\n";
         VD->dump(Out);

@@ -421,7 +421,9 @@ static bool findNonMembers(TypeChecker &TC,
   for (auto Result : lookupResults) {
     // If we find a member, then all of the results aren't non-members.
     bool IsMember =
-        (Result.getBaseDecl() && !isa<ModuleDecl>(Result.getBaseDecl()));
+        (Result.getBaseDecl()
+         && !isa<ModuleDecl>(Result.getBaseDecl())
+         && !isa<CXXNamespaceDecl>(Result.getBaseDecl()));
     if (IsMember) {
       AllDeclRefs = false;
       if (breakOnMember)

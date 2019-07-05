@@ -3740,7 +3740,7 @@ void TypeChecker::validateDecl(ValueDecl *D) {
   // declarations, but for now, you can make an imported type conform to a
   // protocol with property requirements, which requires synthesizing getters
   // and setters, etc.
-  if (!isa<VarDecl>(D) && !isa<AccessorDecl>(D)) {
+  if (!isa<VarDecl>(D) && !isa<AccessorDecl>(D) && !isa<CXXNamespaceDecl>(D)) {
     assert(isa<SourceFile>(D->getDeclContext()->getModuleScopeContext()) &&
            "Should not validate imported or deserialized declarations");
   }
@@ -3761,6 +3761,8 @@ void TypeChecker::validateDecl(ValueDecl *D) {
     validateExtension(ext);
     if (!ext->hasValidSignature())
       return;
+  } else if (auto ns = dyn_cast<CXXNamespaceDecl>(dc)) {
+      validateDecl(ns);
   }
 
   // Validating the parent may have triggered validation of this declaration,
@@ -3779,7 +3781,6 @@ void TypeChecker::validateDecl(ValueDecl *D) {
   case DeclKind::PatternBinding:
   case DeclKind::EnumCase:
   case DeclKind::TopLevelCode:
-  case DeclKind::CXXNamespace:
   case DeclKind::InfixOperator:
   case DeclKind::PrefixOperator:
   case DeclKind::PostfixOperator:
@@ -3790,6 +3791,7 @@ void TypeChecker::validateDecl(ValueDecl *D) {
     llvm_unreachable("not a value decl");
 
   case DeclKind::Module:
+  case DeclKind::CXXNamespace:
     return;
       
   case DeclKind::GenericTypeParam:
@@ -4311,6 +4313,8 @@ void TypeChecker::validateDeclForNameLookup(ValueDecl *D) {
     validateExtension(ext);
     if (!ext->hasValidSignature())
       return;
+  } else if (auto ns = dyn_cast<CXXNamespaceDecl>(dc)) {
+      validateDeclForNameLookup(ns);
   }
 
   switch (D->getKind()) {
