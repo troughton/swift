@@ -1717,7 +1717,6 @@ void Serializer::writeCrossReference(const DeclContext *DC, uint32_t pathLen) {
   case DeclContextKind::AbstractClosureExpr:
   case DeclContextKind::Initializer:
   case DeclContextKind::TopLevelCodeDecl:
-  case DeclContextKind::CXXNamespaceDecl:
   case DeclContextKind::SerializedLocal:
   case DeclContextKind::EnumElementDecl:
     llvm_unreachable("cannot cross-reference this context");
@@ -1725,6 +1724,13 @@ void Serializer::writeCrossReference(const DeclContext *DC, uint32_t pathLen) {
   case DeclContextKind::Module:
     llvm_unreachable("should only cross-reference something within a file");
 
+
+  case DeclContextKind::CXXNamespaceDecl: {
+      abbrCode = DeclTypeAbbrCodes[XRefLayout::Code];
+      XRefLayout::emitRecord(Out, ScratchRecord, abbrCode,
+                             addContainingModuleRef(DC), pathLen);
+      break;
+    }
   case DeclContextKind::FileUnit:
     abbrCode = DeclTypeAbbrCodes[XRefLayout::Code];
     XRefLayout::emitRecord(Out, ScratchRecord, abbrCode,

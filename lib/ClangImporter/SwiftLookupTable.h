@@ -199,8 +199,9 @@ public:
     } else if (auto nsDecl = dyn_cast<clang::NamespaceDecl>(dc)) {
       DC = nsDecl->getCanonicalDecl();
     } else {
-      assert(isa<clang::TranslationUnitDecl>(dc) ||
-             isa<clang::ObjCContainerDecl>(dc) &&
+      assert((isa<clang::TranslationUnitDecl>(dc) ||
+             isa<clang::ObjCContainerDecl>(dc) ||
+             isa<clang::LinkageSpecDecl>(dc)) &&
                  "No other kinds of effective Clang contexts");
       DC = dc;
     }
