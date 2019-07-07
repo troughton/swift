@@ -1699,6 +1699,10 @@ void Driver::buildOutputInfo(const ToolChain &TC, const DerivedArgList &Args,
       OI.RuntimeVariant = OutputInfo::MSVCRuntime::MultiThreadedDLL;
     }
   }
+                                 
+   if (const Arg *A = Args.getLastArg(options::OPT_dont_emit_module)) {
+     OI.ShouldGenerateModule = false;
+   }
 }
 
 OutputInfo::Mode

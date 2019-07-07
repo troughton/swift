@@ -909,6 +909,10 @@ def working_directory : Separate<["-"], "working-directory">,
 def working_directory_EQ : Joined<["-"], "working-directory=">,
   Alias<working_directory>;
 
+def dont_emit_module : Flag<["-"], "dont-emit-module">,
+    HelpText<"Prevents a module from being emitted. This overrides other flags, and is a terrible hack to work around build systems.">,
+    Flags<[FrontendOption]>;
+
 // VFS
 
 def vfsoverlay : JoinedOrSeparate<["-"], "vfsoverlay">,
