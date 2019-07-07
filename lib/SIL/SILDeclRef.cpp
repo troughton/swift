@@ -686,17 +686,11 @@ std::string SILDeclRef::mangle(ManglingKind MKind) const {
             std::string s(1, '\01');
             s += asmLabel->getLabel();
             return s;
-          } else if (namedClangDecl->hasAttr<clang::OverloadableAttr>()) {
+          }
             std::string storage;
             llvm::raw_string_ostream SS(storage);
-            // FIXME: When we can import C++, use Clang's mangler all the time.
             mangleClangDecl(SS, namedClangDecl, getDecl()->getASTContext());
             return SS.str();
-          } else if (!namedClangDecl->getDeclName().isIdentifier()) {
-            // TODO: This should be something else, like "init"?
-            return namedClangDecl->getNameAsString();
-          }
-          return namedClangDecl->getName();
         }
       }
     }
