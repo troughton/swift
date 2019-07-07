@@ -2648,6 +2648,12 @@ namespace {
       if (!dc)
         return nullptr;
       
+      // Check if the enum has already been imported.
+      auto known = Impl.ImportedDecls.find({decl->getCanonicalDecl(),
+        getVersion()});
+      if (known != Impl.ImportedDecls.end())
+        return known->second;
+      
       auto name = importedName.getDeclName().getBaseIdentifier();
 
       // Create the enum declaration and record it.
