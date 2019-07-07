@@ -3400,6 +3400,10 @@ namespace {
         if (correctSwiftName)
           markAsVariant(result, *correctSwiftName);
 
+        if (dc->isTypeContext())
+          if (auto parentType = dyn_cast<NominalTypeDecl>(dc->getAsDecl()))
+            parentType->addMember(result);
+        
         return result;
       }
 
@@ -3430,12 +3434,16 @@ namespace {
         auto result = Impl.createConstant(name, dc, enumType,
                                           clang::APValue(decl->getInitVal()),
                                           ConstantConvertKind::Construction,
-                                          /*static*/ false, decl);
+                                          /*static*/dc->isTypeContext(), decl);
         Impl.ImportedDecls[{decl->getCanonicalDecl(), getVersion()}] = result;
-
+        
         // If this is a compatibility stub, mark it as such.
         if (correctSwiftName)
           markAsVariant(result, *correctSwiftName);
+        
+        if (dc->isTypeContext())
+          if (auto parentType = dyn_cast<NominalTypeDecl>(dc->getAsDecl()))
+            parentType->addMember(result);
 
         return result;
       }
