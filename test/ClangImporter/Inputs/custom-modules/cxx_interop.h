@@ -11,3 +11,13 @@ struct Basic {
 };
 
 Basic makeA();
+
+class Methods {
+ public:
+  virtual ~Methods();
+
+  int SimpleMethod(int);
+
+  int SimpleConstMethod(int) const;
+  int some_value;
+};

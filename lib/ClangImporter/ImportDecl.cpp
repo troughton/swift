@@ -3154,6 +3154,7 @@ namespace {
 
       // Import each of the members.
       SmallVector<VarDecl *, 4> members;
+      SmallVector<FuncDecl *, 4> methods;
       SmallVector<ConstructorDecl *, 4> ctors;
 
       // FIXME: Import anonymous union fields and support field access when
@@ -3218,6 +3219,10 @@ namespace {
           continue;
         }
 
+        if (auto MD = dyn_cast<FuncDecl>(member)) {
+          methods.push_back(MD);
+          continue;
+        }
         auto VD = cast<VarDecl>(member);
 
         if (isa<clang::IndirectFieldDecl>(nd) || decl->isUnion()) {
@@ -3296,7 +3301,11 @@ namespace {
       for (auto member : members) {
         result->addMember(member);
       }
-      
+
+      for (auto method : methods) {
+        result->addMember(method);
+      }
+
       for (auto ctor : ctors) {
         result->addMember(ctor);
       }
@@ -3506,6 +3515,10 @@ namespace {
                                Optional<ImportedName> correctSwiftName,
                                Optional<AccessorInfo> accessorInfo);
 
+    Decl *importCXXMethodDecl(const clang::CXXMethodDecl *decl, DeclName name,
+                              DeclContext *dc,
+                              Optional<ImportedName> correctSwiftName);
+
     /// Create an implicit property given the imported name of one of
     /// the accessors.
     VarDecl *getImplicitProperty(ImportedName importedName,
@@ -3636,8 +3649,19 @@ namespace {
     }
 
     Decl *VisitCXXMethodDecl(const clang::CXXMethodDecl *decl) {
-      // FIXME: Import C++ member functions as methods.
-      return nullptr;
+      // Import the name of the function.
+      Optional<ImportedName> correctSwiftName;
+      auto importedName = importFullName(decl, correctSwiftName);
+      if (!importedName)
+        return nullptr;
+
+      auto dc =
+          Impl.importDeclContextOf(decl, importedName.getEffectiveContext());
+      if (!dc)
+        return nullptr;
+
+      DeclName name = importedName.getDeclName();
+      return importCXXMethodDecl(decl, name, dc, correctSwiftName);
     }
 
     Decl *VisitFieldDecl(const clang::FieldDecl *decl) {
@@ -5629,6 +5653,77 @@ Decl *SwiftDeclConverter::importGlobalAsInitializer(
   result->setOverriddenDecls({ });
   result->setIsObjC(false);
   result->setIsDynamic(false);
+
+  finishFuncDecl(decl, result);
+  if (correctSwiftName)
+    markAsVariant(result, *correctSwiftName);
+  return result;
+}
+
+Decl *SwiftDeclConverter::importCXXMethodDecl(
+    const clang::CXXMethodDecl *decl, DeclName name, DeclContext *dc,
+    Optional<ImportedName> correctSwiftName) {
+  auto isStatic = decl->isStatic();
+  auto loc = Impl.importSourceLoc(decl->getLocation());
+  if (dc->getSelfProtocolDecl() && isStatic) {
+    Impl.SwiftContext.Diags.diagnose(loc, diag::swift_name_protocol_static,
+                                     /*isInit=*/false);
+    Impl.SwiftContext.Diags.diagnose(loc, diag::note_while_importing,
+                                     decl->getName());
+    return nullptr;
+  }
+
+  if (!decl->hasPrototype()) {
+    Impl.SwiftContext.Diags.diagnose(loc, diag::swift_name_no_prototype);
+    Impl.SwiftContext.Diags.diagnose(loc, diag::note_while_importing,
+                                     decl->getName());
+    return nullptr;
+  }
+
+  bool allowNSUIntegerAsInt =
+      Impl.shouldAllowNSUIntegerAsInt(isInSystemModule(dc), decl);
+
+  auto &C = Impl.SwiftContext;
+  auto *bodyParams = Impl.importFunctionParameterList(
+      dc, decl, {decl->param_begin(), decl->param_end()}, decl->isVariadic(),
+      allowNSUIntegerAsInt, name.getArgumentNames());
+
+  auto importedType =
+      Impl.importFunctionReturnType(dc, decl, allowNSUIntegerAsInt);
+  Type swiftResultTy = importedType.getType();
+
+  auto nameLoc = Impl.importSourceLoc(decl->getLocation());
+  auto result = createFuncOrAccessor(C, loc, None, name, nameLoc, bodyParams,
+                                     swiftResultTy,
+                                     /*throws*/ false, dc, decl);
+
+  result->setGenericEnvironment(dc->getGenericEnvironmentOfContext());
+
+  result->setAccess(AccessLevel::Public);
+  // Workaround until proper const support is handled: Force everything to be
+  // Mutating. This implicitly makes the parameter indirect. There may be
+  // contexts.
+  result->setSelfAccessKind(SelfAccessKind::Mutating);
+  if (!isStatic) {
+    // "self" is the first argument.
+    result->setSelfIndex(0);
+  } else {
+    result->setStatic();
+    result->setImportAsStaticMember();
+  }
+
+  result->computeType();
+  result->setValidationToChecked();
+
+  Impl.recordImplicitUnwrapForDecl(result,
+                                   importedType.isImplicitlyUnwrapped());
+
+  assert(!isStatic ? result->getSelfIndex() == 0
+                   : result->isImportAsStaticMember());
+
+  if (dc->getSelfClassDecl())
+    // FIXME: only if the class itself is not marked final
+    result->getAttrs().add(new (C) FinalAttr(/*IsImplicit=*/true));
 
   finishFuncDecl(decl, result);
   if (correctSwiftName)
