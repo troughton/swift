@@ -3181,7 +3181,6 @@ namespace {
 
       // Import each of the members.
       SmallVector<VarDecl *, 4> members;
-      SmallVector<FuncDecl *, 4> methods;
       SmallVector<ConstructorDecl *, 4> ctors;
 
       // FIXME: Import anonymous union fields and support field access when
@@ -3246,57 +3245,55 @@ namespace {
           continue;
         }
 
-        if (auto VD = dyn_cast<VarDecl>(member)) {
-          if (isa<clang::IndirectFieldDecl>(nd) || decl->isUnion()) {
-            // Don't import unavailable fields that have no associated storage.
-            if (VD->getAttrs().isUnavailable(Impl.SwiftContext)) {
-              continue;
-            }
+        auto VD = cast<VarDecl>(member);
+
+        if (isa<clang::IndirectFieldDecl>(nd) || decl->isUnion()) {
+          // Don't import unavailable fields that have no associated storage.
+          if (VD->getAttrs().isUnavailable(Impl.SwiftContext)) {
+            continue;
           }
+        }
 
-          members.push_back(VD);
+        members.push_back(VD);
 
-          // Bitfields are imported as computed properties with Clang-generated
-          // accessors.
-          bool isBitField = false;
-          if (auto field = dyn_cast<clang::FieldDecl>(nd)) {
-            if (field->isBitField()) {
-              // We can't represent this struct completely in SIL anymore,
-              // but we're still able to define a memberwise initializer.
-              hasUnreferenceableStorage = true;
-              isBitField = true;
+        // Bitfields are imported as computed properties with Clang-generated
+        // accessors.
+        bool isBitField = false;
+        if (auto field = dyn_cast<clang::FieldDecl>(nd)) {
+          if (field->isBitField()) {
+            // We can't represent this struct completely in SIL anymore,
+            // but we're still able to define a memberwise initializer.
+            hasUnreferenceableStorage = true;
+            isBitField = true;
 
-              makeBitFieldAccessors(Impl,
-                                    const_cast<clang::RecordDecl *>(decl),
-                                    result,
-                                    const_cast<clang::FieldDecl *>(field),
-                                    VD);
-            }
-          }
-
-          if (auto ind = dyn_cast<clang::IndirectFieldDecl>(nd)) {
-            // Indirect fields are created as computed property accessible the
-            // fields on the anonymous field from which they are injected.
-            makeIndirectFieldAccessors(Impl, ind, members, result, VD);
-          } else if (decl->isUnion() && !isBitField) {
-            // Union fields should only be available indirectly via a computed
-            // property. Since the union is made of all of the fields at once,
-            // this is a trivial accessor that casts self to the correct
-            // field type.
-            makeUnionFieldAccessors(Impl, result, VD);
-
-            // Create labeled initializers for unions that take one of the
-            // fields, which only initializes the data for that field.
-            auto valueCtor =
-                createValueConstructor(Impl, result, VD,
-                                      /*want param names*/true,
-                                      /*wantBody=*/!Impl.hasFinishedTypeChecking());
-            ctors.push_back(valueCtor);
+            makeBitFieldAccessors(Impl,
+                                  const_cast<clang::RecordDecl *>(decl),
+                                  result,
+                                  const_cast<clang::FieldDecl *>(field),
+                                  VD);
           }
         } else if (auto CD = dyn_cast<ConstructorDecl>(member)) {
           ctors.push_back(CD);
-        } else if (auto MD = dyn_cast<FuncDecl>(member)) {
-          methods.push_back(MD);
+        }
+
+        if (auto ind = dyn_cast<clang::IndirectFieldDecl>(nd)) {
+          // Indirect fields are created as computed property accessible the
+          // fields on the anonymous field from which they are injected.
+          makeIndirectFieldAccessors(Impl, ind, members, result, VD);
+        } else if (decl->isUnion() && !isBitField) {
+          // Union fields should only be available indirectly via a computed
+          // property. Since the union is made of all of the fields at once,
+          // this is a trivial accessor that casts self to the correct
+          // field type.
+          makeUnionFieldAccessors(Impl, result, VD);
+
+          // Create labeled initializers for unions that take one of the
+          // fields, which only initializes the data for that field.
+          auto valueCtor =
+              createValueConstructor(Impl, result, VD,
+                                     /*want param names*/true,
+                                     /*wantBody=*/!Impl.hasFinishedTypeChecking());
+          ctors.push_back(valueCtor);
         }
       }
 
@@ -3328,11 +3325,7 @@ namespace {
       for (auto member : members) {
         result->addMember(member);
       }
-
-      for (auto method : methods) {
-        result->addMember(method);
-      }
-
+      
       for (auto ctor : ctors) {
         result->addMember(ctor);
       }
@@ -3550,10 +3543,6 @@ namespace {
                                Optional<ImportedName> correctSwiftName,
                                Optional<AccessorInfo> accessorInfo);
 
-    Decl *importCXXMethodDecl(const clang::CXXMethodDecl *decl, DeclName name,
-                              DeclContext *dc,
-                              Optional<ImportedName> correctSwiftName);
-
     /// Create an implicit property given the imported name of one of
     /// the accessors.
     VarDecl *getImplicitProperty(ImportedName importedName,
@@ -3688,36 +3677,8 @@ namespace {
     }
 
     Decl *VisitCXXMethodDecl(const clang::CXXMethodDecl *decl) {
-      if (auto definition = decl->getDefinition()) {
-        decl = static_cast<const clang::CXXMethodDecl *>(definition);
-      }
-      
-      // Import the name of the function.
-      Optional<ImportedName> correctSwiftName;
-      auto importedName = importFullName(decl, correctSwiftName);
-      if (!importedName)
-        return nullptr;
-
-      switch (importedName.getAccessorKind()) {
-      case ImportedAccessorKind::None:
-        break;
-
-      case ImportedAccessorKind::SubscriptGetter:
-      case ImportedAccessorKind::SubscriptSetter:
-      case ImportedAccessorKind::PropertyGetter:
-      case ImportedAccessorKind::PropertySetter:
-        // FIXME: Support importing methods as computed properties, and
-        // potentially as subscripts.
-        return nullptr;
-      }
-
-      auto dc =
-          Impl.importDeclContextOf(decl, importedName.getEffectiveContext());
-      if (!dc)
-        return nullptr;
-
-      DeclName name = importedName.getDeclName();
-      return importCXXMethodDecl(decl, name, dc, correctSwiftName);
+      // FIXME: Import C++ member functions as methods.
+      return nullptr;
     }
 
     Decl *VisitCXXConstructorDecl(const clang::CXXConstructorDecl *decl) {
@@ -5806,89 +5767,6 @@ Decl *SwiftDeclConverter::importGlobalAsInitializer(
   result->setOverriddenDecls({ });
   result->setIsObjC(false);
   result->setIsDynamic(false);
-
-  finishFuncDecl(decl, result);
-  if (correctSwiftName)
-    markAsVariant(result, *correctSwiftName);
-  return result;
-}
-
-Decl *SwiftDeclConverter::importCXXMethodDecl(
-    const clang::CXXMethodDecl *decl,
-    DeclName name,
-    DeclContext *dc,
-    Optional<ImportedName> correctSwiftName) {
-  auto isStatic = decl->isStatic();
-  if (dc->getSelfProtocolDecl() && isStatic) {
-    // FIXME: source location...
-    Impl.SwiftContext.Diags.diagnose({}, diag::swift_name_protocol_static,
-                                     /*isInit=*/false);
-    Impl.SwiftContext.Diags.diagnose({}, diag::note_while_importing,
-                                     decl->getName());
-    return nullptr;
-  }
-
-  if (!decl->hasPrototype()) {
-    // FIXME: source location...
-    Impl.SwiftContext.Diags.diagnose({}, diag::swift_name_no_prototype);
-    Impl.SwiftContext.Diags.diagnose({}, diag::note_while_importing,
-                                     decl->getName());
-    return nullptr;
-  }
-
-  bool allowNSUIntegerAsInt =
-      Impl.shouldAllowNSUIntegerAsInt(isInSystemModule(dc), decl);
-
-  auto &C = Impl.SwiftContext;
-  // There is an inout 'self' when the parameter is a pointer to a non-const
-  // instance of the type we're importing onto. Importing this as a method means
-  // that the method should be treated as mutating in this situation.
-  bool selfIsInOut = false;
-  if (!isStatic && !dc->getDeclaredInterfaceType()->hasReferenceSemantics()
-      && !decl->isConst()) {
-    selfIsInOut = true;
-  }
-
-  auto *bodyParams = Impl.importFunctionParameterList(
-      dc, decl, {decl->param_begin(), decl->param_end()}, decl->isVariadic(),
-      allowNSUIntegerAsInt, name.getArgumentNames());
-
-  auto importedType =
-      Impl.importFunctionReturnType(dc, decl, allowNSUIntegerAsInt);
-  Type swiftResultTy = importedType.getType();
-
-  auto loc = Impl.importSourceLoc(decl->getLocation());
-  auto nameLoc = Impl.importSourceLoc(decl->getLocation());
-  auto result =
-    createFuncOrAccessor(C, loc, None, name, nameLoc,
-                         bodyParams, swiftResultTy,
-                         /*throws*/ false, dc, decl);
-
-  result->setGenericEnvironment(dc->getGenericEnvironmentOfContext());
-
-  result->setAccess(AccessLevel::Public);
-  if (selfIsInOut)
-    result->setSelfAccessKind(SelfAccessKind::Mutating);
-  if (!isStatic) {
-    // "self" is the first argument.
-    result->setSelfIndex(0);
-  } else {
-    result->setStatic();
-    result->setImportAsStaticMember();
-  }
-
-  result->computeType();
-  result->setValidationToChecked();
-
-  Impl.recordImplicitUnwrapForDecl(result,
-                                   importedType.isImplicitlyUnwrapped());
-
-  assert(!isStatic ? result->getSelfIndex() == 0
-                   : result->isImportAsStaticMember());
-
-  if (dc->getSelfClassDecl())
-    // FIXME: only if the class itself is not marked final
-    result->getAttrs().add(new (C) FinalAttr(/*IsImplicit=*/true));
 
   finishFuncDecl(decl, result);
   if (correctSwiftName)

@@ -27,7 +27,6 @@
 #include "swift/SIL/SILModule.h"
 #include "swift/SIL/SILType.h"
 #include "clang/AST/Attr.h"
-#include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/Analysis/DomainSpecific/CocoaConventions.h"
 #include "llvm/Support/CommandLine.h"
@@ -224,7 +223,6 @@ enum class ConventionsKind : uint8_t {
   ObjCSelectorFamily = 5,
   Deallocator = 6,
   Capture = 7,
-  CXXMethod = 8,
 };
 
 class Conventions {
@@ -511,14 +509,9 @@ private:
     // the duration of the loop below.
     auto handleForeignSelf = [&] {
       // This is a "self", but it's not a Swift self, we handle it differently.
-      // If the original decl is a C++ method, we want to treat the argument as
-      // if it were "self" (for the purposes of determining indirectness via the
-      // conventions), but if the decl was a C method for which a regular
-      // parameter was imported as "self", we still treat it as a regular
-      // parameter.
       auto selfParam = params[numNonSelfParams];
       visit(selfParam.getValueOwnership(),
-            /*forSelf=*/origType.isCXXMethod(),
+            /*forSelf=*/false,
             origType.getFunctionParamType(numNonSelfParams),
             selfParam.getParameterType(), silRepresentation);
     };
@@ -1647,67 +1640,6 @@ public:
   }
 };
 
-/// Conventions based on C++ method declarations.
-class CXXMethodConventions : public CFunctionTypeConventions {
-  using super = CFunctionTypeConventions;
-  const clang::CXXMethodDecl *TheDecl;
-  const bool SwiftTypeHasReferenceSemantics;
-public:
-  CXXMethodConventions(const clang::CXXMethodDecl *decl,
-                       bool hasReferenceSemantics)
-    : CFunctionTypeConventions(ConventionsKind::CXXMethod,
-                               decl->getType()->castAs<clang::FunctionType>()),
-      TheDecl(decl), SwiftTypeHasReferenceSemantics(hasReferenceSemantics) {}
-
-  ParameterConvention getDirectParameter(unsigned index,
-                            const AbstractionPattern &type,
-                            const TypeLowering &substTL) const override {
-    if (auto param = TheDecl->getParamDecl(index))
-      if (param->hasAttr<clang::CFConsumedAttr>())
-        return ParameterConvention::Direct_Owned;
-    return super::getDirectParameter(index, type, substTL);
-  }
-
-  ResultConvention getResult(const TypeLowering &tl) const override {
-    if (isCFTypedef(tl, TheDecl->getReturnType())) {
-      // The CF attributes aren't represented in the type, so we need
-      // to check them here.
-      if (TheDecl->hasAttr<clang::CFReturnsRetainedAttr>()) {
-        return ResultConvention::Owned;
-      } else if (TheDecl->hasAttr<clang::CFReturnsNotRetainedAttr>()) {
-        // Probably not actually autoreleased.
-        return ResultConvention::Autoreleased;
-
-      // The CF Create/Copy rule only applies to functions that return
-      // a CF-runtime type; it does not apply to methods, and it does
-      // not apply to functions returning ObjC types.
-      } else if (clang::ento::coreFoundation::followsCreateRule(TheDecl)) {
-        return ResultConvention::Owned;
-      } else {
-        return ResultConvention::Autoreleased;
-      }
-    }
-
-    // Otherwise, fall back on the ARC annotations, which are part
-    // of the type.
-    return super::getResult(tl);
-  }
-
-  ParameterConvention
-  getIndirectSelfParameter(const AbstractionPattern &type) const override {
-    // If the Swift type synthesized for the C++ type containing the method has
-    // reference semantics, or if not but the method is `const`, then `self`
-    // should be passed with `@in`. Otherwise, use `@inout`.
-    if (SwiftTypeHasReferenceSemantics || TheDecl->isConst())
-      return ParameterConvention::Indirect_In;
-    return ParameterConvention::Indirect_Inout;
-  }
-
-  static bool classof(const Conventions *C) {
-    return C->getKind() == ConventionsKind::CXXMethod;
-  }
-};
-
 } // end anonymous namespace
 
 /// Given that we have an imported Clang declaration, deduce the
@@ -1725,17 +1657,6 @@ getSILFunctionTypeForClangDecl(SILModule &M, const clang::Decl *clangDecl,
     return getSILFunctionType(M, origPattern, substInterfaceType, extInfo,
                               ObjCMethodConventions(method), foreignInfo,
                               constant, constant, None,
-                              /*witnessMethodConformance=*/None);
-  }
-
-  if (auto method = dyn_cast<clang::CXXMethodDecl>(clangDecl)) {
-    AbstractionPattern origPattern =
-      AbstractionPattern::getCXXMethod(origType, method);
-    auto conventions = CXXMethodConventions(method,
-                                            foreignInfo.HasReferenceSemantics);
-    return getSILFunctionType(M, origPattern, substInterfaceType, extInfo,
-                              conventions, foreignInfo, constant, constant,
-                              None,
                               /*witnessMethodConformance=*/None);
   }
 
@@ -2010,8 +1931,6 @@ getUncachedSILFunctionTypeForConstant(SILModule &M,
     if (auto funcDecl = dyn_cast<AbstractFunctionDecl>(decl)) {
       foreignInfo.Error = funcDecl->getForeignErrorConvention();
       foreignInfo.Self = funcDecl->getImportAsMemberStatus();
-      if (auto typeCtx = funcDecl->getDeclContext()->getDeclaredInterfaceType())
-        foreignInfo.HasReferenceSemantics = typeCtx->hasReferenceSemantics();
     }
 
     if (auto clangDecl = findClangMethod(decl)) {
@@ -2673,15 +2592,9 @@ getAbstractionPatternForConstant(ASTContext &ctx, SILDeclRef constant,
       // C function imported as a function.
       return AbstractionPattern(fnType, value->getType().getTypePtr());
     } else {
+      // C function imported as a method.
       assert(numParameterLists == 2);
-      if (auto method = dyn_cast<clang::CXXMethodDecl>(clangDecl)) {
-        // C++ method.
-        return AbstractionPattern::getCurriedCXXMethod(fnType, bridgedFn);
-      } else {
-        // C function imported as a method.
-        return AbstractionPattern::getCurriedCFunctionAsMethod(fnType,
-                                                               bridgedFn);
-      }
+      return AbstractionPattern::getCurriedCFunctionAsMethod(fnType, bridgedFn);
     }
   }
 
