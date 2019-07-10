@@ -1468,6 +1468,10 @@ ASTMangler::getSpecialManglingContext(const ValueDecl *decl,
       return ASTMangler::ClangImporterContext;
     }
   }
+    
+  if (isa<CXXNamespaceDecl>(decl->getDeclContext())) {
+      return None;
+  }
 
   // If @objc Swift protocols should be mangled as Objective-C protocols,
   // they are defined in the Objective-C context.
@@ -1484,8 +1488,14 @@ ASTMangler::getSpecialManglingContext(const ValueDecl *decl,
         hasNameForLinkage = !clangDecl->getDeclName().isEmpty();
       if (hasNameForLinkage) {
         auto *clangDC = clangDecl->getDeclContext();
-//        assert(clangDC->getRedeclContext()->isTranslationUnit() &&
-//               "non-top-level Clang types not supported yet");
+          switch (clangDC->getRedeclContext()->getDeclKind()) {
+              case clang::Decl::CXXRecord:
+                  return None;
+              default: break;
+          }
+          
+        assert(clangDC->getRedeclContext()->isTranslationUnit() &&
+               "non-top-level Clang types not supported yet");
         (void)clangDC;
         return ASTMangler::ObjCContext;
       }
@@ -1831,7 +1841,7 @@ void ASTMangler::appendAnyGenericType(const GenericTypeDecl *decl) {
                isa<clang::ObjCCompatibleAliasDecl>(namedDecl)) {
       appendOperator("a");
     } else {
-      llvm_unreachable("unknown imported Clang type");
+        llvm::errs() << "unknown imported Clang type for " << namedDecl->getName() << "\n";
     }
 
     return true;
@@ -1888,6 +1898,8 @@ void ASTMangler::appendCXXNamespace(const CXXNamespaceDecl *decl) {
     appendDeclName(decl);
     appendOperator("J");
   }
+    
+  addSubstitution(decl);
 }
 
 void ASTMangler::appendFunction(AnyFunctionType *fn, bool isFunctionMangling,
