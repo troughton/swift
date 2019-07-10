@@ -3250,55 +3250,60 @@ namespace {
           methods.push_back(MD);
           continue;
         }
-        auto VD = cast<VarDecl>(member);
-
-        if (isa<clang::IndirectFieldDecl>(nd) || decl->isUnion()) {
-          // Don't import unavailable fields that have no associated storage.
-          if (VD->getAttrs().isUnavailable(Impl.SwiftContext)) {
+          
+        if (auto CD = dyn_cast<ConstructorDecl>(member)) {
+            ctors.push_back(CD);
             continue;
-          }
         }
+          
+        if (auto VD = dyn_cast<VarDecl>(member)) {
+            if (isa<clang::IndirectFieldDecl>(nd) || decl->isUnion()) {
+              // Don't import unavailable fields that have no associated storage.
+              if (VD->getAttrs().isUnavailable(Impl.SwiftContext)) {
+                continue;
+              }
+            }
 
-        members.push_back(VD);
+            members.push_back(VD);
 
-        // Bitfields are imported as computed properties with Clang-generated
-        // accessors.
-        bool isBitField = false;
-        if (auto field = dyn_cast<clang::FieldDecl>(nd)) {
-          if (field->isBitField()) {
-            // We can't represent this struct completely in SIL anymore,
-            // but we're still able to define a memberwise initializer.
-            hasUnreferenceableStorage = true;
-            isBitField = true;
+            // Bitfields are imported as computed properties with Clang-generated
+            // accessors.
+            bool isBitField = false;
+            if (auto field = dyn_cast<clang::FieldDecl>(nd)) {
+              if (field->isBitField()) {
+                // We can't represent this struct completely in SIL anymore,
+                // but we're still able to define a memberwise initializer.
+                hasUnreferenceableStorage = true;
+                isBitField = true;
 
-            makeBitFieldAccessors(Impl,
-                                  const_cast<clang::RecordDecl *>(decl),
-                                  result,
-                                  const_cast<clang::FieldDecl *>(field),
-                                  VD);
-          }
-        } else if (auto CD = dyn_cast<ConstructorDecl>(member)) {
-          ctors.push_back(CD);
-        }
+                makeBitFieldAccessors(Impl,
+                                      const_cast<clang::RecordDecl *>(decl),
+                                      result,
+                                      const_cast<clang::FieldDecl *>(field),
+                                      VD);
+              }
+            }
 
-        if (auto ind = dyn_cast<clang::IndirectFieldDecl>(nd)) {
-          // Indirect fields are created as computed property accessible the
-          // fields on the anonymous field from which they are injected.
-          makeIndirectFieldAccessors(Impl, ind, members, result, VD);
-        } else if (decl->isUnion() && !isBitField) {
-          // Union fields should only be available indirectly via a computed
-          // property. Since the union is made of all of the fields at once,
-          // this is a trivial accessor that casts self to the correct
-          // field type.
-          makeUnionFieldAccessors(Impl, result, VD);
+            if (auto ind = dyn_cast<clang::IndirectFieldDecl>(nd)) {
+              // Indirect fields are created as computed property accessible the
+              // fields on the anonymous field from which they are injected.
+              makeIndirectFieldAccessors(Impl, ind, members, result, VD);
+            } else if (decl->isUnion() && !isBitField) {
+              // Union fields should only be available indirectly via a computed
+              // property. Since the union is made of all of the fields at once,
+              // this is a trivial accessor that casts self to the correct
+              // field type.
+              makeUnionFieldAccessors(Impl, result, VD);
 
-          // Create labeled initializers for unions that take one of the
-          // fields, which only initializes the data for that field.
-          auto valueCtor =
-              createValueConstructor(Impl, result, VD,
-                                     /*want param names*/true,
-                                     /*wantBody=*/!Impl.hasFinishedTypeChecking());
-          ctors.push_back(valueCtor);
+              // Create labeled initializers for unions that take one of the
+              // fields, which only initializes the data for that field.
+              auto valueCtor =
+                  createValueConstructor(Impl, result, VD,
+                                         /*want param names*/true,
+                                         /*wantBody=*/!Impl.hasFinishedTypeChecking());
+              ctors.push_back(valueCtor);
+            }
+            
         }
       }
 
@@ -5841,10 +5846,10 @@ Decl *SwiftDeclConverter::importCXXMethodDecl(
   // Workaround until proper const support is handled: Force everything to be
   // Mutating. This implicitly makes the parameter indirect. There may be
   // contexts.
-  result->setSelfAccessKind(SelfAccessKind::Mutating);
   if (!isStatic) {
     // "self" is the first argument.
     result->setSelfIndex(0);
+    result->setSelfAccessKind(SelfAccessKind::Mutating);
   } else {
     result->setStatic();
     result->setImportAsStaticMember();
