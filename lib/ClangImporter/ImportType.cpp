@@ -517,7 +517,9 @@ namespace {
       }
       
       if (quals.hasConst()) {
-        return {pointeeType,ImportHint::None};
+          return {Impl.getNamedSwiftTypeSpecialization(Impl.getStdlibModule(),
+                                                       "UnsafePointer",
+                                                       pointeeType),ImportHint::None};
       }
       
       // All other mutable pointers map to UnsafeMutablePointer.
