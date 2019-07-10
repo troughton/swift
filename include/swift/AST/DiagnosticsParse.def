@@ -216,6 +216,8 @@ ERROR(expected_decl,none,
       "expected declaration", ())
 ERROR(expected_identifier_in_decl,none,
       "expected identifier in %0 declaration", (StringRef))
+ERROR(expected_keyword_in_decl,none,
+      "expected '%0' keyword in %1 declaration", (StringRef, DescriptiveDeclKind))
 ERROR(number_cant_start_decl_name,none,
       "%0 name can only start with a letter or underscore, not a number",
       (StringRef))
@@ -756,6 +758,10 @@ ERROR(expected_dictionary_value_type,PointsToFirstBadToken,
       "expected dictionary value type", ())
 ERROR(expected_rbracket_dictionary_type,PointsToFirstBadToken,
       "expected ']' in dictionary type", ())
+ERROR(extra_rbracket,PointsToFirstBadToken,
+      "unexpected ']' in type; did you mean to write an array type?", ())
+ERROR(extra_colon,PointsToFirstBadToken,
+      "unexpected ':' in type; did you mean to write a dictionary type?", ())
 
 // Tuple Types
 ERROR(expected_rparen_tuple_type_list,none,

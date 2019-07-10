@@ -22,3 +22,13 @@ struct NamespacedStruct {
 
 using NSStruct = nested_struct_problem::NamespacedStruct;
 nested_struct_problem::NamespacedStruct* makeNamespacedStruct();
+
+class Methods {
+ public:
+  virtual ~Methods();
+
+  int SimpleMethod(int);
+
+  int SimpleConstMethod(int) const;
+  int some_value;
+};
