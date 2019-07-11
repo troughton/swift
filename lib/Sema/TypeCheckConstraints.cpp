@@ -2718,7 +2718,7 @@ bool TypeChecker::typeCheckBinding(Pattern *&pattern, Expr *&initializer,
       auto &ctx = singleVar->getASTContext();
       auto outermostWrapperAttr = wrapperAttrs.front();
       if (initializer) {
-        // Form init(initialValue:) call(s).
+        // Form init(wrappedValue:) call(s).
         Expr *wrappedInitializer =
             buildPropertyWrapperInitialValueCall(
                 singleVar, Type(), initializer, /*ignoreAttributeArgs=*/false);
