@@ -5831,6 +5831,9 @@ Decl *SwiftDeclConverter::importCXXMethodDecl(
       dc, decl, {decl->param_begin(), decl->param_end()}, decl->isVariadic(),
       allowNSUIntegerAsInt, name.getArgumentNames());
 
+  if (!bodyParams)
+      return nullptr;
+    
   auto importedType =
       Impl.importFunctionReturnType(dc, decl, allowNSUIntegerAsInt);
   Type swiftResultTy = importedType.getType();
